@@ -1,19 +1,21 @@
 import type { LearningProfile, Lesson } from "./types";
 
 export function createLocalPreviewLesson(unitId: string, unitName: string, profile: LearningProfile): Lesson {
+  void unitName;
+  void profile;
   const prefix = `${unitId}-preview`;
   return {
     schemaVersion: 1,
     id: `${prefix}-lesson`,
     unitId,
-    title: `${unitName}: Daily rhythm lab`,
-    summary: "Bài mẫu local để thử player, retry và speaking trước khi kết nối ChatGPT.",
-    targetLanguage: profile.targetLanguage,
-    level: profile.level,
+    title: "Player demo: English daily routine",
+    summary: "Fixed English sample content for testing the lesson player, retries, and speaking controls. It is not generated from the active unit.",
+    targetLanguage: "English",
+    level: "elementary",
     objectives: [
-      "Nhận biết các cụm từ mở đầu một thói quen hằng ngày.",
-      "Sắp xếp câu theo trật tự tự nhiên.",
-      "Tạo phản hồi ngắn bằng nói và viết.",
+      "Recognize phrases that introduce steps in a daily routine.",
+      "Arrange sentences in a natural order.",
+      "Produce short spoken and written responses.",
     ],
     theory: [
       {
@@ -36,17 +38,17 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
       },
     ],
     examples: [
-      { id: `${prefix}-example-1`, source: "I usually get up at seven.", translation: "Tôi thường thức dậy lúc bảy giờ." },
-      { id: `${prefix}-example-2`, source: "After that, I walk to the station.", translation: "Sau đó, tôi đi bộ đến ga." },
-      { id: `${prefix}-example-3`, source: "Finally, I plan the next day.", translation: "Cuối cùng, tôi lên kế hoạch cho ngày hôm sau." },
+      { id: `${prefix}-example-1`, source: "I usually get up at seven.", note: "Usually marks a repeated habit." },
+      { id: `${prefix}-example-2`, source: "After that, I walk to the station.", note: "After that links two steps." },
+      { id: `${prefix}-example-3`, source: "Finally, I plan the next day.", note: "Finally introduces the last step." },
     ],
     glossary: [
-      { term: "usually", meaning: "thường, trong phần lớn các dịp", example: "I usually study after dinner." },
-      { term: "commute", meaning: "di chuyển thường xuyên giữa nhà và nơi làm việc/học tập" },
-      { term: "after that", meaning: "sau đó" },
-      { term: "wind down", meaning: "thư giãn dần vào cuối ngày" },
+      { term: "usually", meaning: "on most occasions", example: "I usually study after dinner." },
+      { term: "commute", meaning: "travel regularly between home and work or school" },
+      { term: "after that", meaning: "following the previous step" },
+      { term: "wind down", meaning: "gradually relax near the end of the day" },
     ],
-    sourceReferences: [{ id: `${prefix}-source`, kind: "unit", title: `${unitName} local preview context` }],
+    sourceReferences: [{ id: `${prefix}-source`, kind: "note", title: "Built-in player demo content" }],
     questions: [
       {
         id: `${prefix}-q1`,
@@ -132,9 +134,9 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
         evaluationMode: "local",
         prompt: "Match each routine phrase with its meaning.",
         pairs: [
-          { leftId: "commute", left: "commute to work", rightId: "travel", right: "đi đến nơi làm việc" },
-          { leftId: "wind", left: "wind down", rightId: "relax", right: "thư giãn dần" },
-          { leftId: "plan", left: "plan ahead", rightId: "prepare", right: "chuẩn bị trước" },
+          { leftId: "commute", left: "commute to work", rightId: "travel", right: "travel to the workplace" },
+          { leftId: "wind", left: "wind down", rightId: "relax", right: "gradually relax" },
+          { leftId: "plan", left: "plan ahead", rightId: "prepare", right: "prepare in advance" },
         ],
         explanation: "These phrases describe movement, relaxation, and preparation.",
         hint: "Use the meaning of the main verb in each phrase.",
@@ -176,7 +178,7 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
         type: "translation",
         evaluationMode: "ai",
         prompt: "Translate naturally into English.",
-        sourceText: "Sau đó, tôi đi bộ đến ga.",
+        sourceText: "Después de eso, camino a la estación.",
         targetLanguage: "English",
         referenceAnswer: "After that, I walk to the station.",
         rubric: ["Preserve the sequence marker", "Use the present simple", "Use a natural destination phrase"],

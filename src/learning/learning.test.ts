@@ -3,7 +3,7 @@ import { gradeAnswer, normalizeAnswer } from "./grader";
 import { firstTryAccuracy, shouldFlushProgress } from "./progress";
 import { DEFAULT_LEARNING_PROFILE, normalizeLearningProfile, resolveLearningProfile } from "./profile";
 import { applyAttempt, createRetryState, masteryPercent, scheduleRetry } from "./retry";
-import { jsonByteLength, lessonSchema, parseEvaluation, validateLessonForProfile } from "./schema";
+import { jsonByteLength, lessonSchema, parseEvaluation, validateLessonForExpectation, validateLessonForProfile } from "./schema";
 import type { AttemptRecord, Lesson, LessonQuestion, QuestionAnswer } from "./types";
 
 const common = {
@@ -110,6 +110,15 @@ describe("lesson schema", () => {
     const withSpeaking = { ...lesson, questions: [...lesson.questions.slice(0, 9), questions[16]] };
     expect(validateLessonForProfile(withSpeaking, DEFAULT_LEARNING_PROFILE)).toEqual([]);
   });
+
+  it("matches the unit, language, level, exact count, and both grading modes", () => {
+    const expectedLesson = { ...lesson, questions: [...lesson.questions.slice(0, 9), questions[10]] };
+    const expectation = { unitId: "unit-1", targetLanguage: "English", level: "elementary" as const, questionCount: 10, speaking: false };
+    expect(validateLessonForExpectation(expectedLesson, expectation)).toEqual([]);
+    expect(validateLessonForExpectation({ ...expectedLesson, unitId: "wrong" }, expectation)).toContain("lesson.unitId must equal unit-1.");
+    expect(validateLessonForExpectation({ ...expectedLesson, questions: expectedLesson.questions.slice(0, 9) }, expectation))
+      .toContain("lesson.questions must contain exactly 10 items.");
+  });
 });
 
 describe("direct ChatGPT evaluation schema", () => {
@@ -152,6 +161,8 @@ describe("profile and progress normalization", () => {
     expect(profile.targetLanguage).toBe("Spanish");
     expect(profile.dailyQuestionGoal).toBe(100);
     expect(profile.speakingEnabled).toBe(false);
+    expect(profile.interfaceLanguage).toBe("en");
+    expect(normalizeLearningProfile({ interfaceLanguage: "vi" }).interfaceLanguage).toBe("en");
     expect(normalizeLearningProfile({ lessonQuestionCount: 2 }).lessonQuestionCount).toBe(8);
   });
 

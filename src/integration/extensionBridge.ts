@@ -67,6 +67,28 @@ function wait(milliseconds: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+function withAbort<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
+  const reason = abortReason(signal);
+  if (reason) return Promise.reject(reason);
+  if (!signal) return operation;
+  return new Promise<T>((resolve, reject) => {
+    function onAbort() {
+      reject(abortReason(signal));
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+    operation.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 export class ExtensionBridge {
   private readonly nonce = crypto.randomUUID();
   private readonly pending = new Map<string, { resolve: (value: unknown) => void; reject: (reason: Error) => void; timeout: number }>();
@@ -84,7 +106,7 @@ export class ExtensionBridge {
       if (event.data.ok) pending.resolve(event.data.data);
       else pending.reject(new ExtensionBridgeError(
         event.data.error?.code ?? "SEND_FAILED",
-        event.data.error?.message ?? "Extension không thể xử lý lệnh.",
+        event.data.error?.message ?? "The extension could not process this request.",
       ));
     });
   }
@@ -103,7 +125,7 @@ export class ExtensionBridge {
     return new Promise<TResponse>((resolve, reject) => {
       const timeout = window.setTimeout(() => {
         this.pending.delete(requestId);
-        reject(new ExtensionBridgeError("EXTENSION_NOT_READY", "Không tìm thấy Meoi extension hoặc extension không phản hồi."));
+        reject(new ExtensionBridgeError("EXTENSION_NOT_READY", "Meoi Bridge was not found or did not respond."));
       }, REQUEST_TIMEOUT_MS);
       this.pending.set(requestId, { resolve: (value) => resolve(value as TResponse), reject, timeout });
       window.postMessage(request, window.location.origin);
@@ -125,7 +147,7 @@ export class ExtensionBridge {
     while (Date.now() - startedAt < timeoutMs) {
       const reason = abortReason(options.signal);
       if (reason) throw reason;
-      const state = await this.getOperationState(operationId);
+      const state = await withAbort(this.getOperationState(operationId), options.signal);
       options.onState?.(state);
       if (state.phase === "completed") {
         if (!state.result) throw new ExtensionBridgeError("INVALID_CHATGPT_RESPONSE", "Extension completed without a ChatGPT result.", state);
@@ -140,12 +162,16 @@ export class ExtensionBridge {
   }
 
   async dispatchAndWait(payload: SendOperationPayload, options: WaitForOperationOptions = {}): Promise<ChatOperationState> {
-    await this.send<OperationDispatchReceipt, SendOperationPayload>("SEND_OPERATION", payload);
+    const reason = abortReason(options.signal);
+    if (reason) throw reason;
+    await withAbort(this.send<OperationDispatchReceipt, SendOperationPayload>("SEND_OPERATION", payload), options.signal);
+    const postDispatchReason = abortReason(options.signal);
+    if (postDispatchReason) throw postDispatchReason;
     return this.waitForOperation(payload.operationId, options);
   }
 
   async retryAndWait(operationId: string, options: WaitForOperationOptions = {}): Promise<ChatOperationState> {
-    await this.send<ChatOperationState, OperationStatePayload>("RETRY_OPERATION", { operationId });
+    await withAbort(this.send<ChatOperationState, OperationStatePayload>("RETRY_OPERATION", { operationId }), options.signal);
     return this.waitForOperation(operationId, options);
   }
 

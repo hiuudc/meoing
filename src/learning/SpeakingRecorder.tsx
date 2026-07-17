@@ -137,7 +137,7 @@ export function SpeakingRecorder({ language = "en-US", disabled, onChange, onTra
 
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
       if (!speechRecognitionConstructor()) {
-        setError("Trình duyệt này không hỗ trợ recording hoặc Speech Recognition. Hãy nhập transcript bên dưới.");
+        setError("This browser does not support recording or Speech Recognition. Enter a transcript below instead.");
         return;
       }
       setState("recording");
@@ -155,7 +155,7 @@ export function SpeakingRecorder({ language = "en-US", disabled, onChange, onTra
         chunksRef.current.push(event.data);
         const size = chunksRef.current.reduce((total, chunk) => total + chunk.size, 0);
         if (size > MAX_RECORDING_BYTES) {
-          setError("Recording vượt quá 1 MiB và đã được dừng. Hãy thu câu ngắn hơn.");
+          setError("The recording exceeded 1 MiB and was stopped. Record a shorter response.");
           recorder.stop();
         }
       };
@@ -184,7 +184,7 @@ export function SpeakingRecorder({ language = "en-US", disabled, onChange, onTra
     } catch {
       recognitionRef.current?.stop();
       recognitionRef.current = null;
-      setError("Không thể truy cập microphone. Bạn vẫn có thể nhập transcript để được chấm nội dung.");
+      setError("The microphone could not be accessed. You can still enter a transcript for content feedback.");
       setState("idle");
     }
   }
@@ -219,34 +219,34 @@ export function SpeakingRecorder({ language = "en-US", disabled, onChange, onTra
       <div className="speaking-recorder-actions">
         {state === "idle" ? (
           <button className="secondary-button" type="button" onClick={startRecording} disabled={disabled}>
-            <Mic size={16} /> Thu âm tối đa 20 giây
+            <Mic size={16} /> Record up to 20 seconds
           </button>
         ) : null}
         {state === "recording" ? (
           <button className="recording-stop-button" type="button" onClick={stopRecording}>
-            <Square size={15} /> Dừng ({Math.ceil(elapsedMs / 1_000)}s)
+            <Square size={15} /> Stop ({Math.ceil(elapsedMs / 1_000)}s)
           </button>
         ) : null}
         {state === "recorded" ? (
           <>
             {audioUrl ? (
-              <audio controls src={audioUrl} aria-label="Nghe lại recording">
-                <a href={audioUrl}>Nghe recording</a>
+              <audio controls src={audioUrl} aria-label="Play recording">
+                <a href={audioUrl}>Play recording</a>
               </audio>
             ) : (
               <span className="transcript-only-badge"><Pause size={14} /> Transcript only</span>
             )}
             <button className="icon-text-button" type="button" onClick={startRecording} disabled={disabled}>
-              <RotateCcw size={15} /> Thu lại
+              <RotateCcw size={15} /> Record again
             </button>
             <button className="icon-text-button" type="button" onClick={resetRecording}>
-              <Trash2 size={15} /> Xóa
+              <Trash2 size={15} /> Delete
             </button>
           </>
         ) : null}
       </div>
       <p className="speaking-limit-copy">
-        <Play size={13} /> Audio chỉ dùng để phát lại trong browser. Meoi chỉ gửi transcript và chỉ số nhịp nói; transcript-only không có điểm pronunciation.
+        <Play size={13} /> Audio stays in this browser for playback. Meoi sends only the transcript and speaking pace; transcript-only submissions do not receive pronunciation scores.
       </p>
       {error ? <p className="inline-error" role="alert">{error}</p> : null}
     </section>

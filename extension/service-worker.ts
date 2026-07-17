@@ -1,18 +1,31 @@
-import type {
-  ChatOperationState,
-  ExtensionRequest,
-  IntegrationStatus,
-  OperationDispatchReceipt,
+import {
+  MEOI_EXTENSION_PROTOCOL_VERSION,
+  MEOI_PAGE_SOURCE,
+  MEOI_PROMPT_MAX_BYTES,
+  type ChatOperationState,
+  type ExtensionError,
+  type ExtensionRequest,
+  type IntegrationStatus,
+  type OperationDispatchReceipt,
+  type OperationExpectation,
+  type SendOperationPayload,
 } from "../src/integration/protocol";
 import { isAllowedMeoiOrigin } from "./integration-policy";
 import {
   OPERATION_DEADLINE_MS,
+  MAX_OUTSTANDING_OPERATIONS,
+  acknowledgeTerminalOperation,
   appendQueuedOperation,
+  enqueueDecision,
   expiredActiveOperationIds,
+  failOperationsForTabState,
+  hasLegacyTransientState,
   isTerminalPhase,
   pruneTerminalStates,
   publicOperationState,
+  recoverOpeningOperations,
   removeQueuedOperation,
+  retryDecision,
   transitionOperation,
 } from "./operation-state";
 import {
@@ -25,11 +38,118 @@ import {
   type QueueMap,
   type QueuedOperation,
   type UnitChatMap,
+  type UnitTabMap,
 } from "./shared";
 
 const CHATGPT_NEW_CHAT = "https://chatgpt.com/";
+const CONTENT_SCRIPT_CONTACT_MS = 8_000;
+const LEGACY_TRANSIENT_KEYS = [
+  "meoi.queues.v1",
+  "meoi.operationStates.v1",
+  "meoi.queues.v3.session",
+  "meoi.operationStates.v3.session",
+  "meoi.pausedForQuota.v3.session",
+  "meoi.lastError.v3.session",
+];
+
 const processingUnits = new Set<string>();
 let storageMutation: Promise<void> = Promise.resolve();
+let legacyStateChecked = false;
+let workerRecoveryStarted = false;
+
+class RequestFailure extends Error {
+  readonly extensionError: ExtensionError;
+
+  constructor(error: ExtensionError) {
+    super(error.message);
+    this.name = "RequestFailure";
+    this.extensionError = error;
+  }
+}
+
+function byteLength(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function exactKeys(value: Record<string, unknown>, keys: string[]): boolean {
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+function validId(value: unknown): value is string {
+  return typeof value === "string" && value.length >= 1 && value.length <= 120;
+}
+
+function validOperationId(value: unknown): value is string {
+  return typeof value === "string"
+    && value.length <= 120
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function validExpectation(value: unknown, unitId: string): value is OperationExpectation {
+  if (!isRecord(value) || !exactKeys(value, ["unitId", "targetLanguage", "level", "questionCount", "speaking"])) return false;
+  return value.unitId === unitId
+    && validId(value.unitId)
+    && typeof value.targetLanguage === "string"
+    && value.targetLanguage.trim().length > 0
+    && value.targetLanguage.length <= 100
+    && ["beginner", "elementary", "intermediate", "upperIntermediate", "advanced"].includes(String(value.level))
+    && Number.isInteger(value.questionCount)
+    && Number(value.questionCount) >= 8
+    && Number(value.questionCount) <= 15
+    && typeof value.speaking === "boolean";
+}
+
+function validateSendPayload(value: unknown): SendOperationPayload {
+  if (!isRecord(value) || !exactKeys(value, ["unitId", "operationId", "kind", "prompt", "expectation"])) {
+    throw new RequestFailure(extensionError("INVALID_COMMAND", "SEND_OPERATION has an invalid payload shape."));
+  }
+  if (!validId(value.unitId) || !validOperationId(value.operationId)) {
+    throw new RequestFailure(extensionError("INVALID_COMMAND", "The unit ID or operation ID is invalid."));
+  }
+  if (!["create_lesson", "evaluate_answer", "coaching"].includes(String(value.kind))) {
+    throw new RequestFailure(extensionError("INVALID_COMMAND", "The operation kind is invalid."));
+  }
+  if (typeof value.prompt !== "string" || !value.prompt.trim()) {
+    throw new RequestFailure(extensionError("INVALID_COMMAND", "The operation prompt is empty."));
+  }
+  if (byteLength(value.prompt) > MEOI_PROMPT_MAX_BYTES) {
+    throw new RequestFailure(extensionError("PAYLOAD_TOO_LARGE", "The operation prompt exceeds the 640 KiB limit."));
+  }
+  if (!validExpectation(value.expectation, value.unitId)) {
+    throw new RequestFailure(extensionError("INVALID_COMMAND", "The operation expectation is invalid or does not match the unit."));
+  }
+  return value as unknown as SendOperationPayload;
+}
+
+function validatePageRequest(value: unknown): ExtensionRequest<Record<string, unknown>> {
+  if (!isRecord(value)
+    || value.source !== MEOI_PAGE_SOURCE
+    || value.version !== MEOI_EXTENSION_PROTOCOL_VERSION
+    || typeof value.nonce !== "string"
+    || value.nonce.length < 10
+    || typeof value.requestId !== "string"
+    || !validOperationId(value.requestId)
+    || typeof value.command !== "string"
+    || !["SEND_OPERATION", "OPEN_VOICE", "GET_INTEGRATION_STATUS", "GET_OPERATION_STATE", "RETRY_OPERATION", "ACK_OPERATION_RESULT"].includes(value.command)
+    || !isRecord(value.payload)) {
+    throw new RequestFailure(extensionError("INVALID_COMMAND", "The page request is invalid."));
+  }
+  if (value.command === "SEND_OPERATION") validateSendPayload(value.payload);
+  if (value.command === "OPEN_VOICE" && !validId(value.payload.unitId)) {
+    throw new RequestFailure(extensionError("INVALID_COMMAND", "OPEN_VOICE requires a valid unit ID."));
+  }
+  if (["GET_OPERATION_STATE", "RETRY_OPERATION", "ACK_OPERATION_RESULT"].includes(value.command)
+    && !validOperationId(value.payload.operationId)) {
+    throw new RequestFailure(extensionError("INVALID_COMMAND", `${value.command} requires a valid operation ID.`));
+  }
+  return value as unknown as ExtensionRequest<Record<string, unknown>>;
+}
 
 async function getSession<T>(key: string, fallback: T): Promise<T> {
   const value = await chrome.storage.session.get(key);
@@ -72,6 +192,20 @@ function isConversationUrl(value?: string): value is string {
   return Boolean(value && /^https:\/\/chatgpt\.com\/c\/[A-Za-z0-9-]+/.test(value));
 }
 
+function canonicalConversationUrl(value?: string): string | null {
+  if (!value) return null;
+  try {
+    const match = new URL(value).pathname.match(/^\/c\/([A-Za-z0-9-]+)/);
+    return match ? `https://chatgpt.com/c/${match[1]}` : null;
+  } catch {
+    return null;
+  }
+}
+
+function operationFromPayload(payload: SendOperationPayload): QueuedOperation {
+  return { ...payload, queuedAt: new Date().toISOString() };
+}
+
 async function waitForTab(tabId: number): Promise<chrome.tabs.Tab> {
   const current = await chrome.tabs.get(tabId);
   if (current.status === "complete") return current;
@@ -92,10 +226,11 @@ async function waitForTab(tabId: number): Promise<chrome.tabs.Tab> {
 
 async function openUnitChat(unitId: string): Promise<{ tab: chrome.tabs.Tab; newChat: boolean }> {
   const chats = await getLocal<UnitChatMap>(STORAGE_KEYS.unitChats, {});
-  const url = chats[unitId];
+  const url = canonicalConversationUrl(chats[unitId]);
   if (url) {
+    await clearProvisionalUnitTab(unitId);
     const tabs = await chrome.tabs.query({ url: "https://chatgpt.com/*" });
-    const existing = tabs.find((tab) => tab.url === url);
+    const existing = tabs.find((tab) => canonicalConversationUrl(tab.url) === url);
     if (existing?.id) {
       await chrome.tabs.update(existing.id, { active: true });
       if (existing.windowId) await chrome.windows.update(existing.windowId, { focused: true });
@@ -104,15 +239,67 @@ async function openUnitChat(unitId: string): Promise<{ tab: chrome.tabs.Tab; new
     const tab = await chrome.tabs.create({ url, active: true });
     return { tab: await waitForTab(tab.id!), newChat: false };
   }
+
+  const provisionalTabs = await getSession<UnitTabMap>(STORAGE_KEYS.provisionalTabs, {});
+  const provisionalTabId = provisionalTabs[unitId];
+  if (provisionalTabId) {
+    const provisional = await chrome.tabs.get(provisionalTabId).catch(() => null);
+    if (provisional?.id && isChatUrl(provisional.url)) {
+      await chrome.tabs.update(provisional.id, { active: true });
+      if (provisional.windowId) await chrome.windows.update(provisional.windowId, { focused: true });
+      if (isConversationUrl(provisional.url)) {
+        await storeUnitChat(unitId, provisional.url);
+        return { tab: await waitForTab(provisional.id), newChat: false };
+      }
+      return { tab: await waitForTab(provisional.id), newChat: true };
+    }
+    await clearProvisionalUnitTab(unitId);
+  }
+
   const tab = await chrome.tabs.create({ url: CHATGPT_NEW_CHAT, active: true });
+  await setProvisionalUnitTab(unitId, tab.id!);
   return { tab: await waitForTab(tab.id!), newChat: true };
 }
 
+async function setProvisionalUnitTab(unitId: string, tabId: number): Promise<void> {
+  await withStorageMutation(async () => {
+    const tabs = await getSession<UnitTabMap>(STORAGE_KEYS.provisionalTabs, {});
+    await setSession(STORAGE_KEYS.provisionalTabs, { ...tabs, [unitId]: tabId });
+  });
+}
+
+async function clearProvisionalUnitTab(unitId: string): Promise<void> {
+  await withStorageMutation(async () => {
+    const tabs = await getSession<UnitTabMap>(STORAGE_KEYS.provisionalTabs, {});
+    if (!(unitId in tabs)) return;
+    const next = { ...tabs };
+    delete next[unitId];
+    await setSession(STORAGE_KEYS.provisionalTabs, next);
+  });
+}
+
+async function clearProvisionalTabId(tabId: number): Promise<void> {
+  await withStorageMutation(async () => {
+    const tabs = await getSession<UnitTabMap>(STORAGE_KEYS.provisionalTabs, {});
+    const next = Object.fromEntries(Object.entries(tabs).filter(([, mappedTabId]) => mappedTabId !== tabId));
+    if (Object.keys(next).length === Object.keys(tabs).length) return;
+    await setSession(STORAGE_KEYS.provisionalTabs, next);
+  });
+}
+
 async function storeUnitChat(unitId: string, url?: string): Promise<void> {
-  if (!isConversationUrl(url)) return;
+  const canonicalUrl = canonicalConversationUrl(url);
+  if (!canonicalUrl) return;
   const chats = await getLocal<UnitChatMap>(STORAGE_KEYS.unitChats, {});
-  if (chats[unitId] === url) return;
-  await setLocal(STORAGE_KEYS.unitChats, { ...chats, [unitId]: url });
+  const next = Object.fromEntries(Object.entries(chats).filter(([mappedUnitId, mappedUrl]) => (
+    mappedUnitId === unitId || canonicalConversationUrl(mappedUrl) !== canonicalUrl
+  )));
+  if (next[unitId] === canonicalUrl && Object.keys(next).length === Object.keys(chats).length) {
+    await clearProvisionalUnitTab(unitId);
+    return;
+  }
+  await setLocal(STORAGE_KEYS.unitChats, { ...next, [unitId]: canonicalUrl });
+  await clearProvisionalUnitTab(unitId);
 }
 
 async function captureCreatedChat(unitId: string, tabId: number): Promise<void> {
@@ -126,34 +313,40 @@ async function captureCreatedChat(unitId: string, tabId: number): Promise<void> 
   }
 }
 
-async function sendToChat(tabId: number, operation: QueuedOperation): Promise<ChatCommandResponse> {
-  try {
-    return await chrome.tabs.sendMessage(tabId, { kind: "MEOI_CHAT_COMMAND", operation }) as ChatCommandResponse;
-  } catch (error) {
-    return { ok: false, error: extensionError("SEND_FAILED", error instanceof Error ? error.message : "Cannot reach ChatGPT content script.") };
+async function sendToChat(tabId: number, operation: QueuedOperation, deadlineAt: number): Promise<ChatCommandResponse> {
+  const contactDeadline = Math.min(deadlineAt, Date.now() + CONTENT_SCRIPT_CONTACT_MS);
+  let lastMessage = "Cannot reach the ChatGPT content script.";
+  while (Date.now() < contactDeadline) {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab || !isChatUrl(tab.url)) {
+      return { ok: false, error: extensionError("CHATGPT_TAB_CHANGED", "The ChatGPT tab closed or navigated away before the operation was sent.") };
+    }
+    try {
+      return await chrome.tabs.sendMessage(tabId, {
+        kind: "MEOI_CHAT_COMMAND",
+        operation: { ...operation, deadlineAt },
+      }) as ChatCommandResponse;
+    } catch (error) {
+      lastMessage = error instanceof Error ? error.message : lastMessage;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
   }
+  return { ok: false, error: extensionError("SEND_FAILED", lastMessage) };
 }
 
-function queuedOperation(request: ExtensionRequest<Record<string, unknown>>): QueuedOperation {
-  const payload = request.payload;
-  return {
-    id: crypto.randomUUID(),
-    command: "SEND_OPERATION",
-    unitId: String(payload.unitId),
-    operationId: String(payload.operationId),
-    kind: payload.kind as QueuedOperation["kind"],
-    prompt: String(payload.prompt),
-    queuedAt: new Date().toISOString(),
-  };
-}
-
-async function enqueueTracked(request: ExtensionRequest<Record<string, unknown>>): Promise<ChatOperationState> {
-  const operation = queuedOperation(request);
+async function enqueueTracked(payload: SendOperationPayload): Promise<ChatOperationState> {
+  const operation = operationFromPayload(payload);
   const state = await withStorageMutation(async () => {
     let states = pruneTerminalStates(await getSession<OperationStateMap>(STORAGE_KEYS.operationStates, {}));
-    const existing = states[operation.operationId];
-    if (existing) return publicOperationState(existing);
-    const queues = appendQueuedOperation(await getSession<QueueMap>(STORAGE_KEYS.queues, {}), operation);
+    const decision = enqueueDecision(states, operation);
+    if (decision === "existing") return publicOperationState(states[operation.operationId]);
+    if (decision === "conflict") {
+      throw new RequestFailure(extensionError("OPERATION_ID_CONFLICT", "This operation ID is already attached to different input."));
+    }
+    if (decision === "full") {
+      throw new RequestFailure(extensionError("QUEUE_FULL", "Meoi Bridge already has four outstanding operations. Wait for one to finish before sending another."));
+    }
+    const queues = appendQueuedOperation(await getSession<QueueMap>(STORAGE_KEYS.queues, {}), operation.unitId, operation.operationId);
     const now = new Date().toISOString();
     const created: PersistedOperationState = {
       operationId: operation.operationId,
@@ -171,16 +364,17 @@ async function enqueueTracked(request: ExtensionRequest<Record<string, unknown>>
   return state;
 }
 
-async function failOperation(operationId: string, error: ReturnType<typeof extensionError>, keepQueued = false): Promise<string | null> {
+async function failOperation(operationId: string, error: ExtensionError): Promise<string | null> {
   return withStorageMutation(async () => {
     const states = await getSession<OperationStateMap>(STORAGE_KEYS.operationStates, {});
     const state = states[operationId];
     if (!state || isTerminalPhase(state.phase)) return null;
-    let queues = await getSession<QueueMap>(STORAGE_KEYS.queues, {});
-    const next = keepQueued
-      ? transitionOperation(state, "queued", new Date().toISOString(), { error, tabId: undefined, deadlineAt: undefined })
-      : transitionOperation(state, "failed", new Date().toISOString(), { error, tabId: undefined, deadlineAt: undefined });
-    if (!keepQueued) queues = removeQueuedOperation(queues, state.unitId, operationId);
+    const queues = removeQueuedOperation(await getSession<QueueMap>(STORAGE_KEYS.queues, {}), state.unitId, operationId);
+    const next = transitionOperation(state, "failed", new Date().toISOString(), {
+      error,
+      tabId: undefined,
+      deadlineAt: undefined,
+    });
     await chrome.storage.session.set({
       [STORAGE_KEYS.queues]: queues,
       [STORAGE_KEYS.operationStates]: { ...states, [operationId]: next },
@@ -196,47 +390,50 @@ async function dispatchUnit(unitId: string): Promise<void> {
   processingUnits.add(unitId);
   let dispatchNext = false;
   try {
-    const operation = await withStorageMutation(async () => {
+    const pending = await withStorageMutation(async () => {
       const queues = await getSession<QueueMap>(STORAGE_KEYS.queues, {});
-      const next = queues[unitId]?.[0];
-      if (!next) return null;
+      const operationId = queues[unitId]?.[0];
+      if (!operationId) return null;
       const states = await getSession<OperationStateMap>(STORAGE_KEYS.operationStates, {});
-      const state = states[next.operationId];
+      const state = states[operationId];
       if (!state || state.phase !== "queued") return null;
+      const deadlineAt = Date.now() + OPERATION_DEADLINE_MS;
       const opening = transitionOperation(state, "opening_chat", new Date().toISOString(), {
         error: undefined,
         result: undefined,
         repairAttempt: 0,
-        deadlineAt: Date.now() + OPERATION_DEADLINE_MS,
+        deadlineAt,
       });
-      await setSession(STORAGE_KEYS.operationStates, { ...states, [next.operationId]: opening });
-      return next;
+      await setSession(STORAGE_KEYS.operationStates, { ...states, [operationId]: opening });
+      return { operation: state.operation, deadlineAt };
     });
-    if (!operation) return;
+    if (!pending) return;
 
     try {
       const { tab, newChat } = await openUnitChat(unitId);
       if (!tab.id) throw new Error("ChatGPT tab has no ID.");
-      await withStorageMutation(async () => {
+      const claimed = await withStorageMutation(async () => {
         const states = await getSession<OperationStateMap>(STORAGE_KEYS.operationStates, {});
-        const state = states[operation.operationId];
-        if (!state || state.phase !== "opening_chat") return;
+        const state = states[pending.operation.operationId];
+        if (!state || state.phase !== "opening_chat") return false;
         await setSession(STORAGE_KEYS.operationStates, {
           ...states,
-          [operation.operationId]: transitionOperation(state, "sending", new Date().toISOString(), { tabId: tab.id }),
+          [state.operationId]: transitionOperation(state, "sending", new Date().toISOString(), { tabId: tab.id }),
         });
+        return true;
       });
+      if (!claimed) return;
       await setSession(STORAGE_KEYS.lastError, null);
-      const response = await sendToChat(tab.id, operation);
+      const response = await sendToChat(tab.id, pending.operation, pending.deadlineAt);
       if (!response.ok || !response.accepted) {
-        await failOperation(operation.operationId, response.error ?? extensionError("SEND_FAILED", "ChatGPT did not accept the operation."));
+        await failOperation(pending.operation.operationId, response.error ?? extensionError("SEND_FAILED", "ChatGPT did not accept the operation."));
         dispatchNext = true;
         return;
       }
       if (newChat) void captureCreatedChat(unitId, tab.id);
       else await storeUnitChat(unitId, response.currentUrl ?? tab.url);
     } catch (error) {
-      await failOperation(operation.operationId, extensionError("SEND_FAILED", error instanceof Error ? error.message : "Queue processing failed."));
+      await failOperation(pending.operation.operationId, extensionError("SEND_FAILED", error instanceof Error ? error.message : "Queue processing failed."));
       dispatchNext = true;
     }
   } finally {
@@ -269,9 +466,15 @@ async function retryOperation(operationId: string): Promise<ChatOperationState> 
   const state = await withStorageMutation(async () => {
     const states = await getSession<OperationStateMap>(STORAGE_KEYS.operationStates, {});
     const current = states[operationId];
-    if (!current) throw new Error("OPERATION_STATE_NOT_FOUND");
-    if (!isTerminalPhase(current.phase)) return publicOperationState(current);
-    const queues = appendQueuedOperation(await getSession<QueueMap>(STORAGE_KEYS.queues, {}), current.operation);
+    const decision = retryDecision(current);
+    if (decision === "missing") throw new RequestFailure(extensionError("OPERATION_STATE_NOT_FOUND", "The requested operation was not found."));
+    if (!current) throw new Error("Unreachable retry state.");
+    if (decision === "completed" || decision === "existing") return publicOperationState(current);
+    const outstanding = Object.values(states).filter((candidate) => !isTerminalPhase(candidate.phase)).length;
+    if (outstanding >= MAX_OUTSTANDING_OPERATIONS) {
+      throw new RequestFailure(extensionError("QUEUE_FULL", "Meoi Bridge already has four outstanding operations."));
+    }
+    const queues = appendQueuedOperation(await getSession<QueueMap>(STORAGE_KEYS.queues, {}), current.unitId, current.operationId);
     const queued = transitionOperation(current, "queued", new Date().toISOString(), {
       error: undefined,
       result: undefined,
@@ -279,7 +482,12 @@ async function retryOperation(operationId: string): Promise<ChatOperationState> 
       tabId: undefined,
       deadlineAt: undefined,
     });
-    await chrome.storage.session.set({ [STORAGE_KEYS.queues]: queues, [STORAGE_KEYS.operationStates]: { ...states, [operationId]: queued } });
+    await chrome.storage.session.set({
+      [STORAGE_KEYS.queues]: queues,
+      [STORAGE_KEYS.operationStates]: { ...states, [operationId]: queued },
+      [STORAGE_KEYS.paused]: false,
+      [STORAGE_KEYS.lastError]: null,
+    });
     return publicOperationState(queued);
   });
   void dispatchUnit(state.unitId);
@@ -289,17 +497,34 @@ async function retryOperation(operationId: string): Promise<ChatOperationState> 
 async function acknowledgeOperation(operationId: string): Promise<boolean> {
   return withStorageMutation(async () => {
     const states = await getSession<OperationStateMap>(STORAGE_KEYS.operationStates, {});
-    const current = states[operationId];
-    if (!current || !isTerminalPhase(current.phase)) return false;
-    const next = { ...states };
-    delete next[operationId];
-    await setSession(STORAGE_KEYS.operationStates, next);
+    const queues = await getSession<QueueMap>(STORAGE_KEYS.queues, {});
+    const acknowledged = acknowledgeTerminalOperation(states, queues, operationId);
+    if (!acknowledged.acknowledged) return false;
+    await chrome.storage.session.set({
+      [STORAGE_KEYS.operationStates]: acknowledged.states,
+      [STORAGE_KEYS.queues]: acknowledged.queues,
+    });
     return true;
   });
 }
 
+async function discardLegacyTransientState(): Promise<void> {
+  if (legacyStateChecked) return;
+  legacyStateChecked = true;
+  const legacy = await chrome.storage.session.get(LEGACY_TRANSIENT_KEYS);
+  if (!hasLegacyTransientState(legacy, LEGACY_TRANSIENT_KEYS)) return;
+  await chrome.storage.session.remove(LEGACY_TRANSIENT_KEYS);
+  await setSession(STORAGE_KEYS.lastError, extensionError(
+    "OPERATION_STATE_NOT_FOUND",
+    "An unfinished queue from an older bridge version was not replayed. Retry the action from Meoi.",
+  ));
+}
+
 async function reconcileStoredState(): Promise<void> {
-  const units = await withStorageMutation(async () => {
+  const recoverInterruptedWork = !workerRecoveryStarted;
+  workerRecoveryStarted = true;
+  await discardLegacyTransientState();
+  const [units, inFlight] = await withStorageMutation(async () => {
     const storedStates = await getSession<OperationStateMap>(STORAGE_KEYS.operationStates, {});
     let states = pruneTerminalStates(storedStates);
     let queues = await getSession<QueueMap>(STORAGE_KEYS.queues, {});
@@ -316,28 +541,59 @@ async function reconcileStoredState(): Promise<void> {
         }),
       };
     });
-    if (states !== storedStates || expiredIds.length) {
-      await chrome.storage.session.set({ [STORAGE_KEYS.queues]: queues, [STORAGE_KEYS.operationStates]: states });
+    Object.entries(queues).forEach(([unitId, operationIds]) => {
+      const valid = operationIds.filter((operationId) => states[operationId]?.unitId === unitId && states[operationId]?.phase === "queued");
+      if (valid.length) queues = { ...queues, [unitId]: valid };
+      else if (operationIds.length) {
+        queues = { ...queues };
+        delete queues[unitId];
+      }
+    });
+    if (recoverInterruptedWork) {
+      const recovered = recoverOpeningOperations(states, queues);
+      states = recovered.states;
+      queues = recovered.queues;
     }
-    return Object.entries(queues)
-      .filter(([, queue]) => queue[0] && states[queue[0].operationId]?.phase === "queued")
-      .map(([unitId]) => unitId);
+    await chrome.storage.session.set({ [STORAGE_KEYS.queues]: queues, [STORAGE_KEYS.operationStates]: states });
+    return [
+      Object.entries(queues).filter(([, ids]) => ids.length > 0).map(([unitId]) => unitId),
+      recoverInterruptedWork
+        ? Object.values(states).filter((state) => ["sending", "awaiting_response", "repairing_response"].includes(state.phase))
+        : [],
+    ] as const;
   });
+
+  await Promise.all(inFlight.map(async (state) => {
+    if (!state.tabId) {
+      await failOperation(state.operationId, extensionError("SEND_FAILED", "The extension restarted before it could confirm the ChatGPT tab. Retry this operation."));
+      return;
+    }
+    try {
+      const status = await chrome.tabs.sendMessage(state.tabId, { kind: "MEOI_GET_CHAT_OPERATION_STATUS" }) as { activeOperationId?: string };
+      if (status.activeOperationId !== state.operationId) {
+        await failOperation(state.operationId, extensionError("SEND_FAILED", "The extension restarted and could not confirm the in-flight operation. Retry it from Meoi."));
+      }
+    } catch {
+      await failOperation(state.operationId, extensionError("SEND_FAILED", "The extension restarted and lost contact with the in-flight ChatGPT tab. Retry it from Meoi."));
+    }
+  }));
   await Promise.all(units.map(dispatchUnit));
 }
 
 async function handleChatOperationEvent(event: ChatOperationEvent, sender: chrome.runtime.MessageSender): Promise<void> {
-  if (!chatSenderAllowed(sender)) return;
   const transition = await withStorageMutation(async () => {
     const states = await getSession<OperationStateMap>(STORAGE_KEYS.operationStates, {});
     const state = states[event.operationId];
-    if (!state || isTerminalPhase(state.phase) || state.unitId !== event.unitId || state.tabId !== sender.tab?.id) return null;
+    if (!state || isTerminalPhase(state.phase)) return null;
+    if (state.unitId !== event.unitId || state.tabId !== sender.tab?.id) {
+      throw new RequestFailure(extensionError("INVALID_COMMAND", "The ChatGPT operation event does not match its stored operation."));
+    }
     let queues = await getSession<QueueMap>(STORAGE_KEYS.queues, {});
     let next: PersistedOperationState;
     if (event.phase === "completed") {
-      if (!event.result) {
+      if (!event.result || event.result.operationId !== state.operationId || event.result.kind !== state.operation.kind) {
         next = transitionOperation(state, "failed", new Date().toISOString(), {
-          error: extensionError("INVALID_CHATGPT_RESPONSE", "ChatGPT completed without a structured result."),
+          error: extensionError("INVALID_CHATGPT_RESPONSE", "ChatGPT completed without a matching structured result."),
           tabId: undefined,
           deadlineAt: undefined,
         });
@@ -353,12 +609,8 @@ async function handleChatOperationEvent(event: ChatOperationEvent, sender: chrom
       queues = removeQueuedOperation(queues, state.unitId, state.operationId);
     } else if (event.phase === "failed") {
       const error = event.error ?? extensionError("SEND_FAILED", "ChatGPT operation failed.");
-      if (error.code === "CHATGPT_LIMIT_REACHED") {
-        next = transitionOperation(state, "queued", new Date().toISOString(), { error, tabId: undefined, deadlineAt: undefined });
-      } else {
-        next = transitionOperation(state, "failed", new Date().toISOString(), { error, tabId: undefined, deadlineAt: undefined });
-        queues = removeQueuedOperation(queues, state.unitId, state.operationId);
-      }
+      next = transitionOperation(state, "failed", new Date().toISOString(), { error, tabId: undefined, deadlineAt: undefined });
+      queues = removeQueuedOperation(queues, state.unitId, state.operationId);
       await chrome.storage.session.set({
         [STORAGE_KEYS.lastError]: error,
         ...(error.code === "CHATGPT_LIMIT_REACHED" ? { [STORAGE_KEYS.paused]: true } : {}),
@@ -375,36 +627,46 @@ async function handleChatOperationEvent(event: ChatOperationEvent, sender: chrom
 }
 
 async function failOperationsForTab(tabId: number): Promise<void> {
-  const units = await withStorageMutation(async () => {
+  const affectedUnitIds = await withStorageMutation(async () => {
     const states = await getSession<OperationStateMap>(STORAGE_KEYS.operationStates, {});
-    let queues = await getSession<QueueMap>(STORAGE_KEYS.queues, {});
-    const next = { ...states };
-    const affected = new Set<string>();
-    Object.values(states).forEach((state) => {
-      if (state.tabId !== tabId || isTerminalPhase(state.phase)) return;
-      const error = extensionError("CHATGPT_TAB_CHANGED", "The ChatGPT tab closed or navigated away before Meoi received its result.");
-      next[state.operationId] = transitionOperation(state, "failed", new Date().toISOString(), { error, tabId: undefined, deadlineAt: undefined });
-      queues = removeQueuedOperation(queues, state.unitId, state.operationId);
-      affected.add(state.unitId);
+    const queues = await getSession<QueueMap>(STORAGE_KEYS.queues, {});
+    const error = extensionError("CHATGPT_TAB_CHANGED", "The ChatGPT tab closed or navigated away before Meoi received its result.");
+    const failed = failOperationsForTabState(states, queues, tabId, error);
+    if (!failed.affectedUnitIds.length) return [];
+    await chrome.storage.session.set({
+      [STORAGE_KEYS.operationStates]: failed.states,
+      [STORAGE_KEYS.queues]: failed.queues,
+      [STORAGE_KEYS.lastError]: error,
     });
-    await chrome.storage.session.set({ [STORAGE_KEYS.queues]: queues, [STORAGE_KEYS.operationStates]: next });
-    return [...affected];
+    return failed.affectedUnitIds;
   });
-  units.forEach((unitId) => void dispatchUnit(unitId));
+  affectedUnitIds.forEach((unitId) => void dispatchUnit(unitId));
 }
 
-async function storeConversationForTab(tabId: number, url: string): Promise<void> {
-  if (!isConversationUrl(url)) return;
+async function handleChatTabUrlChange(tabId: number, url: string): Promise<void> {
   const states = await getSession<OperationStateMap>(STORAGE_KEYS.operationStates, {});
   const state = Object.values(states).find((candidate) => candidate.tabId === tabId && !isTerminalPhase(candidate.phase));
-  if (state) await storeUnitChat(state.unitId, url);
+  if (!state) return;
+  if (!isChatUrl(url)) {
+    await failOperationsForTab(tabId);
+    return;
+  }
+  if (!isConversationUrl(url)) return;
+  const chats = await getLocal<UnitChatMap>(STORAGE_KEYS.unitChats, {});
+  const mappedUrl = canonicalConversationUrl(chats[state.unitId]);
+  const currentUrl = canonicalConversationUrl(url);
+  if (mappedUrl && mappedUrl !== currentUrl) {
+    await failOperation(state.operationId, extensionError("CHATGPT_TAB_CHANGED", "The ChatGPT conversation changed before Meoi received its result."));
+    return;
+  }
+  await storeUnitChat(state.unitId, url);
 }
 
 async function handlePageRequest(request: ExtensionRequest<Record<string, unknown>>) {
   const payload = request.payload;
   switch (request.command) {
     case "SEND_OPERATION": {
-      const state = await enqueueTracked(request);
+      const state = await enqueueTracked(validateSendPayload(payload));
       return { ok: true, data: { operationId: state.operationId, phase: "queued" } satisfies OperationDispatchReceipt };
     }
     case "GET_OPERATION_STATE": {
@@ -414,13 +676,8 @@ async function handlePageRequest(request: ExtensionRequest<Record<string, unknow
         ? { ok: true, data: publicOperationState(state) }
         : { ok: false, error: extensionError("OPERATION_STATE_NOT_FOUND", "The requested extension operation state was not found.") };
     }
-    case "RETRY_OPERATION": {
-      try {
-        return { ok: true, data: await retryOperation(String(payload.operationId)) };
-      } catch {
-        return { ok: false, error: extensionError("OPERATION_STATE_NOT_FOUND", "The requested extension operation cannot be retried.") };
-      }
-    }
+    case "RETRY_OPERATION":
+      return { ok: true, data: await retryOperation(String(payload.operationId)) };
     case "ACK_OPERATION_RESULT":
       return { ok: true, data: { acknowledged: await acknowledgeOperation(String(payload.operationId)) } };
     case "OPEN_VOICE": {
@@ -438,42 +695,40 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
   const kind = (message as { kind?: string }).kind;
 
   if (kind === "MEOI_CHAT_OPERATION_EVENT" && chatSenderAllowed(sender)) {
-    void handleChatOperationEvent(message as ChatOperationEvent, sender).then(() => sendResponse({ ok: true })).catch((error) => {
-      sendResponse({ ok: false, error: extensionError("SEND_FAILED", error instanceof Error ? error.message : "Cannot store ChatGPT operation event.") });
-    });
-    return true;
-  }
-
-  if (kind === "MEOI_RETRY_CHATGPT" && chatSenderAllowed(sender)) {
-    void (async () => {
-      await setSession(STORAGE_KEYS.paused, false);
-      await setSession(STORAGE_KEYS.lastError, null);
-      const queues = await getSession<QueueMap>(STORAGE_KEYS.queues, {});
-      await Promise.all(Object.keys(queues).map(dispatchUnit));
-      sendResponse({ ok: true });
-    })();
+    void handleChatOperationEvent(message as ChatOperationEvent, sender)
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => sendResponse({
+        ok: false,
+        error: error instanceof RequestFailure
+          ? error.extensionError
+          : extensionError("SEND_FAILED", error instanceof Error ? error.message : "Cannot store ChatGPT operation event."),
+      }));
     return true;
   }
 
   if (kind !== "MEOI_PAGE_REQUEST" || !senderAllowed(sender)) return false;
-  const request = (message as { request: ExtensionRequest<Record<string, unknown>> }).request;
   void (async () => {
+    const request = validatePageRequest((message as { request?: unknown }).request);
     await reconcileStoredState();
     return handlePageRequest(request);
   })().then(sendResponse).catch((error) => {
-    sendResponse({ ok: false, error: extensionError("SEND_FAILED", error instanceof Error ? error.message : "Extension command failed.") });
+    sendResponse({
+      ok: false,
+      error: error instanceof RequestFailure
+        ? error.extensionError
+        : extensionError("SEND_FAILED", error instanceof Error ? error.message : "Extension command failed."),
+    });
   });
   return true;
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   void failOperationsForTab(tabId);
+  void clearProvisionalTabId(tabId);
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (!changeInfo.url) return;
-  if (isChatUrl(changeInfo.url)) void storeConversationForTab(tabId, changeInfo.url);
-  else void failOperationsForTab(tabId);
+  if (changeInfo.url) void handleChatTabUrlChange(tabId, changeInfo.url);
 });
 
 chrome.runtime.onStartup.addListener(() => {

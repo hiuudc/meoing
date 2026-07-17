@@ -121,12 +121,45 @@ export function parseEvaluation(value: unknown): Evaluation {
 
 export function validateLessonForProfile(lesson: Lesson, profile: LearningProfile): string[] {
   const errors: string[] = [];
-  if (lesson.questions.length < 8 || lesson.questions.length > 15) errors.push("Lesson must have 8–15 questions.");
+  if (lesson.questions.length < 8 || lesson.questions.length > 15) errors.push("Lesson must have 8-15 questions.");
   if (new Set(lesson.questions.map((question) => question.type)).size < 5) errors.push("Lesson must use at least five formats.");
   if (profile.speakingEnabled && !lesson.questions.some((question) => question.type === "speakingRepeat" || question.type === "speakingRoleplay")) {
     errors.push("Speaking is enabled, so the lesson needs at least one speaking question.");
   }
   if (lesson.questions.some((question) => !QUESTION_FORMATS.includes(question.type))) errors.push("Lesson contains an unsupported question format.");
+  return errors;
+}
+
+export interface LessonExpectation {
+  unitId: string;
+  targetLanguage: string;
+  level: LearningProfile["level"];
+  questionCount: number;
+  speaking: boolean;
+}
+
+export function validateLessonForExpectation(lesson: Lesson, expectation: LessonExpectation): string[] {
+  const errors: string[] = [];
+  if (new Set(lesson.questions.map((question) => question.type)).size < 5) {
+    errors.push("Lesson must use at least five formats.");
+  }
+  if (expectation.speaking && !lesson.questions.some((question) => question.type === "speakingRepeat" || question.type === "speakingRoleplay")) {
+    errors.push("Speaking is enabled, so the lesson needs at least one speaking question.");
+  }
+  if (lesson.questions.some((question) => !QUESTION_FORMATS.includes(question.type))) {
+    errors.push("Lesson contains an unsupported question format.");
+  }
+  if (lesson.unitId !== expectation.unitId) errors.push(`lesson.unitId must equal ${expectation.unitId}.`);
+  if (lesson.targetLanguage.trim().toLocaleLowerCase() !== expectation.targetLanguage.trim().toLocaleLowerCase()) {
+    errors.push(`lesson.targetLanguage must equal ${expectation.targetLanguage}.`);
+  }
+  if (lesson.level !== expectation.level) errors.push(`lesson.level must equal ${expectation.level}.`);
+  if (lesson.questions.length !== expectation.questionCount) {
+    errors.push(`lesson.questions must contain exactly ${expectation.questionCount} items.`);
+  }
+  const evaluationModes = new Set(lesson.questions.map((question) => question.evaluationMode));
+  if (!evaluationModes.has("local")) errors.push("Lesson must include at least one locally graded question.");
+  if (!evaluationModes.has("ai")) errors.push("Lesson must include at least one AI-graded question.");
   return errors;
 }
 

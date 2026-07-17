@@ -1,10 +1,12 @@
 import { ArrowDown, ArrowUp, Headphones, Plus, RotateCcw, X } from "lucide-react";
 import type { ChoiceOption, LessonQuestion, QuestionAnswer, SpeakingSubmission } from "./types";
 import { SpeakingRecorder } from "./SpeakingRecorder";
+import { languageTagForSpeech } from "./speech";
 
 interface QuestionRendererProps {
   question: LessonQuestion;
   answer: QuestionAnswer;
+  language: string;
   disabled?: boolean;
   onChange: (answer: QuestionAnswer) => void;
   onSpeakingChange?: (submission: SpeakingSubmission | null) => void;
@@ -49,7 +51,7 @@ function ReorderResponse({ options, value, onChange, disabled }: { options: Choi
 
   return (
     <div className="reorder-response">
-      <p className="question-control-label">Thứ tự đã chọn</p>
+      <p className="question-control-label">Selected order</p>
       <ol className="reorder-selected-list">
         {value.map((id, index) => (
           <li key={id}>
@@ -73,25 +75,27 @@ function ReorderResponse({ options, value, onChange, disabled }: { options: Choi
       ) : null}
       {value.length ? (
         <button className="question-reset-button" type="button" onClick={() => onChange([])} disabled={disabled}>
-          <RotateCcw size={14} /> Làm lại thứ tự
+          <RotateCcw size={14} /> Reset order
         </button>
       ) : null}
     </div>
   );
 }
 
-function speakText(text: string) {
+function speakText(text: string, language: string) {
   if (!("speechSynthesis" in window)) return;
   window.speechSynthesis.cancel();
-  window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = languageTagForSpeech(language);
+  window.speechSynthesis.speak(utterance);
 }
 
-export function QuestionRenderer({ question, answer, disabled, onChange, onSpeakingChange }: QuestionRendererProps) {
+export function QuestionRenderer({ question, answer, language, disabled, onChange, onSpeakingChange }: QuestionRendererProps) {
   switch (question.type) {
     case "singleChoice":
       return (
         <fieldset className="choice-list" disabled={disabled}>
-          <legend className="sr-only">Chọn một đáp án</legend>
+          <legend className="sr-only">Choose one answer</legend>
           {question.options.map((option) => (
             <label key={option.id} className={stringAnswer(answer) === option.id ? "is-selected" : ""}>
               <input type="radio" name={question.id} value={option.id} checked={stringAnswer(answer) === option.id} onChange={() => onChange(option.id)} />
@@ -104,7 +108,7 @@ export function QuestionRenderer({ question, answer, disabled, onChange, onSpeak
       const selected = stringArrayAnswer(answer);
       return (
         <fieldset className="choice-list" disabled={disabled}>
-          <legend className="question-control-label">Chọn tất cả đáp án phù hợp</legend>
+          <legend className="question-control-label">Choose all matching answers</legend>
           {question.options.map((option) => (
             <label key={option.id} className={selected.includes(option.id) ? "is-selected" : ""}>
               <input
@@ -123,7 +127,7 @@ export function QuestionRenderer({ question, answer, disabled, onChange, onSpeak
       return (
         <fieldset className="choice-list choice-list-inline" disabled={disabled}>
           <legend>{question.statement}</legend>
-          {[{ value: true, label: "Đúng" }, { value: false, label: "Sai" }].map((option) => (
+          {[{ value: true, label: "True" }, { value: false, label: "False" }].map((option) => (
             <label key={String(option.value)} className={answer === option.value ? "is-selected" : ""}>
               <input type="radio" name={question.id} checked={answer === option.value} onChange={() => onChange(option.value)} />
               <span>{option.label}</span>
@@ -135,7 +139,7 @@ export function QuestionRenderer({ question, answer, disabled, onChange, onSpeak
       return (
         <div className="blank-response">
           <p>{question.template}</p>
-          <TextResponse label="Từ hoặc cụm từ còn thiếu" value={stringAnswer(answer)} onChange={onChange} disabled={disabled} />
+          <TextResponse label="Missing word or phrase" value={stringAnswer(answer)} onChange={onChange} disabled={disabled} />
         </div>
       );
     case "multiCloze": {
@@ -147,7 +151,7 @@ export function QuestionRenderer({ question, answer, disabled, onChange, onSpeak
             {question.blanks.map((blank, index) => (
               <TextResponse
                 key={blank.id}
-                label={`Chỗ trống ${index + 1}`}
+                label={`Blank ${index + 1}`}
                 value={values[blank.id] ?? ""}
                 onChange={(value) => onChange({ ...values, [blank.id]: value })}
                 disabled={disabled}
@@ -162,12 +166,12 @@ export function QuestionRenderer({ question, answer, disabled, onChange, onSpeak
     case "matching": {
       const values = mapAnswer(answer);
       return (
-        <div className="mapping-response" role="group" aria-label="Ghép cặp">
+        <div className="mapping-response" role="group" aria-label="Match pairs">
           {question.pairs.map((pair) => (
             <label key={pair.leftId}>
               <span>{pair.left}</span>
               <select value={values[pair.leftId] ?? ""} onChange={(event) => onChange({ ...values, [pair.leftId]: event.target.value })} disabled={disabled}>
-                <option value="">Chọn nghĩa…</option>
+                <option value="">Choose a match...</option>
                 {question.pairs.map((candidate) => <option value={candidate.rightId} key={candidate.rightId}>{candidate.right}</option>)}
               </select>
             </label>
@@ -189,12 +193,12 @@ export function QuestionRenderer({ question, answer, disabled, onChange, onSpeak
     case "categorize": {
       const values = mapAnswer(answer);
       return (
-        <div className="mapping-response" role="group" aria-label="Phân loại">
+        <div className="mapping-response" role="group" aria-label="Categorize items">
           {question.items.map((item) => (
             <label key={item.id}>
               <span>{item.label}</span>
               <select value={values[item.id] ?? ""} onChange={(event) => onChange({ ...values, [item.id]: event.target.value })} disabled={disabled}>
-                <option value="">Chọn nhóm…</option>
+                <option value="">Choose a category...</option>
                 {question.categories.map((category) => <option value={category.id} key={category.id}>{category.label}</option>)}
               </select>
             </label>
@@ -206,40 +210,40 @@ export function QuestionRenderer({ question, answer, disabled, onChange, onSpeak
       return (
         <div className="open-response">
           <blockquote>{question.sourceText}</blockquote>
-          <TextResponse label={`Bản dịch ${question.targetLanguage}`} value={stringAnswer(answer)} onChange={onChange} disabled={disabled} multiline />
-          <p className="rubric-copy">ChatGPT chấm: {question.rubric.join(" · ")}</p>
+          <TextResponse label={`${question.targetLanguage} translation`} value={stringAnswer(answer)} onChange={onChange} disabled={disabled} multiline />
+          <p className="rubric-copy">ChatGPT rubric: {question.rubric.join(" · ")}</p>
         </div>
       );
     case "shortAnswer":
       return (
         <div className="open-response">
-          <TextResponse label="Câu trả lời" value={stringAnswer(answer)} onChange={onChange} disabled={disabled} multiline />
-          <p className="rubric-copy">Ý cần có: {question.requiredIdeas.join(" · ")}</p>
+          <TextResponse label="Answer" value={stringAnswer(answer)} onChange={onChange} disabled={disabled} multiline />
+          <p className="rubric-copy">Required ideas: {question.requiredIdeas.join(" · ")}</p>
         </div>
       );
     case "errorCorrection":
       return (
         <div className="open-response">
           <blockquote className="incorrect-source">{question.incorrectText}</blockquote>
-          <TextResponse label="Câu đã sửa" value={stringAnswer(answer)} onChange={onChange} disabled={disabled} />
+          <TextResponse label="Corrected sentence" value={stringAnswer(answer)} onChange={onChange} disabled={disabled} />
         </div>
       );
     case "sentenceTransformation":
       return (
         <div className="open-response">
           <blockquote>{question.sourceText}</blockquote>
-          <p className="constraint-copy">Yêu cầu: {question.constraint}</p>
-          <TextResponse label="Câu mới" value={stringAnswer(answer)} onChange={onChange} disabled={disabled} />
+          <p className="constraint-copy">Constraint: {question.constraint}</p>
+          <TextResponse label="New sentence" value={stringAnswer(answer)} onChange={onChange} disabled={disabled} />
         </div>
       );
     case "dictation":
       return (
         <div className="open-response">
-          <button className="secondary-button" type="button" onClick={() => speakText(question.transcript)} disabled={disabled || !("speechSynthesis" in window)}>
-            <Headphones size={16} /> Nghe câu
+          <button className="secondary-button" type="button" onClick={() => speakText(question.transcript, language)} disabled={disabled || !("speechSynthesis" in window)}>
+            <Headphones size={16} /> Play sentence
           </button>
-          <TextResponse label="Nội dung nghe được" value={stringAnswer(answer)} onChange={onChange} disabled={disabled} />
-          <details className="transcript-fallback"><summary>Không nghe được? Mở transcript fallback</summary><p>{question.transcript}</p></details>
+          <TextResponse label="What you heard" value={stringAnswer(answer)} onChange={onChange} disabled={disabled} />
+          <details className="transcript-fallback"><summary>Cannot hear it? Show the fallback transcript</summary><p>{question.transcript}</p></details>
         </div>
       );
     case "freeWriting": {
@@ -247,8 +251,8 @@ export function QuestionRenderer({ question, answer, disabled, onChange, onSpeak
       const wordCount = value.trim() ? value.trim().split(/\s+/).length : 0;
       return (
         <div className="open-response">
-          <TextResponse label="Bài viết" value={value} onChange={onChange} disabled={disabled} multiline />
-          <p className="rubric-copy">{wordCount}/{question.minWords}–{question.maxWords} từ · {question.rubric.join(" · ")}</p>
+          <TextResponse label="Writing response" value={value} onChange={onChange} disabled={disabled} multiline />
+          <p className="rubric-copy">{wordCount}/{question.minWords}-{question.maxWords} words · {question.rubric.join(" · ")}</p>
         </div>
       );
     }
@@ -256,20 +260,20 @@ export function QuestionRenderer({ question, answer, disabled, onChange, onSpeak
       return (
         <div className="speaking-response">
           <blockquote>{question.modelText}</blockquote>
-          <SpeakingRecorder disabled={disabled} onChange={(submission) => onSpeakingChange?.(submission)} onTranscriptChange={onChange} />
-          <TextResponse label="Transcript (có thể chỉnh sửa)" value={stringAnswer(answer)} onChange={onChange} disabled={disabled} multiline />
+          <SpeakingRecorder language={languageTagForSpeech(language)} disabled={disabled} onChange={(submission) => onSpeakingChange?.(submission)} onTranscriptChange={onChange} />
+          <TextResponse label="Transcript (editable)" value={stringAnswer(answer)} onChange={onChange} disabled={disabled} multiline />
         </div>
       );
     case "speakingRoleplay":
       return (
         <div className="speaking-response">
           <dl className="roleplay-brief">
-            <div><dt>Vai</dt><dd>{question.role}</dd></div>
-            <div><dt>Tình huống</dt><dd>{question.scenario}</dd></div>
-            <div><dt>Mục tiêu</dt><dd>{question.goal}</dd></div>
+            <div><dt>Role</dt><dd>{question.role}</dd></div>
+            <div><dt>Scenario</dt><dd>{question.scenario}</dd></div>
+            <div><dt>Goal</dt><dd>{question.goal}</dd></div>
           </dl>
-          <SpeakingRecorder disabled={disabled} onChange={(submission) => onSpeakingChange?.(submission)} onTranscriptChange={onChange} />
-          <TextResponse label="Transcript (có thể chỉnh sửa)" value={stringAnswer(answer)} onChange={onChange} disabled={disabled} multiline />
+          <SpeakingRecorder language={languageTagForSpeech(language)} disabled={disabled} onChange={(submission) => onSpeakingChange?.(submission)} onTranscriptChange={onChange} />
+          <TextResponse label="Transcript (editable)" value={stringAnswer(answer)} onChange={onChange} disabled={disabled} multiline />
         </div>
       );
   }

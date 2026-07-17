@@ -1,32 +1,32 @@
 <!doctype html>
-<html lang="vi">
+<html lang="en">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>Quyền riêng tư Meoi</title>
+    <title>Meoi Privacy</title>
     <link rel="stylesheet" href="/legal.css">
   </head>
   <body>
     <main>
       <p class="eyebrow">Meoi Bridge v2 · Browser-only</p>
-      <h1>Quyền riêng tư</h1>
-      <p class="notice">Meoi không có backend, MCP, OAuth hoặc database. Extension gửi yêu cầu trực tiếp vào tab ChatGPT mà bạn đã đăng nhập.</p>
+      <h1>Privacy</h1>
+      <p class="notice">Meoi has no backend, MCP, OAuth flow, or database. The extension sends requests directly through the ChatGPT tab where you are signed in.</p>
 
-      <h2>Dữ liệu được giữ ở đâu</h2>
+      <h2>Where data is kept</h2>
       <ul>
-        <li>Workspace Library nằm trong localStorage của website trên máy bạn.</li>
-        <li>Lesson, evaluation và coaching từ ChatGPT chỉ nằm trong bộ nhớ của trang hiện tại và biến mất khi reload.</li>
-        <li>Queue và kết quả chờ nhận nằm trong <code>chrome.storage.session</code>, rồi bị xóa sau khi Meoi ACK.</li>
-        <li>Chỉ ánh xạ unit với URL cuộc chat được giữ trong <code>chrome.storage.local</code>.</li>
+        <li>Your workspace library is stored in this website's localStorage on your device.</li>
+        <li>Lessons, evaluations, and coaching returned by ChatGPT remain only in the current page's memory and disappear on reload.</li>
+        <li>Queued prompts and results awaiting pickup use <code>chrome.storage.session</code> and are removed after Meoi acknowledges them.</li>
+        <li>Only the mapping between a unit and its ChatGPT conversation URL is kept in <code>chrome.storage.local</code>.</li>
       </ul>
 
-      <h2>Phạm vi extension</h2>
-      <p>Extension chỉ nhận lệnh từ Meoi trên <code>127.0.0.1</code>, gửi prompt vào <code>chatgpt.com</code> và đọc assistant turn mới của operation đó. Extension không đọc lịch sử chat, cookie hoặc network nội bộ.</p>
+      <h2>Extension scope</h2>
+      <p>The extension accepts commands only from Meoi on <code>127.0.0.1</code>, sends prompts through <code>chatgpt.com</code>, and reads only the new assistant turn created for that operation. It does not read chat history, user messages, cookies, or internal network traffic.</p>
 
-      <h2>Audio và YouTube</h2>
-      <p>Recording chỉ dùng để phát lại trong browser; Meoi không tải audio lên ChatGPT. URL YouTube chỉ được nhúng để xem, còn lesson cần transcript hoặc notes do bạn cung cấp.</p>
+      <h2>Audio and YouTube</h2>
+      <p>Recordings stay in the browser for playback and are not uploaded to ChatGPT. YouTube URLs are embedded for viewing; accurate source-based lessons require a transcript or notes that you provide.</p>
 
-      <nav class="links"><a href="/terms.html">Điều khoản</a><a href="/support.html">Hỗ trợ</a><a href="/delete-data.html">Xóa dữ liệu</a><a href="/">Meoi</a></nav>
+      <nav class="links"><a href="/terms.html">Terms</a><a href="/support.html">Support</a><a href="/delete-data.html">Delete data</a><a href="/">Meoi</a></nav>
     </main>
   </body>
 </html>

@@ -5,24 +5,26 @@ import type {
   ChatOperationState,
   ExtensionError,
   ExtensionErrorCode,
+  OperationExpectation,
 } from "../src/integration/protocol";
 
 export const STORAGE_KEYS = {
   unitChats: "meoi.unitChats.v1",
-  queues: "meoi.queues.v3.session",
-  operationStates: "meoi.operationStates.v3.session",
-  paused: "meoi.pausedForQuota.v3.session",
-  lastError: "meoi.lastError.v3.session",
+  queues: "meoi.queues.v2.session",
+  operationStates: "meoi.operationStates.v2.session",
+  provisionalTabs: "meoi.provisionalUnitTabs.v2.session",
+  paused: "meoi.pausedForQuota.v2.session",
+  lastError: "meoi.lastError.v2.session",
 } as const;
 
 export interface QueuedOperation {
-  id: string;
-  command: "SEND_OPERATION";
   unitId: string;
   operationId: string;
   kind: ChatOperationKind;
   prompt: string;
+  expectation: OperationExpectation;
   queuedAt: string;
+  deadlineAt?: number;
 }
 
 export interface PersistedOperationState extends ChatOperationState {
@@ -31,8 +33,9 @@ export interface PersistedOperationState extends ChatOperationState {
   deadlineAt?: number;
 }
 
-export type QueueMap = Record<string, QueuedOperation[]>;
+export type QueueMap = Record<string, string[]>;
 export type UnitChatMap = Record<string, string>;
+export type UnitTabMap = Record<string, number>;
 export type OperationStateMap = Record<string, PersistedOperationState>;
 
 export interface ChatCommandResponse {

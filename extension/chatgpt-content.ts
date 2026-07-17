@@ -3,23 +3,33 @@ import type { ChatCommandResponse, ChatOperationEvent, QueuedOperation } from ".
 import { extensionError } from "./shared";
 import {
   assistantTurnText,
+  composerText,
+  composerTextMatchesExpected,
+  composerTextMismatchSummary,
   conversationIdFromUrl,
+  currentComposer,
   findAssistantTurns,
   findComposer,
   findSendButton,
   parseChatOperationResult,
   quotaReached,
+  repairAttemptNumbers,
   responseGenerationActive,
+  resultParseFailureReason,
   visibleControl as visible,
   type Composer,
-  type ResultParseErrorCode,
 } from "./chatgpt-adapter";
 
 const SELECTOR_TIMEOUT_MS = 8_000;
 const OPERATION_TIMEOUT_MS = 10 * 60_000;
 const RESPONSE_STABLE_MS = 1_200;
 const OBSERVER_POLL_MS = 200;
-const MAX_REPAIR_ATTEMPTS = 3;
+const EVENT_DELIVERY_GRACE_MS = 10_000;
+const COMPOSER_PAYLOAD_PREFIX = "meoi-composer-payload-";
+const COMPOSER_READY_ATTRIBUTE = "data-meoi-main-bridge";
+const COMPOSER_RESULT_ATTRIBUTE = "data-meoi-composer-result";
+
+let lastMainWorldComposerResult = "not-ready";
 
 interface AssistantBaseline {
   count: number;
@@ -78,53 +88,190 @@ function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
   textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
 }
 
-function replaceComposerText(composer: Composer, value: string) {
-  composer.focus();
-  if (composer instanceof HTMLTextAreaElement) {
-    setTextareaValue(composer, value);
-    return;
-  }
+function requestMainWorldComposerText(value: string) {
+  const requestId = crypto.randomUUID();
+  const payload = document.createElement("script");
+  payload.id = `${COMPOSER_PAYLOAD_PREFIX}${requestId}`;
+  payload.type = "application/json";
+  payload.hidden = true;
+  payload.dataset.meoiRequestId = requestId;
+  payload.textContent = value;
+  document.documentElement.append(payload);
+  window.setTimeout(() => payload.remove(), 2_000);
+  window.setTimeout(() => {
+    const result = document.documentElement.getAttribute(COMPOSER_RESULT_ATTRIBUTE);
+    if (result?.startsWith(`${requestId}:`)) {
+      lastMainWorldComposerResult = result.slice(requestId.length + 1);
+      document.documentElement.removeAttribute(COMPOSER_RESULT_ATTRIBUTE);
+    } else {
+      lastMainWorldComposerResult = document.documentElement.getAttribute(COMPOSER_READY_ATTRIBUTE) === "ready"
+        ? "ready-no-result"
+        : "not-ready";
+    }
+  }, 0);
+}
+
+function selectComposerContents(composer: HTMLElement) {
   const selection = window.getSelection();
   const range = document.createRange();
   range.selectNodeContents(composer);
   selection?.removeAllRanges();
   selection?.addRange(range);
-  document.execCommand("insertText", false, value);
-  composer.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
 }
 
-async function submitText(prompt: string, unsupportedMessage: string): Promise<ChatCommandResponse> {
-  if (quotaReached()) {
-    return { ok: false, error: extensionError("CHATGPT_LIMIT_REACHED", "ChatGPT Free quota reached. Click Retry in ChatGPT to resume Meoi.") };
+function clearContentEditable(composer: HTMLElement) {
+  composer.focus();
+  selectComposerContents(composer);
+  document.execCommand("delete", false);
+}
+
+function pasteContentEditable(composer: HTMLElement, value: string) {
+  clearContentEditable(composer);
+  const clipboardData = new DataTransfer();
+  clipboardData.setData("text/plain", value);
+  composer.dispatchEvent(new ClipboardEvent("paste", {
+    bubbles: true,
+    cancelable: true,
+    clipboardData,
+  }));
+}
+
+function insertContentEditable(composer: HTMLElement, value: string) {
+  clearContentEditable(composer);
+  selectComposerContents(composer);
+  document.execCommand("insertText", false, value);
+}
+
+function replaceContentEditableDom(composer: HTMLElement, value: string) {
+  composer.focus();
+  const fragment = document.createDocumentFragment();
+  const lines = value.split("\n");
+  for (const line of lines.length ? lines : [""]) {
+    const paragraph = document.createElement("p");
+    if (line) {
+      paragraph.textContent = line;
+    } else {
+      paragraph.dataset.emptyParagraph = "true";
+      const lineBreak = document.createElement("br");
+      lineBreak.className = "ProseMirror-trailingBreak";
+      paragraph.append(lineBreak);
+    }
+    fragment.append(paragraph);
   }
-  const composer = await waitForComposer();
+  composer.replaceChildren(fragment);
+  composer.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertFromPaste", data: value }));
+}
+
+async function composerContainingExactText(composer: Composer, value: string, deadline: number): Promise<Composer | null> {
+  while (Date.now() < deadline) {
+    const candidate = currentComposer(composer);
+    if (candidate && composerTextMatchesExpected(composerText(candidate), value)) return candidate;
+    await waitForMutationOrDelay(100);
+  }
+  return null;
+}
+
+async function fillComposerText(composer: Composer, value: string, deadline: number): Promise<Composer | null> {
+  if (composer instanceof HTMLTextAreaElement) {
+    composer.focus();
+    setTextareaValue(composer, value);
+    return composerContainingExactText(composer, value, deadline);
+  }
+
+  requestMainWorldComposerText(value);
+  let matched = await composerContainingExactText(composer, value, Math.min(deadline, Date.now() + 800));
+  if (matched) return matched;
+
+  let candidate = currentComposer(composer);
+  if (!candidate) return null;
+  if (candidate instanceof HTMLTextAreaElement) setTextareaValue(candidate, value);
+  else pasteContentEditable(candidate, value);
+  matched = await composerContainingExactText(candidate, value, Math.min(deadline, Date.now() + 600));
+  if (matched) return matched;
+
+  candidate = currentComposer(candidate);
+  if (!candidate) return null;
+  if (candidate instanceof HTMLTextAreaElement) setTextareaValue(candidate, value);
+  else insertContentEditable(candidate, value);
+  matched = await composerContainingExactText(candidate, value, Math.min(deadline, Date.now() + 600));
+  if (matched) return matched;
+
+  candidate = currentComposer(candidate);
+  if (!candidate) return null;
+  if (candidate instanceof HTMLTextAreaElement) setTextareaValue(candidate, value);
+  else replaceContentEditableDom(candidate, value);
+  return composerContainingExactText(candidate, value, deadline);
+}
+
+async function clearComposerText(composer: Composer): Promise<void> {
+  let candidate = currentComposer(composer);
+  if (!candidate) return;
+  if (candidate instanceof HTMLTextAreaElement) {
+    setTextareaValue(candidate, "");
+    return;
+  }
+  requestMainWorldComposerText("");
+  const mainWorldDeadline = Date.now() + 400;
+  while (Date.now() < mainWorldDeadline) {
+    candidate = currentComposer(candidate);
+    if (!candidate || !composerText(candidate).trim()) return;
+    await waitForMutationOrDelay(50);
+  }
+  candidate = currentComposer(candidate);
+  if (!candidate) return;
+  if (candidate instanceof HTMLTextAreaElement) setTextareaValue(candidate, "");
+  else {
+    clearContentEditable(candidate);
+    if (composerText(candidate).trim()) replaceContentEditableDom(candidate, "");
+  }
+}
+
+async function waitForEnabledSend(composer: Composer, deadline: number): Promise<HTMLButtonElement | null> {
+  while (Date.now() < deadline) {
+    const candidate = currentComposer(composer);
+    const button = candidate ? findSendButton(candidate) : null;
+    if (button) return button;
+    await waitForMutationOrDelay(100);
+  }
+  return null;
+}
+
+async function submitText(prompt: string, unsupportedMessage: string, deadline: number): Promise<ChatCommandResponse> {
+  if (quotaReached()) {
+    return { ok: false, error: extensionError("CHATGPT_LIMIT_REACHED", "ChatGPT quota was reached. Nothing was sent.") };
+  }
+  const selectorDeadline = Math.min(deadline, Date.now() + SELECTOR_TIMEOUT_MS);
+  const composer = await waitForComposer(selectorDeadline);
   if (!composer) return { ok: false, error: extensionError("UNSUPPORTED_CHATGPT_UI", unsupportedMessage) };
-  replaceComposerText(composer, prompt);
-  await wait(250);
-  if (quotaReached()) {
-    replaceComposerText(composer, "");
-    return { ok: false, error: extensionError("CHATGPT_LIMIT_REACHED", "ChatGPT Free quota reached before send. Nothing was sent.") };
+  const readyComposer = await fillComposerText(composer, prompt, selectorDeadline);
+  if (!readyComposer) {
+    const latestComposer = currentComposer(composer);
+    const mismatch = composerTextMismatchSummary(latestComposer ? composerText(latestComposer) : "", prompt);
+    await clearComposerText(latestComposer ?? composer);
+    return { ok: false, error: extensionError("SEND_FAILED", `The ChatGPT composer did not contain the exact Meoi prompt (${mismatch}; main bridge ${lastMainWorldComposerResult}). Nothing was sent.`) };
   }
-  const sendButton = findSendButton(composer);
+  if (quotaReached()) {
+    await clearComposerText(readyComposer);
+    return { ok: false, error: extensionError("CHATGPT_LIMIT_REACHED", "ChatGPT quota was reached before send. Nothing was sent.") };
+  }
+  const sendButton = await waitForEnabledSend(readyComposer, selectorDeadline);
   if (!sendButton) {
-    replaceComposerText(composer, "");
-    return { ok: false, error: extensionError("UNSUPPORTED_CHATGPT_UI", "Meoi cannot find an enabled Send prompt control. Nothing was sent.") };
+    await clearComposerText(readyComposer);
+    return { ok: false, error: extensionError("UNSUPPORTED_CHATGPT_UI", "Meoi cannot find an enabled Send control. Nothing was sent.") };
   }
   sendButton.click();
   return { ok: true, currentUrl: window.location.href };
 }
 
-function submitOperation(operation: QueuedOperation): Promise<ChatCommandResponse> {
-  return submitText(operation.prompt, "Meoi cannot find a supported ChatGPT composer. Nothing was sent.");
+function submitOperation(operation: QueuedOperation, deadline: number): Promise<ChatCommandResponse> {
+  return submitText(operation.prompt, "Meoi cannot find a supported ChatGPT composer. Nothing was sent.", deadline);
 }
 
-function submitRepair(
-  operation: QueuedOperation,
-  reason: ResultParseErrorCode,
-): Promise<ChatCommandResponse> {
+function submitRepair(operation: QueuedOperation, reason: string, deadline: number): Promise<ChatCommandResponse> {
   return submitText(
     buildResultRepairPrompt(operation.operationId, operation.kind, reason),
     "Meoi cannot find the ChatGPT composer for JSON result repair.",
+    deadline,
   );
 }
 
@@ -158,7 +305,7 @@ function newestAssistantTurn(baseline: AssistantBaseline): HTMLElement | null {
 
 function validateConversation(lock: ConversationLock) {
   if (window.location.origin !== "https://chatgpt.com") {
-    throw new ChatFlowFailure(extensionError("CHATGPT_TAB_CHANGED", "The active tab left chatgpt.com before Meoi received a response."));
+    throw new ChatFlowFailure(extensionError("CHATGPT_TAB_CHANGED", "The tab left chatgpt.com before Meoi received a response."));
   }
   const currentId = conversationIdFromUrl(window.location.href);
   if (!lock.id && currentId) lock.id = currentId;
@@ -188,10 +335,26 @@ async function waitForAssistantResponse(baseline: AssistantBaseline, deadline: n
   throw new ChatFlowFailure(extensionError("CHATGPT_RESPONSE_TIMEOUT", "ChatGPT did not return a readable Meoi result within ten minutes."));
 }
 
-function emitOperationEvent(event: Omit<ChatOperationEvent, "kind">) {
-  chrome.runtime.sendMessage({ kind: "MEOI_CHAT_OPERATION_EVENT", ...event } satisfies ChatOperationEvent, () => {
-    void chrome.runtime.lastError;
+function sendEventOnce(event: ChatOperationEvent): Promise<boolean> {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage(event, (response?: { ok?: boolean }) => {
+      const runtimeError = chrome.runtime.lastError;
+      resolve(!runtimeError && response?.ok === true);
+    });
   });
+}
+
+async function emitOperationEvent(event: Omit<ChatOperationEvent, "kind">, deadline: number): Promise<void> {
+  const now = Date.now();
+  const deliveryDeadline = deadline > now
+    ? Math.min(deadline, now + EVENT_DELIVERY_GRACE_MS)
+    : now + EVENT_DELIVERY_GRACE_MS;
+  const message = { kind: "MEOI_CHAT_OPERATION_EVENT", ...event } satisfies ChatOperationEvent;
+  while (Date.now() < deliveryDeadline) {
+    if (await sendEventOnce(message)) return;
+    await wait(250);
+  }
+  throw new ChatFlowFailure(extensionError("SEND_FAILED", "Meoi could not deliver the ChatGPT operation state to the extension worker."));
 }
 
 function operationFailure(error: unknown): ExtensionError {
@@ -200,48 +363,56 @@ function operationFailure(error: unknown): ExtensionError {
 }
 
 async function runTrackedOperation(operation: QueuedOperation): Promise<void> {
-  const deadline = Date.now() + OPERATION_TIMEOUT_MS;
+  const deadline = operation.deadlineAt ?? Date.now() + OPERATION_TIMEOUT_MS;
   const conversation: ConversationLock = { id: conversationIdFromUrl(window.location.href) };
   try {
-    emitOperationEvent({ operationId: operation.operationId, unitId: operation.unitId, phase: "sending", repairAttempt: 0, currentUrl: window.location.href });
+    await emitOperationEvent({ operationId: operation.operationId, unitId: operation.unitId, phase: "sending", repairAttempt: 0, currentUrl: window.location.href }, deadline);
     const baseline = snapshotAssistantTurns();
-    const sent = await submitOperation(operation);
+    const sent = await submitOperation(operation, deadline);
     if (!sent.ok) throw new ChatFlowFailure(sent.error ?? extensionError("SEND_FAILED", "ChatGPT send failed."));
-    emitOperationEvent({ operationId: operation.operationId, unitId: operation.unitId, phase: "awaiting_response", repairAttempt: 0, currentUrl: sent.currentUrl });
+    await emitOperationEvent({ operationId: operation.operationId, unitId: operation.unitId, phase: "awaiting_response", repairAttempt: 0, currentUrl: sent.currentUrl }, deadline);
 
     let response = await waitForAssistantResponse(baseline, deadline, conversation);
-    let parsed = parseChatOperationResult(response, operation.operationId, operation.kind);
+    let parsed = parseChatOperationResult(response, operation.operationId, operation.kind, operation.expectation);
     let completedRepairAttempt = 0;
-    for (let repairAttempt = 1; !parsed.ok && repairAttempt <= MAX_REPAIR_ATTEMPTS; repairAttempt += 1) {
+    for (const repairAttempt of repairAttemptNumbers()) {
+      if (parsed.ok) break;
       completedRepairAttempt = repairAttempt;
-      emitOperationEvent({ operationId: operation.operationId, unitId: operation.unitId, phase: "repairing_response", repairAttempt, currentUrl: window.location.href });
+      await emitOperationEvent({ operationId: operation.operationId, unitId: operation.unitId, phase: "repairing_response", repairAttempt, currentUrl: window.location.href }, deadline);
       const repairBaseline = snapshotAssistantTurns();
-      const repaired = await submitRepair(operation, parsed.code);
+      const repaired = await submitRepair(operation, resultParseFailureReason(parsed), deadline);
       if (!repaired.ok) throw new ChatFlowFailure(repaired.error ?? extensionError("SEND_FAILED", "JSON result repair send failed."));
       response = await waitForAssistantResponse(repairBaseline, deadline, conversation);
-      parsed = parseChatOperationResult(response, operation.operationId, operation.kind);
+      parsed = parseChatOperationResult(response, operation.operationId, operation.kind, operation.expectation);
     }
 
     if (!parsed.ok) {
-      throw new ChatFlowFailure(extensionError("INVALID_CHATGPT_RESPONSE", `ChatGPT did not return a valid Meoi result after ${MAX_REPAIR_ATTEMPTS} repair attempts (${parsed.code}).`));
+      throw new ChatFlowFailure(extensionError(
+        "INVALID_CHATGPT_RESPONSE",
+        `ChatGPT did not return a valid Meoi result after ${repairAttemptNumbers().length} repair attempts (${resultParseFailureReason(parsed)}).`,
+      ));
     }
-    emitOperationEvent({
+    await emitOperationEvent({
       operationId: operation.operationId,
       unitId: operation.unitId,
       phase: "completed",
       repairAttempt: completedRepairAttempt,
       result: parsed.result,
       currentUrl: window.location.href,
-    });
+    }, deadline);
   } catch (error) {
-    emitOperationEvent({
-      operationId: operation.operationId,
-      unitId: operation.unitId,
-      phase: "failed",
-      repairAttempt: 0,
-      error: operationFailure(error),
-      currentUrl: window.location.href,
-    });
+    try {
+      await emitOperationEvent({
+        operationId: operation.operationId,
+        unitId: operation.unitId,
+        phase: "failed",
+        repairAttempt: 0,
+        error: operationFailure(error),
+        currentUrl: window.location.href,
+      }, deadline);
+    } catch {
+      // A closed or invalidated tab is finalized by the worker's tab lifecycle listener.
+    }
   } finally {
     activeOperationId = null;
   }
@@ -257,6 +428,17 @@ function openVoice(): ChatCommandResponse {
   return { ok: true, currentUrl: window.location.href };
 }
 
+function validOperation(value: unknown): value is QueuedOperation {
+  if (!value || typeof value !== "object") return false;
+  const operation = value as Partial<QueuedOperation>;
+  return typeof operation.operationId === "string"
+    && typeof operation.unitId === "string"
+    && typeof operation.prompt === "string"
+    && ["create_lesson", "evaluate_answer", "coaching"].includes(String(operation.kind))
+    && Boolean(operation.expectation)
+    && typeof operation.deadlineAt === "number";
+}
+
 chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
   if (!message || typeof message !== "object") return false;
   const kind = (message as { kind?: string }).kind;
@@ -269,9 +451,13 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
     return false;
   }
   if (kind !== "MEOI_CHAT_COMMAND") return false;
-  const operation = (message as { operation: QueuedOperation }).operation;
+  const operation = (message as { operation?: unknown }).operation;
+  if (!validOperation(operation)) {
+    sendResponse({ ok: false, error: extensionError("INVALID_COMMAND", "The ChatGPT operation payload is invalid.") });
+    return false;
+  }
   if (activeOperationId) {
-    sendResponse({ ok: false, error: extensionError("SEND_FAILED", `ChatGPT tab is already processing operation ${activeOperationId}.`) });
+    sendResponse({ ok: false, error: extensionError("SEND_FAILED", `This ChatGPT tab is already processing operation ${activeOperationId}.`) });
     return false;
   }
   activeOperationId = operation.operationId;
@@ -279,9 +465,3 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
   void runTrackedOperation(operation);
   return false;
 });
-
-document.addEventListener("click", (event) => {
-  const button = event.target instanceof Element ? event.target.closest("button") : null;
-  if (!button || !/^retry$/i.test(button.textContent?.trim() ?? "") || !quotaReached()) return;
-  window.setTimeout(() => chrome.runtime.sendMessage({ kind: "MEOI_RETRY_CHATGPT" }), 300);
-}, true);

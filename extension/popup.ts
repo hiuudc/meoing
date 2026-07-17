@@ -21,14 +21,14 @@ async function render() {
   const repairing = active.find((state) => state.phase === "repairing_response");
   const status = document.querySelector<HTMLElement>("#status")!;
   status.textContent = paused
-    ? "Đang dừng vì quota ChatGPT"
+    ? "Paused because ChatGPT reached its quota"
     : repairing
-      ? `Đang sửa kết quả JSON ${repairing.repairAttempt}/3`
+      ? `Repairing JSON result ${repairing.repairAttempt}/3`
       : active.length
-        ? "Đang chờ phản hồi ChatGPT"
-        : "Sẵn sàng nhận lệnh từ Meoi";
+        ? "Waiting for ChatGPT"
+        : "Ready for Meoi requests";
   status.dataset.state = paused ? "paused" : "ready";
-  document.querySelector<HTMLElement>("#details")!.textContent = `${Object.keys(chats).length} unit đã liên kết · ${queueLength} đang chờ · ${completed} kết quả tạm chưa ACK`;
+  document.querySelector<HTMLElement>("#details")!.textContent = `${Object.keys(chats).length} linked units · ${queueLength} queued · ${completed} unacknowledged results`;
 }
 
 document.querySelector<HTMLButtonElement>("#open-meoi")?.addEventListener("click", () => void chrome.tabs.create({ url: "http://127.0.0.1:5173/" }));

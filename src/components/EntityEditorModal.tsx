@@ -237,7 +237,7 @@ export function EntityEditorModal({ editor, onClose, onSubmit }: EntityEditorMod
               <Field label="Unit name" value={fields.name} onChange={(value) => updateField("name", value)} autoFocus />
               <TextArea label="Description" value={fields.description} onChange={(value) => updateField("description", value)} />
               <TextArea
-                label="Yêu cầu học riêng cho unit"
+                label="Unit-specific learning request"
                 value={fields.instructionOverride}
                 onChange={(value) => updateField("instructionOverride", value)}
               />

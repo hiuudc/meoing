@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import { ExtensionBridge } from "./extensionBridge";
-import type { ChatOperationState } from "./protocol";
+import type { ChatOperationState, ExtensionCommand, SendOperationPayload } from "./protocol";
 
 function state(phase: ChatOperationState["phase"], patch: Partial<ChatOperationState> = {}): ChatOperationState {
   return {
@@ -28,6 +28,23 @@ class StubBridge extends ExtensionBridge {
   }
 }
 
+class DispatchStubBridge extends StubBridge {
+  readonly commands: ExtensionCommand[] = [];
+
+  override async send<TResponse = unknown, TPayload = unknown>(command: ExtensionCommand, _payload: TPayload): Promise<TResponse> {
+    this.commands.push(command);
+    return { operationId: "op-1", phase: "queued" } as TResponse;
+  }
+}
+
+const payload: SendOperationPayload = {
+  unitId: "unit-1",
+  operationId: "op-1",
+  kind: "coaching",
+  prompt: "prompt",
+  expectation: { unitId: "unit-1", targetLanguage: "English", level: "elementary", questionCount: 10, speaking: false },
+};
+
 describe("ExtensionBridge operation waiting", () => {
   it("reports session phases until a direct result is complete", async () => {
     const seen: string[] = [];
@@ -37,7 +54,7 @@ describe("ExtensionBridge operation waiting", () => {
       state("completed", {
         result: {
           type: "meoi.operation.result",
-          protocolVersion: 3,
+          protocolVersion: 2,
           operationId: "op-1",
           kind: "coaching",
           outcome: "completed",
@@ -65,5 +82,32 @@ describe("ExtensionBridge operation waiting", () => {
     controller.abort(new DOMException("stopped", "AbortError"));
     const bridge = new StubBridge([state("queued")]);
     await expect(bridge.waitForOperation("op-1", { signal: controller.signal, pollIntervalMs: 1 })).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("enqueues once and then polls until the terminal result", async () => {
+    const bridge = new DispatchStubBridge([
+      state("queued"),
+      state("completed", {
+        result: {
+          type: "meoi.operation.result",
+          protocolVersion: 2,
+          operationId: "op-1",
+          kind: "coaching",
+          outcome: "completed",
+          result: { coachingReply: "A concise explanation." },
+        },
+      }),
+    ]);
+    const result = await bridge.dispatchAndWait(payload, { pollIntervalMs: 1 });
+    expect(bridge.commands).toEqual(["SEND_OPERATION"]);
+    expect(result.result?.result?.coachingReply).toBe("A concise explanation.");
+  });
+
+  it("does not enqueue when already aborted", async () => {
+    const bridge = new DispatchStubBridge([state("queued")]);
+    const controller = new AbortController();
+    controller.abort(new DOMException("stopped", "AbortError"));
+    await expect(bridge.dispatchAndWait(payload, { signal: controller.signal })).rejects.toMatchObject({ name: "AbortError" });
+    expect(bridge.commands).toEqual([]);
   });
 });

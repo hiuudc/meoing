@@ -1,11 +1,99 @@
-import type { ChatOperationPhase, ChatOperationState } from "../src/integration/protocol";
+import type { ChatOperationPhase, ChatOperationState, ExtensionError } from "../src/integration/protocol";
 import type { OperationStateMap, PersistedOperationState, QueueMap, QueuedOperation } from "./shared";
 
 export const OPERATION_RESULT_TTL_MS = 24 * 60 * 60 * 1_000;
 export const OPERATION_DEADLINE_MS = 10 * 60 * 1_000;
+export const MAX_OUTSTANDING_OPERATIONS = 4;
 
 export function isTerminalPhase(phase: ChatOperationPhase): boolean {
   return phase === "completed" || phase === "failed";
+}
+
+export function sameQueuedOperation(left: QueuedOperation, right: QueuedOperation): boolean {
+  return left.unitId === right.unitId
+    && left.operationId === right.operationId
+    && left.kind === right.kind
+    && left.prompt === right.prompt
+    && JSON.stringify(left.expectation) === JSON.stringify(right.expectation);
+}
+
+export type EnqueueDecision = "enqueue" | "existing" | "conflict" | "full";
+export type RetryDecision = "missing" | "existing" | "completed" | "requeue";
+
+export function enqueueDecision(
+  states: OperationStateMap,
+  operation: QueuedOperation,
+  maximum = MAX_OUTSTANDING_OPERATIONS,
+): EnqueueDecision {
+  const existing = states[operation.operationId];
+  if (existing) return sameQueuedOperation(existing.operation, operation) ? "existing" : "conflict";
+  const outstanding = Object.values(states).filter((state) => !isTerminalPhase(state.phase)).length;
+  return outstanding >= maximum ? "full" : "enqueue";
+}
+
+export function retryDecision(state?: PersistedOperationState): RetryDecision {
+  if (!state) return "missing";
+  if (state.phase === "completed") return "completed";
+  if (!isTerminalPhase(state.phase)) return "existing";
+  return "requeue";
+}
+
+export function recoverOpeningOperations(
+  states: OperationStateMap,
+  queues: QueueMap,
+  now = new Date().toISOString(),
+): { states: OperationStateMap; queues: QueueMap; recoveredOperationIds: string[] } {
+  let nextStates = states;
+  let nextQueues = queues;
+  const recoveredOperationIds: string[] = [];
+  Object.values(states).forEach((state) => {
+    if (state.phase !== "opening_chat") return;
+    if (nextStates === states) nextStates = { ...states };
+    nextStates[state.operationId] = transitionOperation(state, "queued", now, { tabId: undefined, deadlineAt: undefined });
+    nextQueues = appendQueuedOperation(nextQueues, state.unitId, state.operationId);
+    recoveredOperationIds.push(state.operationId);
+  });
+  return { states: nextStates, queues: nextQueues, recoveredOperationIds };
+}
+
+export function failOperationsForTabState(
+  states: OperationStateMap,
+  queues: QueueMap,
+  tabId: number,
+  error: ExtensionError,
+  now = new Date().toISOString(),
+): { states: OperationStateMap; queues: QueueMap; affectedUnitIds: string[] } {
+  let nextStates = states;
+  let nextQueues = queues;
+  const affectedUnitIds = new Set<string>();
+  Object.values(states).forEach((state) => {
+    if (state.tabId !== tabId || isTerminalPhase(state.phase)) return;
+    if (nextStates === states) nextStates = { ...states };
+    nextStates[state.operationId] = transitionOperation(state, "failed", now, { error, tabId: undefined, deadlineAt: undefined });
+    nextQueues = removeQueuedOperation(nextQueues, state.unitId, state.operationId);
+    affectedUnitIds.add(state.unitId);
+  });
+  return { states: nextStates, queues: nextQueues, affectedUnitIds: [...affectedUnitIds] };
+}
+
+export function acknowledgeTerminalOperation(
+  states: OperationStateMap,
+  queues: QueueMap,
+  operationId: string,
+): { states: OperationStateMap; queues: QueueMap; acknowledged: boolean } {
+  const state = states[operationId];
+  if (!state || !isTerminalPhase(state.phase)) return { states, queues, acknowledged: false };
+  const nextStates = { ...states };
+  delete nextStates[operationId];
+  return {
+    states: nextStates,
+    queues: removeQueuedOperation(queues, state.unitId, operationId),
+    acknowledged: true,
+  };
+}
+
+export function hasLegacyTransientState(values: Record<string, unknown>, keys: readonly string[]): boolean {
+  return keys.some((key) => values[key] !== undefined);
 }
 
 export function publicOperationState(state: PersistedOperationState): ChatOperationState {
@@ -20,15 +108,15 @@ export function publicOperationState(state: PersistedOperationState): ChatOperat
   };
 }
 
-export function appendQueuedOperation(queues: QueueMap, operation: QueuedOperation): QueueMap {
-  const current = queues[operation.unitId] ?? [];
-  if (current.some((candidate) => candidate.operationId === operation.operationId)) return queues;
-  return { ...queues, [operation.unitId]: [...current, operation] };
+export function appendQueuedOperation(queues: QueueMap, unitId: string, operationId: string): QueueMap {
+  const current = queues[unitId] ?? [];
+  if (current.includes(operationId)) return queues;
+  return { ...queues, [unitId]: [...current, operationId] };
 }
 
 export function removeQueuedOperation(queues: QueueMap, unitId: string, operationId: string): QueueMap {
   const current = queues[unitId] ?? [];
-  const next = current.filter((operation) => operation.operationId !== operationId);
+  const next = current.filter((queuedOperationId) => queuedOperationId !== operationId);
   if (next.length === current.length) return queues;
   const updated = { ...queues };
   if (next.length) updated[unitId] = next;

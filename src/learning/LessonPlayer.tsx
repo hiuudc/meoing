@@ -41,9 +41,9 @@ function buildSnapshot(lesson: Lesson, state: RetryState): LessonProgressSnapsho
 }
 
 function statusLabel(status: Evaluation["status"]): string {
-  if (status === "correct") return "Đúng";
-  if (status === "partial") return "Chưa hoàn chỉnh";
-  return "Chưa đúng";
+  if (status === "correct") return "Correct";
+  if (status === "partial") return "Partly correct";
+  return "Not correct yet";
 }
 
 export function LessonPlayer({ lesson, onEvaluate, onProgressBatch, onAskCoach }: LessonPlayerProps) {
@@ -102,7 +102,7 @@ export function LessonPlayer({ lesson, onEvaluate, onProgressBatch, onAskCoach }
   async function submitAnswer() {
     if (!currentQuestion || evaluation || submitting) return;
     if (isAnswerEmpty(answer) && !(speaking?.audio || speaking?.transcript)) {
-      setError("Hãy nhập hoặc chọn câu trả lời trước khi chấm.");
+      setError("Enter or select an answer before checking it.");
       return;
     }
     setError("");
@@ -112,12 +112,12 @@ export function LessonPlayer({ lesson, onEvaluate, onProgressBatch, onAskCoach }
       if (!local.requiresAi) {
         setEvaluation(local);
       } else if (!onEvaluate) {
-        setError("Câu này cần ChatGPT đánh giá và đang được khóa trong local-only mode.");
+        setError("This question needs ChatGPT evaluation and is unavailable in local-only mode.");
       } else {
         setEvaluation(await onEvaluate(currentQuestion, answer, speaking));
       }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Không thể chấm câu trả lời lúc này.");
+      setError(caught instanceof Error ? caught.message : "The answer could not be evaluated right now.");
     } finally {
       setSubmitting(false);
     }
@@ -173,9 +173,9 @@ export function LessonPlayer({ lesson, onEvaluate, onProgressBatch, onAskCoach }
       <section className="lesson-player lesson-complete">
         <span className="completion-icon"><Sparkles size={25} /></span>
         <p className="section-kicker">Lesson complete</p>
-        <h2>Đã mastery toàn bộ {total} câu</h2>
-        <p>First-try accuracy: {Math.round((retryState.firstTryCorrect / Math.max(1, total)) * 100)}%. Các câu sai đã được lặp lại cho tới khi đúng.</p>
-        <button className="secondary-button" type="button" onClick={restartLesson}><RotateCcw size={16} /> Học lại bài</button>
+        <h2>All {total} questions mastered</h2>
+        <p>First-try accuracy: {Math.round((retryState.firstTryCorrect / Math.max(1, total)) * 100)}%. Missed questions were repeated until correct.</p>
+        <button className="secondary-button" type="button" onClick={restartLesson}><RotateCcw size={16} /> Restart lesson</button>
       </section>
     );
   }
@@ -189,7 +189,7 @@ export function LessonPlayer({ lesson, onEvaluate, onProgressBatch, onAskCoach }
           <p>{lesson.summary}</p>
         </div>
         <button className="theory-toggle" type="button" aria-expanded={theoryOpen} onClick={() => setTheoryOpen((open) => !open)}>
-          <BookOpen size={16} /> {theoryOpen ? "Ẩn lý thuyết" : "Mở lý thuyết"}
+          <BookOpen size={16} /> {theoryOpen ? "Hide theory" : "Show theory"}
         </button>
       </header>
 
@@ -201,7 +201,7 @@ export function LessonPlayer({ lesson, onEvaluate, onProgressBatch, onAskCoach }
       {theoryOpen ? (
         <div className="lesson-theory-grid">
           <section>
-            <h3>Mục tiêu</h3>
+            <h3>Objectives</h3>
             <ul>{lesson.objectives.map((objective) => <li key={objective}>{objective}</li>)}</ul>
           </section>
           {lesson.theory.map((block) => (
@@ -222,15 +222,16 @@ export function LessonPlayer({ lesson, onEvaluate, onProgressBatch, onAskCoach }
 
       <article className="question-card">
         <div className="question-meta-row">
-          <span>Câu {retryState.completed.length + 1}/{total}</span>
+          <span>Question {retryState.completed.length + 1}/{total}</span>
           <span>{currentQuestion.type}</span>
-          {upcomingRetry ? <span className="retry-badge"><RotateCcw size={13} /> Lặp lại · lần {displayedAttempt}</span> : null}
+          {upcomingRetry ? <span className="retry-badge"><RotateCcw size={13} /> Retry · attempt {displayedAttempt}</span> : null}
         </div>
         <h3>{currentQuestion.prompt}</h3>
         <QuestionRenderer
           key={`${currentQuestion.id}-${displayedAttempt}`}
           question={currentQuestion}
           answer={answer}
+          language={lesson.targetLanguage}
           disabled={Boolean(evaluation) || submitting}
           onChange={setAnswer}
           onSpeakingChange={setSpeaking}
@@ -246,7 +247,7 @@ export function LessonPlayer({ lesson, onEvaluate, onProgressBatch, onAskCoach }
             {evaluation.errors.length ? (
               <ul>{evaluation.errors.map((item, index) => <li key={`${item.location}-${index}`}><strong>{item.location}:</strong> {item.message}</li>)}</ul>
             ) : null}
-            {evaluation.status !== "correct" ? <p><strong>Sửa:</strong> {evaluation.correction}</p> : null}
+            {evaluation.status !== "correct" ? <p><strong>Correction:</strong> {evaluation.correction}</p> : null}
             <p className="next-hint"><Lightbulb size={14} /> {evaluation.nextHint}</p>
             {displayedAttempt >= 3 && currentQuestion.supplementalHint && evaluation.status !== "correct" ? (
               <p className="supplemental-hint"><CircleHelp size={14} /> {currentQuestion.supplementalHint}</p>
@@ -260,18 +261,18 @@ export function LessonPlayer({ lesson, onEvaluate, onProgressBatch, onAskCoach }
         {error ? <p className="inline-error" role="alert">{error}</p> : null}
 
         <footer className="question-footer">
-          <p>{evaluation ? (evaluation.status === "correct" ? "Đã mastery câu này." : "Câu sẽ quay lại sau hai câu khác.") : currentQuestion.hint ? `Gợi ý: ${currentQuestion.hint}` : "Trả lời để nhận feedback."}</p>
+          <p>{evaluation ? (evaluation.status === "correct" ? "This question is mastered." : "This question will return after two others.") : currentQuestion.hint ? `Hint: ${currentQuestion.hint}` : "Answer to receive feedback."}</p>
           <div>
             {showCoach && evaluation ? (
               <button className="secondary-button" type="button" onClick={() => void onAskCoach?.(currentQuestion, evaluation)}>
-                <MessageCircle size={16} /> Hỏi ChatGPT
+                <MessageCircle size={16} /> Ask ChatGPT
               </button>
             ) : null}
             {evaluation ? (
-              <button className="primary-button" type="button" onClick={continueLesson}>Tiếp tục <ChevronRight size={16} /></button>
+              <button className="primary-button" type="button" onClick={continueLesson}>Continue <ChevronRight size={16} /></button>
             ) : (
               <button className="primary-button" type="button" onClick={() => void submitAnswer()} disabled={submitting}>
-                {submitting ? "Đang chấm…" : "Chấm câu trả lời"}
+                {submitting ? "Checking..." : "Check answer"}
               </button>
             )}
           </div>
@@ -280,7 +281,7 @@ export function LessonPlayer({ lesson, onEvaluate, onProgressBatch, onAskCoach }
 
       {lesson.sourceReferences.length ? (
         <details className="lesson-sources">
-          <summary>Nguồn của bài học</summary>
+          <summary>Lesson sources</summary>
           <ul>{lesson.sourceReferences.map((source) => <li key={source.id}>{source.url ? <a href={source.url} target="_blank" rel="noreferrer">{source.title}</a> : source.title}</li>)}</ul>
         </details>
       ) : null}

@@ -2,6 +2,7 @@ import {
   MEOI_EXTENSION_PROTOCOL_VERSION,
   MEOI_EXTENSION_SOURCE,
   MEOI_PAGE_SOURCE,
+  MEOI_PROMPT_MAX_BYTES,
   type ExtensionRequest,
   type ExtensionResponse,
 } from "../src/integration/protocol";
@@ -16,6 +17,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function byteLength(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
+}
+
 function validRequest(value: unknown): value is ExtensionRequest<Record<string, unknown>> {
   if (!isRecord(value) || value.source !== MEOI_PAGE_SOURCE || value.version !== MEOI_EXTENSION_PROTOCOL_VERSION) return false;
   if (typeof value.nonce !== "string" || value.nonce.length < 10 || typeof value.requestId !== "string") return false;
@@ -28,6 +33,13 @@ function validRequest(value: unknown): value is ExtensionRequest<Record<string, 
       typeof payload.unitId !== "string"
       || typeof payload.operationId !== "string"
       || typeof payload.prompt !== "string"
+      || byteLength(payload.prompt) > MEOI_PROMPT_MAX_BYTES
+      || !isRecord(payload.expectation)
+      || payload.expectation.unitId !== payload.unitId
+      || typeof payload.expectation.targetLanguage !== "string"
+      || typeof payload.expectation.level !== "string"
+      || !Number.isInteger(payload.expectation.questionCount)
+      || typeof payload.expectation.speaking !== "boolean"
       || !["create_lesson", "evaluate_answer", "coaching"].includes(String(payload.kind))
     ) return false;
   }

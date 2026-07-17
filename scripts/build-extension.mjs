@@ -8,6 +8,7 @@ await mkdir(outdir, { recursive: true });
 await Promise.all([
   build({ entryPoints: ["extension/service-worker.ts"], outfile: `${outdir}/service-worker.js`, bundle: true, format: "esm", platform: "browser", target: "chrome120", sourcemap: false, minify: true }),
   build({ entryPoints: ["extension/meoi-content.ts"], outfile: `${outdir}/meoi-content.js`, bundle: true, format: "iife", platform: "browser", target: "chrome120", sourcemap: false, minify: true }),
+  build({ entryPoints: ["extension/chatgpt-main.ts"], outfile: `${outdir}/chatgpt-main.js`, bundle: true, format: "iife", platform: "browser", target: "chrome120", sourcemap: false, minify: true }),
   build({ entryPoints: ["extension/chatgpt-content.ts"], outfile: `${outdir}/chatgpt-content.js`, bundle: true, format: "iife", platform: "browser", target: "chrome120", sourcemap: false, minify: true }),
   build({ entryPoints: ["extension/popup.ts"], outfile: `${outdir}/popup.js`, bundle: true, format: "iife", platform: "browser", target: "chrome120", sourcemap: false, minify: true }),
 ]);
