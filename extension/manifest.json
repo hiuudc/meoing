@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "Meoi Bridge",
+  "version": "2.0.0",
+  "description": "Gửi operation từ Meoi localhost và chuyển kết quả JSON trực tiếp từ ChatGPT về Meoi, không dùng MCP.",
+  "minimum_chrome_version": "120",
+  "permissions": ["storage", "tabs"],
+  "host_permissions": ["https://chatgpt.com/*"],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Meoi Bridge",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://127.0.0.1/*"
+      ],
+      "js": ["meoi-content.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": ["chatgpt-content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

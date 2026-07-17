@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Hỗ trợ Meoi</title>
+    <link rel="stylesheet" href="/legal.css">
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">Meoi Bridge v2 · Browser-only</p>
+      <h1>Khắc phục nhanh</h1>
+
+      <h2>Website không mở</h2>
+      <ol>
+        <li>Dùng Node.js 22 LTS hoặc mới hơn.</li>
+        <li>Chạy <code>npm install</code>, rồi <code>npm run dev</code>.</li>
+        <li>Mở đúng <code>http://127.0.0.1:5173</code>.</li>
+      </ol>
+
+      <h2>Extension không phản hồi</h2>
+      <ol>
+        <li>Chạy <code>npm run build:extension</code>.</li>
+        <li>Load unpacked thư mục <code>dist-extension</code> tại <code>chrome://extensions</code>.</li>
+        <li>Sau mỗi lần build, bấm Reload extension rồi refresh cả Meoi và ChatGPT.</li>
+      </ol>
+
+      <h2>Không nhận được kết quả</h2>
+      <p>Kiểm tra rằng bạn đã đăng nhập <code>chatgpt.com</code>, tab chưa bị đóng hoặc chuyển cuộc chat, và tài khoản chưa chạm quota. Meoi không cần cài app, MCP hay OAuth.</p>
+
+      <nav class="links"><a href="/privacy.html">Quyền riêng tư</a><a href="/terms.html">Điều khoản</a><a href="/delete-data.html">Xóa dữ liệu</a><a href="/">Meoi</a></nav>
+    </main>
+  </body>
+</html>

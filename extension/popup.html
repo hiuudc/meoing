@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="vi">
+  <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="popup.css"><title>Meoi Bridge</title></head>
+  <body>
+    <main>
+      <div class="brand"><span>M</span><div><strong>Meoi Bridge</strong><small>localhost ↔ ChatGPT</small></div></div>
+      <p id="status" class="status">Đang kiểm tra…</p>
+      <p id="details" class="details"></p>
+      <div class="actions"><button id="open-meoi" type="button">Mở Meoi localhost</button></div>
+      <p class="privacy">Extension chỉ nhận lệnh từ Meoi trên 127.0.0.1 và đọc assistant turn mới do chính Meoi gửi trên chatgpt.com. Kết quả chỉ nằm trong phiên trình duyệt cho đến khi Meoi nhận xong; không dùng MCP, không ghi database, không đọc lịch sử, cookie hoặc network.</p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

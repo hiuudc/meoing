@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Quyền riêng tư Meoi</title>
+    <link rel="stylesheet" href="/legal.css">
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">Meoi Bridge v2 · Browser-only</p>
+      <h1>Quyền riêng tư</h1>
+      <p class="notice">Meoi không có backend, MCP, OAuth hoặc database. Extension gửi yêu cầu trực tiếp vào tab ChatGPT mà bạn đã đăng nhập.</p>
+
+      <h2>Dữ liệu được giữ ở đâu</h2>
+      <ul>
+        <li>Workspace Library nằm trong localStorage của website trên máy bạn.</li>
+        <li>Lesson, evaluation và coaching từ ChatGPT chỉ nằm trong bộ nhớ của trang hiện tại và biến mất khi reload.</li>
+        <li>Queue và kết quả chờ nhận nằm trong <code>chrome.storage.session</code>, rồi bị xóa sau khi Meoi ACK.</li>
+        <li>Chỉ ánh xạ unit với URL cuộc chat được giữ trong <code>chrome.storage.local</code>.</li>
+      </ul>
+
+      <h2>Phạm vi extension</h2>
+      <p>Extension chỉ nhận lệnh từ Meoi trên <code>127.0.0.1</code>, gửi prompt vào <code>chatgpt.com</code> và đọc assistant turn mới của operation đó. Extension không đọc lịch sử chat, cookie hoặc network nội bộ.</p>
+
+      <h2>Audio và YouTube</h2>
+      <p>Recording chỉ dùng để phát lại trong browser; Meoi không tải audio lên ChatGPT. URL YouTube chỉ được nhúng để xem, còn lesson cần transcript hoặc notes do bạn cung cấp.</p>
+
+      <nav class="links"><a href="/terms.html">Điều khoản</a><a href="/support.html">Hỗ trợ</a><a href="/delete-data.html">Xóa dữ liệu</a><a href="/">Meoi</a></nav>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,13 @@
+node_modules/
+.tools/
+dist/
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+.env.local
+.dev.vars
+.wrangler/
+.wrangler-dry-run/
+dist-extension/
+dist-pages/
+meoi-extension-v2.zip
