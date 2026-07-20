@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { QUESTION_FORMATS, type Evaluation, type LearningProfile, type Lesson } from "./types";
+import {
+  QUESTION_FORMATS,
+  type Evaluation,
+  type LearningProfile,
+  type Lesson,
+  type LessonProgressSnapshot,
+} from "./types";
 
 const id = z.string().min(1).max(120);
 const plainText = z.string().min(1).max(16_000);
@@ -117,6 +123,45 @@ export const evaluationSchema = z
 
 export function parseEvaluation(value: unknown): Evaluation {
   return evaluationSchema.parse(value) as Evaluation;
+}
+
+export const lessonProgressSnapshotSchema = z
+  .object({
+    lessonId: id,
+    completedQuestionIds: z.array(id).max(15),
+    attemptsByQuestion: z.record(id, z.number().int().min(0).max(100)),
+    firstTryCorrect: z.number().int().min(0).max(15),
+    totalQuestions: z.number().int().min(8).max(15),
+    masteryPercent: z.number().min(0).max(100),
+    updatedAt: z.string().datetime(),
+  })
+  .strict()
+  .superRefine((snapshot, context) => {
+    if (snapshot.completedQuestionIds.length > snapshot.totalQuestions) {
+      context.addIssue({
+        code: "custom",
+        path: ["completedQuestionIds"],
+        message: "Completed question count cannot exceed total questions.",
+      });
+    }
+    if (snapshot.firstTryCorrect > snapshot.totalQuestions) {
+      context.addIssue({
+        code: "custom",
+        path: ["firstTryCorrect"],
+        message: "First-try correct count cannot exceed total questions.",
+      });
+    }
+    if (Object.keys(snapshot.attemptsByQuestion).length > snapshot.totalQuestions) {
+      context.addIssue({
+        code: "custom",
+        path: ["attemptsByQuestion"],
+        message: "Attempt count cannot contain more questions than the lesson.",
+      });
+    }
+  });
+
+export function parseLessonProgressSnapshot(value: unknown): LessonProgressSnapshot {
+  return lessonProgressSnapshotSchema.parse(value) as LessonProgressSnapshot;
 }
 
 export function validateLessonForProfile(lesson: Lesson, profile: LearningProfile): string[] {

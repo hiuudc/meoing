@@ -1,7 +1,10 @@
 import {
+  ArrowLeft,
+  BookOpen,
   Bot,
   CheckCircle2,
   FileText,
+  History,
   Link2,
   LoaderCircle,
   Menu,
@@ -35,6 +38,14 @@ import {
   putSessionProgress,
   type LearningSessionState,
 } from "../integration/learningSession";
+import {
+  loadLocalLearningCache,
+  putStoredLesson,
+  putStoredLessonProgress,
+  saveLocalLearningCache,
+  type LocalLearningCache,
+  type StoredLessonEntry,
+} from "../integration/learningStorage";
 import {
   buildOperationPrompt,
   MEOI_TEXT_FIELD_MAX_BYTES,
@@ -72,7 +83,36 @@ interface RetryAttempt {
   failed: boolean;
 }
 
-const INITIAL_STATUS = "Meoi sends requests to ChatGPT Web and keeps accepted results only in this browser tab.";
+type LearningView = "choose" | "new" | "lesson";
+
+interface UnitLearningView {
+  unitId?: string;
+  view: LearningView;
+  playerRunId: string;
+}
+
+interface SavedLessonChooserProps {
+  entries: StoredLessonEntry[];
+  onCreateNew: () => void;
+  onReview: (entry: StoredLessonEntry) => void;
+}
+
+const INITIAL_STATUS = "Meoi keeps up to five validated lessons per unit in this browser. ChatGPT requests still use this unit's linked conversation.";
+const LESSON_DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  year: "numeric",
+  month: "short",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
+function defaultLearningView(unitId: string | undefined, cache: LocalLearningCache): LearningView {
+  return unitId && cache.lessonsByUnit[unitId]?.length ? "choose" : "new";
+}
+
+function formatLessonDate(value: string): string {
+  return LESSON_DATE_FORMATTER.format(new Date(value));
+}
 
 function operationPhaseStatus(state: ChatOperationState): string {
   switch (state.phase) {
@@ -109,6 +149,45 @@ function speakingMetadata(speaking?: SpeakingSubmission | null) {
   };
 }
 
+function SavedLessonChooser({ entries, onCreateNew, onReview }: SavedLessonChooserProps) {
+  return (
+    <section className="saved-lessons" aria-labelledby="saved-lessons-title">
+      <div className="saved-lessons-heading">
+        <div>
+          <p className="section-kicker">Local lesson history</p>
+          <h2 id="saved-lessons-title">Start a new lesson or review an older one</h2>
+          <p>These validated lessons are stored only in this browser. Reviewing always starts again from question one.</p>
+        </div>
+        <button className="primary-button" type="button" onClick={onCreateNew}>
+          <Sparkles size={16} /> New lesson
+        </button>
+      </div>
+      <ul className="saved-lesson-grid">
+        {entries.map((entry) => (
+          <li key={entry.lesson.id}>
+            <article className="saved-lesson-card">
+              <div className="saved-lesson-card-topline">
+                <span><BookOpen size={14} /> Saved locally</span>
+                <time dateTime={entry.savedAt}>{formatLessonDate(entry.savedAt)}</time>
+              </div>
+              <h3>{entry.lesson.title}</h3>
+              <p>{entry.lesson.summary}</p>
+              <dl>
+                <div><dt>Level</dt><dd>{entry.lesson.targetLanguage} · {entry.lesson.level}</dd></div>
+                <div><dt>Questions</dt><dd>{entry.lesson.questions.length}</dd></div>
+                <div><dt>Latest mastery</dt><dd>{entry.progress ? `${Math.round(entry.progress.masteryPercent)}%` : "Not studied"}</dd></div>
+              </dl>
+              <button className="secondary-button" type="button" onClick={() => onReview(entry)}>
+                <Play size={15} /> Review from the start
+              </button>
+            </article>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 export function LearningWorkspace({
   collection,
   unit,
@@ -121,6 +200,11 @@ export function LearningWorkspace({
 }: LearningWorkspaceProps) {
   const profile = useMemo(() => normalizeLearningProfile(collection.learningProfile), [collection.learningProfile]);
   const [session, setSession] = useState<LearningSessionState>(() => createLearningSession());
+  const [learningCache, setLearningCache] = useState<LocalLearningCache>(() => loadLocalLearningCache(window.localStorage));
+  const [unitView, setUnitView] = useState<UnitLearningView>({
+    view: "new",
+    playerRunId: "inactive",
+  });
   const [extensionConnected, setExtensionConnected] = useState(false);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState(INITIAL_STATUS);
@@ -135,8 +219,14 @@ export function LearningWorkspace({
   const [coachReply, setCoachReply] = useState("");
   const activeAbortRef = useRef<AbortController | null>(null);
   const retryAttemptsRef = useRef<Partial<Record<ChatOperationKind, RetryAttempt>>>({});
+  const learningCacheRef = useRef(learningCache);
 
   const lesson = unit ? session.lessonsByUnit[unit.id] : undefined;
+  const savedLessons = unit ? learningCache.lessonsByUnit[unit.id] ?? [] : [];
+  const learningView = unitView.unitId === unit?.id
+    ? unitView.view
+    : defaultLearningView(unit?.id, learningCache);
+  const playerRunId = unitView.unitId === unit?.id ? unitView.playerRunId : "inactive";
   const embedUrl = youtubeUrl ? youtubeNoCookieEmbedUrl(youtubeUrl) : null;
   const currentProgress = lesson ? session.progressByLesson[lesson.id] : undefined;
 
@@ -183,10 +273,58 @@ export function LearningWorkspace({
     }
   }
 
+  function commitLearningCache(next: LocalLearningCache): boolean {
+    const saved = saveLocalLearningCache(next, window.localStorage);
+    if (saved) {
+      learningCacheRef.current = next;
+      setLearningCache(next);
+    }
+    return saved;
+  }
+
+  function resetLessonPanels() {
+    setCoachContext(null);
+    setCoachDraft("");
+    setCoachReply("");
+    setError("");
+    setWarning("");
+  }
+
+  function startLesson(nextLesson: StoredLessonEntry["lesson"], nextStatus: string) {
+    if (!unit || nextLesson.unitId !== unit.id) return;
+    setSession((current) => putSessionLesson(current, nextLesson));
+    setUnitView({ unitId: unit.id, view: "lesson", playerRunId: crypto.randomUUID() });
+    resetLessonPanels();
+    setStatus(nextStatus);
+  }
+
+  function openNewLesson() {
+    if (!unit) return;
+    setUnitView({ unitId: unit.id, view: "new", playerRunId: unitView.playerRunId });
+    setCustomRequest("");
+    setYoutubeUrl("");
+    setTranscript("");
+    setSourceRequest("");
+    resetLessonPanels();
+    setStatus("Describe the lesson you want, then send it to this unit's linked ChatGPT conversation.");
+  }
+
+  function openSavedLessons() {
+    if (!unit || !savedLessons.length) return;
+    setUnitView({ unitId: unit.id, view: "choose", playerRunId: unitView.playerRunId });
+    resetLessonPanels();
+    setStatus(`${savedLessons.length} saved ${savedLessons.length === 1 ? "lesson is" : "lessons are"} available for this unit.`);
+  }
+
+  function reviewStoredLesson(entry: StoredLessonEntry) {
+    startLesson(entry.lesson, `Reviewing “${entry.lesson.title}” from question one. Saved progress is shown only as a summary.`);
+  }
+
   function currentUnitContext() {
     if (!unit) throw new Error("Select a unit first.");
     const summary = session.unitSummaries[unit.id];
-    return buildUnitContext(collection, unit, documents, studyItems, profile, currentProgress, summary?.commonErrors ?? []);
+    const mostRecentProgress = currentProgress ?? savedLessons.find((entry) => entry.progress)?.progress;
+    return buildUnitContext(collection, unit, documents, studyItems, profile, mostRecentProgress, summary?.commonErrors ?? []);
   }
 
   function currentExpectation(): OperationExpectation {
@@ -277,9 +415,18 @@ export function LearningWorkspace({
       if (result.outcome !== "completed" || !result.result?.lesson) throw new Error("ChatGPT did not return a valid lesson.");
       const parsedLesson = parseLesson(result.result.lesson);
       if (parsedLesson.unitId !== unit.id) throw new Error("The returned lesson does not match the active unit.");
-      setSession((current) => putSessionLesson(current, parsedLesson));
+      const nextCache = putStoredLesson(learningCacheRef.current, parsedLesson);
+      const stored = commitLearningCache(nextCache);
+      startLesson(
+        parsedLesson,
+        stored
+          ? "Lesson received from ChatGPT and saved locally in this browser."
+          : "Lesson received from ChatGPT and loaded for this session.",
+      );
+      if (!stored) {
+        setWarning("This lesson is available now, but the browser could not save it to localStorage. Existing saved lessons were not removed.");
+      }
       await extensionBridge.acknowledgeOperation(result.operationId).catch(() => false);
-      setStatus("Lesson received from ChatGPT. It is temporary and has not been saved to localStorage or a database.");
     } catch (caught) {
       if (!isAbortError(caught)) setError(publicError(caught));
     } finally {
@@ -312,6 +459,12 @@ export function LearningWorkspace({
   async function saveProgress(attempts: AttemptRecord[], snapshot: LessonProgressSnapshot) {
     void attempts;
     setSession((current) => putSessionProgress(current, snapshot));
+    if (!unit) return;
+    const nextCache = putStoredLessonProgress(learningCacheRef.current, unit.id, snapshot);
+    if (nextCache === learningCacheRef.current) return;
+    if (!commitLearningCache(nextCache)) {
+      setWarning("Your latest progress is available in this tab, but the browser could not update its local lesson history.");
+    }
   }
 
   async function askCoach(message?: string, context = coachContext) {
@@ -360,8 +513,10 @@ export function LearningWorkspace({
 
   function usePreviewLesson() {
     if (!unit) return;
-    setSession((current) => putSessionLesson(current, createLocalPreviewLesson(unit.id, cleanUnitName(unit.name), profile)));
-    setStatus("Local player demo loaded. It uses fixed English sample content and does not represent this unit's generated lesson.");
+    startLesson(
+      createLocalPreviewLesson(unit.id, cleanUnitName(unit.name), profile),
+      "Local player demo loaded. It is not part of this unit's saved lesson history.",
+    );
   }
 
   return (
@@ -380,16 +535,31 @@ export function LearningWorkspace({
             <div>
               <p className="section-kicker">ChatGPT lesson studio</p>
               <h1>{unit ? cleanUnitName(unit.name) : "Select a unit"}</h1>
-              <p>Meoi Bridge sends this unit's learning material to ChatGPT Web and returns validated JSON. It does not use an API, MCP, OAuth, Worker, or database, and results disappear when this page reloads.</p>
+              <p>Meoi Bridge sends this unit's learning material to ChatGPT Web and stores up to five validated lessons locally in this browser. It does not use an API, MCP, OAuth, Worker, or database.</p>
             </div>
             <div className="learn-hero-actions">
-              <button className="secondary-button" type="button" onClick={usePreviewLesson} disabled={!unit}><Play size={16} /> Player demo</button>
-              <button className="primary-button" type="button" onClick={() => void createLesson()} disabled={!unit || busy}>
-                {busy ? <LoaderCircle className="spin" size={16} /> : <Sparkles size={16} />} Create lesson
-              </button>
+              {savedLessons.length && learningView !== "choose" ? (
+                <button className="secondary-button" type="button" onClick={openSavedLessons} disabled={busy}>
+                  <History size={16} /> Saved lessons
+                </button>
+              ) : null}
+              {learningView === "lesson" ? (
+                <button className="primary-button" type="button" onClick={openNewLesson} disabled={!unit || busy}>
+                  <Sparkles size={16} /> New lesson
+                </button>
+              ) : null}
             </div>
           </section>
 
+          {!unit ? (
+            <section className="learning-empty-state">
+              <span><Bot size={28} /></span>
+              <h2>Select a unit first</h2>
+              <p>Choose a unit from the navigation before creating or reviewing a lesson.</p>
+            </section>
+          ) : learningView === "choose" ? (
+            <SavedLessonChooser entries={savedLessons} onCreateNew={openNewLesson} onReview={reviewStoredLesson} />
+          ) : learningView === "new" ? (
           <section className="lesson-request-card" aria-labelledby="lesson-request-title">
             <div className="card-heading-row">
               <div><p className="section-kicker">Custom request</p><h2 id="lesson-request-title">What do you want to learn?</h2></div>
@@ -416,17 +586,36 @@ export function LearningWorkspace({
               <span>Transcript or notes</span>
               <textarea rows={4} value={transcript} onChange={(event) => setTranscript(event.target.value)} placeholder="No captions? Paste a transcript or notes here. Meoi will not infer source content from a title or thumbnail." />
             </label>
-            {sourceRequest ? (
-              <button className="primary-button" type="button" onClick={() => void createLesson()} disabled={!transcript.trim() || busy}><Send size={16} /> Send source and try again</button>
-            ) : null}
+            <div className="lesson-form-actions">
+              {savedLessons.length ? (
+                <button className="secondary-button" type="button" onClick={openSavedLessons} disabled={busy}>
+                  <ArrowLeft size={16} /> Saved lessons
+                </button>
+              ) : (
+                <button className="secondary-button" type="button" onClick={usePreviewLesson} disabled={busy}>
+                  <Play size={16} /> Player demo
+                </button>
+              )}
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() => void createLesson()}
+                disabled={busy || Boolean(sourceRequest && !transcript.trim())}
+              >
+                {busy ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}
+                {sourceRequest ? "Send source and try again" : "Create lesson"}
+              </button>
+            </div>
           </section>
+          ) : null}
 
           {error ? <div className="learning-alert is-error" role="alert">{error}</div> : null}
           {warning ? <div className="learning-alert is-warning" role="status">{warning}</div> : null}
           <div className="learning-alert" aria-live="polite">{busy ? <LoaderCircle className="spin" size={16} /> : <CheckCircle2 size={16} />} {status}</div>
 
-          {lesson ? (
+          {learningView === "lesson" && lesson ? (
             <LessonPlayer
+              key={`${lesson.id}-${playerRunId}`}
               lesson={lesson}
               onEvaluate={evaluateAnswer}
               onProgressBatch={saveProgress}
@@ -437,13 +626,13 @@ export function LearningWorkspace({
                 void askCoach(undefined, context);
               }}
             />
-          ) : (
+          ) : learningView === "lesson" ? (
             <section className="learning-empty-state">
               <span><Bot size={28} /></span>
-              <h2>No lesson for this unit yet</h2>
-              <p>Open the fixed player demo, or enable Meoi Bridge and ask ChatGPT to create a lesson from this unit's material.</p>
+              <h2>This lesson is no longer available</h2>
+              <p>Return to saved lessons or create a new lesson for this unit.</p>
             </section>
-          )}
+          ) : null}
         </div>
       </main>
 
@@ -464,7 +653,7 @@ export function LearningWorkspace({
             <li data-ready="true"><span /> API / MCP / OAuth · not used</li>
             <li data-ready="true"><span /> Database · no writes</li>
           </ul>
-          <p className="quota-note">The extension keeps queued prompts and validated results only in browser session storage so its service worker can sleep safely. Meoi removes each result after using it.</p>
+          <p className="quota-note">The extension keeps queued prompts and validated results in browser session storage and removes each result after use. Meoi stores only validated lessons and their latest progress in this site's local storage.</p>
         </section>
 
         <ProfileEditor profile={profile} onChange={onUpdateProfile} />
@@ -484,7 +673,7 @@ export function LearningWorkspace({
         <section className="control-section voice-controls">
           <h3><Mic size={15} /> Live speaking</h3>
           <button className="secondary-button wide-button" type="button" disabled={!unit || !extensionConnected} onClick={() => void extensionBridge.send("OPEN_VOICE", { unitId: unit?.id })}><Mic size={15} /> Open Voice for this unit</button>
-          <p className="quota-note">Meoi only opens the unit's conversation for Voice. Voice syncing and audio upload remain disabled because this mode does not save data.</p>
+          <p className="quota-note">Meoi only opens the unit's conversation for Voice. Voice syncing and audio upload remain disabled, and saved lesson history never includes audio or voice transcripts.</p>
         </section>
       </aside>
     </>

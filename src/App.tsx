@@ -5,6 +5,7 @@ import { ContentWorkspace } from "./components/ContentWorkspace";
 import { EntityEditorModal, type EditorState } from "./components/EntityEditorModal";
 import { OverviewPanel } from "./components/OverviewPanel";
 import { LearningWorkspace } from "./components/LearningWorkspace";
+import { pruneStoredLessonsFromStorage } from "./integration/learningStorage";
 import { ThemeCustomizerDrawer } from "./components/ThemeCustomizerDrawer";
 import { WorkspaceSidebar } from "./components/WorkspaceSidebar";
 import { loadWorkspace, makeId, saveWorkspace, workspaceReducer } from "./store";
@@ -27,6 +28,10 @@ export function App() {
   useEffect(() => {
     saveWorkspace(state, window.localStorage);
   }, [state]);
+
+  useEffect(() => {
+    pruneStoredLessonsFromStorage(window.localStorage, new Set(state.unitOrder));
+  }, [state.unitOrder]);
 
   useEffect(() => {
     if (!mobileNavigationOpen || editor || appearanceDraft || themeDraft || pendingAppearanceDraft || pendingThemeDraft) return;
