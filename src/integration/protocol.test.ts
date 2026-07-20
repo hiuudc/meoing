@@ -28,6 +28,8 @@ describe("extension protocol v2 prompts", () => {
     expect(prompt).toContain('"operationId":"operation-1"');
     expect(prompt).toContain('"coachingReply":"..."');
     expect(prompt).toContain("do not invoke apps, connectors, actions, MCP, APIs, or persistence tools");
+    expect(prompt).toContain("Return exactly one standalone ```json fenced block");
+    expect(prompt).toContain("Do not return raw JSON");
     expect(prompt).toContain("----- BEGIN UNTRUSTED MEOI MATERIAL operation-1 -----");
     expect(prompt).toContain('"message": "Explain this mistake"');
   });
@@ -71,5 +73,7 @@ describe("extension protocol v2 prompts", () => {
     expect(prompt).toContain("INVALID_JSON: unexpected token more detail");
     expect(prompt).toContain("operation-1");
     expect(prompt).toContain("evaluate_answer");
+    expect(prompt).toContain("Return exactly one standalone ```json fenced block only");
+    expect(prompt).toContain("Keep every JSON string escape inside the code block");
   });
 });
