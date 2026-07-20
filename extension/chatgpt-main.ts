@@ -2,7 +2,11 @@ const COMPOSER_PAYLOAD_PREFIX = "meoi-composer-payload-";
 const COMPOSER_PAYLOAD_SELECTOR = `script[id^="${COMPOSER_PAYLOAD_PREFIX}"][data-meoi-request-id]`;
 const COMPOSER_READY_ATTRIBUTE = "data-meoi-main-bridge";
 const COMPOSER_RESULT_ATTRIBUTE = "data-meoi-composer-result";
+const PROJECT_NAME_PAYLOAD_PREFIX = "meoi-project-name-payload-";
+const PROJECT_NAME_PAYLOAD_SELECTOR = `script[id^="${PROJECT_NAME_PAYLOAD_PREFIX}"][data-meoi-request-id]`;
+const PROJECT_NAME_RESULT_ATTRIBUTE = "data-meoi-project-name-result";
 const MAX_COMPOSER_TEXT_BYTES = 700 * 1024;
+const MAX_PROJECT_NAME_BYTES = 1024;
 
 type UnknownRecord = Record<PropertyKey, unknown>;
 
@@ -270,6 +274,36 @@ function applyComposerText(value: string): string {
   return controller ? "controller-fallback" : "native-fallback";
 }
 
+function normalizedText(element: Element): string {
+  return (element.textContent ?? "").replace(/\s+/g, " ").trim();
+}
+
+function findCreateProjectNameInput(): HTMLInputElement | null {
+  const dialogs = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"]')).filter((dialog) => (
+    Array.from(dialog.querySelectorAll("h1, h2, h3")).some((heading) => normalizedText(heading) === "Create project")
+  ));
+  if (dialogs.length !== 1) return null;
+  const inputs = Array.from(dialogs[0].querySelectorAll<HTMLInputElement>('input[type="text"], input:not([type])'))
+    .filter((input) => !input.disabled && input.getAttribute("aria-disabled") !== "true");
+  return inputs.length === 1 ? inputs[0] : null;
+}
+
+export function setNativeInputValue(input: HTMLInputElement, value: string): boolean {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+  if (!setter) return false;
+  input.focus();
+  setter.call(input, value);
+  input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+  return input.value === value;
+}
+
+function applyProjectName(value: string): string {
+  const input = findCreateProjectNameInput();
+  if (!input) return "no-project-input";
+  return setNativeInputValue(input, value) ? "native-input" : "input-mismatch";
+}
+
 function handleComposerPayload(payload: Element) {
   const requestId = payload.getAttribute("data-meoi-request-id");
   if (!requestId || !/^[a-f0-9-]{36}$/i.test(requestId)) return;
@@ -283,15 +317,31 @@ function handleComposerPayload(payload: Element) {
   document.documentElement.setAttribute(COMPOSER_RESULT_ATTRIBUTE, `${requestId}:${strategy}`);
 }
 
+function handleProjectNamePayload(payload: Element) {
+  const requestId = payload.getAttribute("data-meoi-request-id");
+  if (!requestId || !/^[a-f0-9-]{36}$/i.test(requestId)) return;
+  if (!(payload instanceof HTMLScriptElement)
+    || payload.id !== `${PROJECT_NAME_PAYLOAD_PREFIX}${requestId}`
+    || payload.type !== "application/json") return;
+  const value = payload.textContent ?? "";
+  payload.remove();
+  if (!value || new TextEncoder().encode(value).byteLength > MAX_PROJECT_NAME_BYTES) return;
+  const strategy = applyProjectName(value);
+  document.documentElement.setAttribute(PROJECT_NAME_RESULT_ATTRIBUTE, `${requestId}:${strategy}`);
+}
+
 if (typeof document !== "undefined") {
   document.documentElement.setAttribute(COMPOSER_READY_ATTRIBUTE, "ready");
   document.querySelectorAll(COMPOSER_PAYLOAD_SELECTOR).forEach(handleComposerPayload);
+  document.querySelectorAll(PROJECT_NAME_PAYLOAD_SELECTOR).forEach(handleProjectNamePayload);
   new MutationObserver((records) => {
     for (const record of records) {
       for (const node of record.addedNodes) {
         if (!(node instanceof Element)) continue;
         if (node.matches(COMPOSER_PAYLOAD_SELECTOR)) handleComposerPayload(node);
         node.querySelectorAll(COMPOSER_PAYLOAD_SELECTOR).forEach(handleComposerPayload);
+        if (node.matches(PROJECT_NAME_PAYLOAD_SELECTOR)) handleProjectNamePayload(node);
+        node.querySelectorAll(PROJECT_NAME_PAYLOAD_SELECTOR).forEach(handleProjectNamePayload);
       }
     }
   }).observe(document.documentElement, { childList: true, subtree: true });

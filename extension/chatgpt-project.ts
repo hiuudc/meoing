@@ -7,6 +7,7 @@ export interface ProjectPlacementEnvironment {
   currentUrl(): string;
   now(): number;
   wait(milliseconds: number): Promise<void>;
+  setProjectName?(input: HTMLInputElement, value: string, deadline: number): Promise<boolean>;
 }
 
 export interface ProjectPlacementResult {
@@ -152,7 +153,14 @@ export async function placeCurrentConversationInProject(
   const input = findProjectNameInput(dialog);
   if (!input) throw placementFailure("could not find the project name field.");
   input.focus();
-  setProjectNameInput(input, projectName);
+  let projectNameSet = environment.setProjectName
+    ? await environment.setProjectName(input, projectName, deadline)
+    : false;
+  if (!projectNameSet) {
+    setProjectNameInput(input, projectName);
+    projectNameSet = input.value === projectName;
+  }
+  if (!projectNameSet) throw placementFailure("could not fill the project name field.");
 
   const createButton = await waitForValue(() => findCreateProjectButton(dialog), deadline, environment);
   if (!createButton) throw placementFailure("could not enable the Create project button.");

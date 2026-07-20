@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { findComposerController, setProseMirrorText, type ProseMirrorViewLike } from "./chatgpt-main";
+import { findComposerController, setNativeInputValue, setProseMirrorText, type ProseMirrorViewLike } from "./chatgpt-main";
 
 beforeEach(() => {
   document.body.innerHTML = '<div id="prompt-textarea" contenteditable="true"><p>Ask</p></div>';
@@ -28,6 +28,18 @@ describe("ChatGPT main-world composer bridge", () => {
     ]);
     expect(view.dispatch).toHaveBeenCalledTimes(1);
     expect(view.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it("sets a controlled project-name input through native main-world events", () => {
+    document.body.innerHTML = '<input type="text">';
+    const input = document.querySelector<HTMLInputElement>("input")!;
+    const events: string[] = [];
+    input.addEventListener("input", () => events.push("input"));
+    input.addEventListener("change", () => events.push("change"));
+
+    expect(setNativeInputValue(input, "Meoing")).toBe(true);
+    expect(input.value).toBe("Meoing");
+    expect(events).toEqual(["input", "change"]);
   });
 });
 

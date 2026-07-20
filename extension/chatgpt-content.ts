@@ -33,6 +33,8 @@ const PROJECT_PLACEMENT_TIMEOUT_MS = 8_000;
 const COMPOSER_PAYLOAD_PREFIX = "meoi-composer-payload-";
 const COMPOSER_READY_ATTRIBUTE = "data-meoi-main-bridge";
 const COMPOSER_RESULT_ATTRIBUTE = "data-meoi-composer-result";
+const PROJECT_NAME_PAYLOAD_PREFIX = "meoi-project-name-payload-";
+const PROJECT_NAME_RESULT_ATTRIBUTE = "data-meoi-project-name-result";
 
 let lastMainWorldComposerResult = "not-ready";
 
@@ -114,6 +116,32 @@ function requestMainWorldComposerText(value: string) {
         : "not-ready";
     }
   }, 0);
+}
+
+async function setProjectNameThroughMainWorld(
+  input: HTMLInputElement,
+  value: string,
+  deadline: number,
+): Promise<boolean> {
+  const requestId = crypto.randomUUID();
+  const payload = document.createElement("script");
+  payload.id = `${PROJECT_NAME_PAYLOAD_PREFIX}${requestId}`;
+  payload.type = "application/json";
+  payload.hidden = true;
+  payload.dataset.meoiRequestId = requestId;
+  payload.textContent = value;
+  document.documentElement.append(payload);
+  const fillDeadline = Math.min(deadline, Date.now() + 1_200);
+  while (Date.now() < fillDeadline) {
+    const result = document.documentElement.getAttribute(PROJECT_NAME_RESULT_ATTRIBUTE);
+    if (result?.startsWith(`${requestId}:`)) {
+      document.documentElement.removeAttribute(PROJECT_NAME_RESULT_ATTRIBUTE);
+      return input.isConnected && input.value === value;
+    }
+    await waitForMutationOrDelay(50);
+  }
+  payload.remove();
+  return false;
 }
 
 function selectComposerContents(composer: HTMLElement) {
@@ -376,6 +404,7 @@ async function projectPlacementWarning(deadline: number): Promise<ExtensionError
       currentUrl: () => window.location.href,
       now: () => Date.now(),
       wait: waitForMutationOrDelay,
+      setProjectName: setProjectNameThroughMainWorld,
     });
     return undefined;
   } catch (error) {

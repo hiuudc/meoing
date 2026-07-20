@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MEOI_CHATGPT_PROJECT_NAME,
   currentChatProjectName,
@@ -91,8 +91,17 @@ describe("ChatGPT project placement", () => {
       }, { once: true });
     });
 
-    await expect(placeCurrentConversationInProject(MEOI_CHATGPT_PROJECT_NAME, Date.now() + 1_000, environment()))
+    const setProjectName = vi.fn(async (input: HTMLInputElement, value: string) => {
+      input.value = value;
+      input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      return true;
+    });
+    await expect(placeCurrentConversationInProject(MEOI_CHATGPT_PROJECT_NAME, Date.now() + 1_000, {
+      ...environment(),
+      setProjectName,
+    }))
       .resolves.toEqual({ created: true });
+    expect(setProjectName).toHaveBeenCalledOnce();
     expect(currentChatProjectName()).toBe(MEOI_CHATGPT_PROJECT_NAME);
   });
 
