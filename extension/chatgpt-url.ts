@@ -3,6 +3,7 @@ const CONVERSATION_ID_PATTERN = "[A-Za-z0-9-]+";
 const PROJECT_ID_PATTERN = "[A-Za-z0-9-]+";
 const DIRECT_CONVERSATION_PATH = new RegExp(`^/c/(${CONVERSATION_ID_PATTERN})/?$`);
 const PROJECT_CONVERSATION_PATH = new RegExp(`^/g/(${PROJECT_ID_PATTERN})/c/(${CONVERSATION_ID_PATTERN})/?$`);
+const PROJECT_HOME_PATH = new RegExp(`^/g/(${PROJECT_ID_PATTERN})/project/?$`);
 
 interface ChatgptConversationLocation {
   conversationId: string;
@@ -42,6 +43,11 @@ export function canonicalConversationUrl(value?: string): string | null {
 
 export function isConversationUrl(value?: string): value is string {
   return Boolean(chatgptConversationLocation(value));
+}
+
+export function isProjectHomeUrl(value?: string): value is string {
+  const url = parseChatgptUrl(value);
+  return Boolean(url && PROJECT_HOME_PATH.test(url.pathname));
 }
 
 export function isChatUrl(value?: string): value is string {

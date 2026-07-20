@@ -1,4 +1,4 @@
-import { conversationIdFromUrl } from "./chatgpt-url";
+import { conversationIdFromUrl, isProjectHomeUrl } from "./chatgpt-url";
 
 export const MEOI_CHATGPT_PROJECT_NAME = "Meoing";
 export const CHATGPT_PROJECT_PLACEMENT_TIMEOUT_MS = 30_000;
@@ -71,6 +71,16 @@ export function findCreateProjectButton(dialog: ParentNode): HTMLButtonElement |
   return buttons.length === 1 ? buttons[0] : null;
 }
 
+export function findProjectConversationLink(
+  conversationId: string,
+  root: ParentNode = document,
+): HTMLAnchorElement | null {
+  const links = uniqueVisibleElements(root, 'a[href*="/g/"][href*="/c/"]')
+    .filter((element): element is HTMLAnchorElement => element instanceof HTMLAnchorElement)
+    .filter((link) => conversationIdFromUrl(link.href) === conversationId);
+  return links[0] ?? null;
+}
+
 export function setProjectNameInput(input: HTMLInputElement, value: string): void {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
   if (setter) setter.call(input, value);
@@ -101,10 +111,23 @@ async function waitForPlacement(
   deadline: number,
   environment: ProjectPlacementEnvironment,
 ): Promise<void> {
+  let reopenedConversationUrl: string | null = null;
   const placed = await waitForValue(() => {
-    const currentId = conversationIdFromUrl(environment.currentUrl());
+    const currentUrl = environment.currentUrl();
+    const currentId = conversationIdFromUrl(currentUrl);
     if (currentId && currentId !== conversationId) {
       throw placementFailure("changed to a different conversation while organizing the chat.");
+    }
+    if (!currentId && !isProjectHomeUrl(currentUrl)) {
+      throw placementFailure("left the conversation while organizing the chat.");
+    }
+    if (!currentId) {
+      const conversationLink = findProjectConversationLink(conversationId, environment.root);
+      if (conversationLink && conversationLink.href !== reopenedConversationUrl) {
+        reopenedConversationUrl = conversationLink.href;
+        conversationLink.click();
+      }
+      return null;
     }
     return currentId === conversationId && currentChatProjectName(environment.root) === projectName ? true : null;
   }, deadline, environment);

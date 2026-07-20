@@ -61,7 +61,21 @@ describe("ChatGPT main-world composer bridge", () => {
     expect(findCreateProjectNameInput()).toBe(document.querySelector("dialog[open] input"));
   });
 
-  it("activates the project Create button once in the page world", () => {
+  it("submits the project form directly in the page world", () => {
+    document.body.innerHTML = '<form><button type="submit">Create project</button></form>';
+    const button = document.querySelector<HTMLButtonElement>("button")!;
+    const form = document.querySelector<HTMLFormElement>("form")!;
+    const requestSubmit = vi.fn();
+    form.requestSubmit = requestSubmit;
+    const onClick = vi.fn();
+    button.addEventListener("click", onClick);
+
+    expect(activateProjectCreateButton(button)).toBe(true);
+    expect(requestSubmit).toHaveBeenCalledWith(button);
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it("falls back to one click when the project button has no form", () => {
     document.body.innerHTML = '<button type="button">Create project</button>';
     const button = document.querySelector<HTMLButtonElement>("button")!;
     const onClick = vi.fn();

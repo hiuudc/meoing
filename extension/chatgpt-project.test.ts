@@ -6,6 +6,7 @@ import {
   currentChatProjectName,
   exactMenuItems,
   findConversationOptionsButton,
+  findProjectConversationLink,
   placeCurrentConversationInProject,
   type ProjectPlacementEnvironment,
 } from "./chatgpt-project";
@@ -86,13 +87,19 @@ describe("ChatGPT project placement", () => {
   it("creates Meoing from the move menu when it is missing", async () => {
     installMoveMenu(false, () => {
       document.body.insertAdjacentHTML("beforeend", `
-        <dialog open style="display:block"><h2>Create project</h2><input><button id="create" disabled>Create project</button></dialog>
+        <dialog open style="display:block"><h2>Create project</h2><form><input><button id="create" type="submit" disabled>Create project</button></form></dialog>
       `);
       const input = document.querySelector<HTMLInputElement>('dialog input')!;
       input.addEventListener("input", () => { document.querySelector<HTMLButtonElement>("#create")!.disabled = !input.value; });
-      document.querySelector<HTMLButtonElement>("#create")!.addEventListener("click", () => {
-        document.querySelector("header")!.outerHTML = projectBanner(MEOI_CHATGPT_PROJECT_NAME);
-        currentUrl = "https://chatgpt.com/g/g-p-meoing/c/chat-1";
+      document.querySelector<HTMLFormElement>("dialog form")!.addEventListener("submit", (event) => {
+        event.preventDefault();
+        document.body.innerHTML = '<a id="project-chat" href="https://chatgpt.com/g/g-p-meoing/c/chat-1">Open chat</a>';
+        currentUrl = "https://chatgpt.com/g/g-p-meoing-meoing/project";
+        document.querySelector<HTMLAnchorElement>("#project-chat")!.addEventListener("click", (clickEvent) => {
+          clickEvent.preventDefault();
+          document.body.innerHTML = projectBanner(MEOI_CHATGPT_PROJECT_NAME);
+          currentUrl = "https://chatgpt.com/g/g-p-meoing/c/chat-1";
+        }, { once: true });
       }, { once: true });
     });
 
@@ -114,6 +121,14 @@ describe("ChatGPT project placement", () => {
     expect(setProjectName).toHaveBeenCalledOnce();
     expect(createProject).toHaveBeenCalledOnce();
     expect(currentChatProjectName()).toBe(MEOI_CHATGPT_PROJECT_NAME);
+  });
+
+  it("finds the original conversation on a project home before reopening it", () => {
+    document.body.innerHTML = `
+      <a href="https://chatgpt.com/g/g-p-meoing/c/another-chat">Other</a>
+      <a href="https://chatgpt.com/g/g-p-meoing/c/chat-1">Original</a>
+    `;
+    expect(findProjectConversationLink("chat-1")?.textContent).toBe("Original");
   });
 
   it("fails safely if project placement changes to another conversation", async () => {

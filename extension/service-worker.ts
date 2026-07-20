@@ -16,6 +16,7 @@ import {
   conversationIdFromUrl,
   isChatUrl,
   isConversationUrl,
+  isProjectHomeUrl,
   sameConversation,
 } from "./chatgpt-url";
 import {
@@ -643,6 +644,7 @@ async function handleChatTabUrlChange(tabId: number, url: string): Promise<void>
   const states = await getSession<OperationStateMap>(STORAGE_KEYS.operationStates, {});
   const state = Object.values(states).find((candidate) => candidate.tabId === tabId && !isTerminalPhase(candidate.phase));
   if (!state) return;
+  if (isProjectHomeUrl(url)) return;
   if (!isChatUrl(url)) {
     await failOperationsForTab(tabId);
     return;

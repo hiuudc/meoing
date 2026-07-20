@@ -331,13 +331,16 @@ function findCreateProjectButton(): HTMLButtonElement | null {
 
 export function activateProjectCreateButton(button: HTMLButtonElement): boolean {
   if (!button.isConnected || button.disabled || button.getAttribute("aria-disabled") === "true") return false;
-  const mouse = { bubbles: true, cancelable: true, composed: true, button: 0 };
-  const pointer = { ...mouse, pointerId: 1, pointerType: "mouse", isPrimary: true };
+  const form = button.form ?? button.closest("form");
+  if (form && typeof form.requestSubmit === "function") {
+    try {
+      form.requestSubmit(button);
+      return true;
+    } catch {
+      // Fall back to the element activation path for older ChatGPT markup.
+    }
+  }
   button.focus();
-  if (typeof PointerEvent !== "undefined") button.dispatchEvent(new PointerEvent("pointerdown", pointer));
-  button.dispatchEvent(new MouseEvent("mousedown", mouse));
-  if (typeof PointerEvent !== "undefined") button.dispatchEvent(new PointerEvent("pointerup", pointer));
-  button.dispatchEvent(new MouseEvent("mouseup", mouse));
   button.click();
   return true;
 }
