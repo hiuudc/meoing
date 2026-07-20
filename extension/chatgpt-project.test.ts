@@ -81,9 +81,9 @@ describe("ChatGPT project placement", () => {
   it("creates Meoing from the move menu when it is missing", async () => {
     installMoveMenu(false, () => {
       document.body.insertAdjacentHTML("beforeend", `
-        <div role="dialog"><h2>Create project</h2><input><button id="create" disabled>Create project</button></div>
+        <dialog open style="display:block"><h2>Create project</h2><input><button id="create" disabled>Create project</button></dialog>
       `);
-      const input = document.querySelector<HTMLInputElement>('[role="dialog"] input')!;
+      const input = document.querySelector<HTMLInputElement>('dialog input')!;
       input.addEventListener("input", () => { document.querySelector<HTMLButtonElement>("#create")!.disabled = !input.value; });
       document.querySelector<HTMLButtonElement>("#create")!.addEventListener("click", () => {
         document.querySelector("header")!.outerHTML = projectBanner(MEOI_CHATGPT_PROJECT_NAME);

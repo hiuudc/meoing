@@ -1,9 +1,19 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { findComposerController, setNativeInputValue, setProseMirrorText, type ProseMirrorViewLike } from "./chatgpt-main";
+import {
+  findComposerController,
+  findCreateProjectNameInput,
+  setNativeInputValue,
+  setProseMirrorText,
+  type ProseMirrorViewLike,
+} from "./chatgpt-main";
 
 beforeEach(() => {
   document.body.innerHTML = '<div id="prompt-textarea" contenteditable="true"><p>Ask</p></div>';
+  Object.defineProperty(HTMLElement.prototype, "getBoundingClientRect", {
+    configurable: true,
+    value() { return { width: 120, height: 40, top: 0, right: 120, bottom: 40, left: 0, x: 0, y: 0, toJSON() {} }; },
+  });
 });
 
 describe("ChatGPT main-world composer bridge", () => {
@@ -40,6 +50,14 @@ describe("ChatGPT main-world composer bridge", () => {
     expect(setNativeInputValue(input, "Meoing")).toBe(true);
     expect(input.value).toBe("Meoing");
     expect(events).toEqual(["input", "change"]);
+  });
+
+  it("finds the project-name field inside ChatGPT's native dialog", () => {
+    document.body.innerHTML = `
+      <dialog open style="display:block"><h2>Create project</h2><input type="text"></dialog>
+      <dialog style="display:none"><h2>Create project</h2><input type="text"></dialog>
+    `;
+    expect(findCreateProjectNameInput()).toBe(document.querySelector("dialog[open] input"));
   });
 });
 

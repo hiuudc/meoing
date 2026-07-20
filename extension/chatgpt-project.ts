@@ -51,7 +51,7 @@ export function exactMenuItems(label: string, root: ParentNode = document): HTML
 }
 
 export function findCreateProjectDialog(root: ParentNode = document): HTMLElement | null {
-  const dialogs = uniqueVisibleElements(root, '[role="dialog"]').filter((dialog) => (
+  const dialogs = uniqueVisibleElements(root, 'dialog, [role="dialog"]').filter((dialog) => (
     Array.from(dialog.querySelectorAll("h1, h2, h3")).some((heading) => normalizedText(heading) === "Create project")
   ));
   return dialogs.length === 1 ? dialogs[0] : null;

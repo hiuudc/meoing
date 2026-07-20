@@ -278,9 +278,16 @@ function normalizedText(element: Element): string {
   return (element.textContent ?? "").replace(/\s+/g, " ").trim();
 }
 
-function findCreateProjectNameInput(): HTMLInputElement | null {
-  const dialogs = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"]')).filter((dialog) => (
-    Array.from(dialog.querySelectorAll("h1, h2, h3")).some((heading) => normalizedText(heading) === "Create project")
+function visibleElement(element: HTMLElement): boolean {
+  const style = getComputedStyle(element);
+  const rect = element.getBoundingClientRect();
+  return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
+}
+
+export function findCreateProjectNameInput(): HTMLInputElement | null {
+  const dialogs = Array.from(document.querySelectorAll<HTMLElement>('dialog, [role="dialog"]')).filter((dialog) => (
+    visibleElement(dialog)
+    && Array.from(dialog.querySelectorAll("h1, h2, h3")).some((heading) => normalizedText(heading) === "Create project")
   ));
   if (dialogs.length !== 1) return null;
   const inputs = Array.from(dialogs[0].querySelectorAll<HTMLInputElement>('input[type="text"], input:not([type])'))
