@@ -6,6 +6,7 @@ import {
   type OperationExpectation,
 } from "../src/integration/protocol";
 import { evaluationSchema, lessonSchema, validateLessonForExpectation } from "../src/learning/schema";
+export { conversationIdFromUrl } from "./chatgpt-url";
 
 export type Composer = HTMLTextAreaElement | HTMLElement;
 
@@ -143,15 +144,6 @@ export function responseGenerationActive(root: ParentNode = document): boolean {
     'button[data-testid="stop-button"], button[aria-label*="stop generating" i], button[aria-label*="stop response" i]',
   ));
   return controls.some(visibleControl);
-}
-
-export function conversationIdFromUrl(value: string): string | null {
-  try {
-    const match = new URL(value).pathname.match(/^\/c\/([A-Za-z0-9-]+)/);
-    return match?.[1] ?? null;
-  } catch {
-    return null;
-  }
 }
 
 function byteLength(value: string): number {

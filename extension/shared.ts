@@ -53,6 +53,7 @@ export interface ChatOperationEvent {
   repairAttempt?: number;
   result?: ChatOperationResult;
   error?: ExtensionError;
+  projectWarning?: ExtensionError;
   currentUrl?: string;
 }
 

@@ -12,6 +12,13 @@ import {
 } from "../src/integration/protocol";
 import { isAllowedMeoiOrigin } from "./integration-policy";
 import {
+  canonicalConversationUrl,
+  conversationIdFromUrl,
+  isChatUrl,
+  isConversationUrl,
+  sameConversation,
+} from "./chatgpt-url";
+import {
   OPERATION_DEADLINE_MS,
   MAX_OUTSTANDING_OPERATIONS,
   acknowledgeTerminalOperation,
@@ -184,24 +191,6 @@ function chatSenderAllowed(sender: chrome.runtime.MessageSender): boolean {
   return Boolean(sender.url?.startsWith("https://chatgpt.com/") && sender.tab?.id);
 }
 
-function isChatUrl(value?: string): value is string {
-  return Boolean(value && /^https:\/\/chatgpt\.com\/(?:c\/[A-Za-z0-9-]+)?(?:[?#].*)?$/.test(value));
-}
-
-function isConversationUrl(value?: string): value is string {
-  return Boolean(value && /^https:\/\/chatgpt\.com\/c\/[A-Za-z0-9-]+/.test(value));
-}
-
-function canonicalConversationUrl(value?: string): string | null {
-  if (!value) return null;
-  try {
-    const match = new URL(value).pathname.match(/^\/c\/([A-Za-z0-9-]+)/);
-    return match ? `https://chatgpt.com/c/${match[1]}` : null;
-  } catch {
-    return null;
-  }
-}
-
 function operationFromPayload(payload: SendOperationPayload): QueuedOperation {
   return { ...payload, queuedAt: new Date().toISOString() };
 }
@@ -228,9 +217,10 @@ async function openUnitChat(unitId: string): Promise<{ tab: chrome.tabs.Tab; new
   const chats = await getLocal<UnitChatMap>(STORAGE_KEYS.unitChats, {});
   const url = canonicalConversationUrl(chats[unitId]);
   if (url) {
+    const conversationId = conversationIdFromUrl(url);
     await clearProvisionalUnitTab(unitId);
     const tabs = await chrome.tabs.query({ url: "https://chatgpt.com/*" });
-    const existing = tabs.find((tab) => canonicalConversationUrl(tab.url) === url);
+    const existing = tabs.find((tab) => conversationId && conversationIdFromUrl(tab.url) === conversationId);
     if (existing?.id) {
       await chrome.tabs.update(existing.id, { active: true });
       if (existing.windowId) await chrome.windows.update(existing.windowId, { focused: true });
@@ -290,9 +280,11 @@ async function clearProvisionalTabId(tabId: number): Promise<void> {
 async function storeUnitChat(unitId: string, url?: string): Promise<void> {
   const canonicalUrl = canonicalConversationUrl(url);
   if (!canonicalUrl) return;
+  const conversationId = conversationIdFromUrl(canonicalUrl);
+  if (!conversationId) return;
   const chats = await getLocal<UnitChatMap>(STORAGE_KEYS.unitChats, {});
   const next = Object.fromEntries(Object.entries(chats).filter(([mappedUnitId, mappedUrl]) => (
-    mappedUnitId === unitId || canonicalConversationUrl(mappedUrl) !== canonicalUrl
+    mappedUnitId === unitId || conversationIdFromUrl(mappedUrl) !== conversationId
   )));
   if (next[unitId] === canonicalUrl && Object.keys(next).length === Object.keys(chats).length) {
     await clearProvisionalUnitTab(unitId);
@@ -618,7 +610,11 @@ async function handleChatOperationEvent(event: ChatOperationEvent, sender: chrom
     } else {
       next = transitionOperation(state, event.phase, new Date().toISOString(), { repairAttempt: event.repairAttempt ?? state.repairAttempt });
     }
-    await chrome.storage.session.set({ [STORAGE_KEYS.queues]: queues, [STORAGE_KEYS.operationStates]: { ...states, [state.operationId]: next } });
+    await chrome.storage.session.set({
+      [STORAGE_KEYS.queues]: queues,
+      [STORAGE_KEYS.operationStates]: { ...states, [state.operationId]: next },
+      ...(event.projectWarning ? { [STORAGE_KEYS.lastError]: event.projectWarning } : {}),
+    });
     return { unitId: state.unitId, terminal: isTerminalPhase(next.phase), currentUrl: event.currentUrl };
   });
   if (!transition) return;
@@ -654,8 +650,7 @@ async function handleChatTabUrlChange(tabId: number, url: string): Promise<void>
   if (!isConversationUrl(url)) return;
   const chats = await getLocal<UnitChatMap>(STORAGE_KEYS.unitChats, {});
   const mappedUrl = canonicalConversationUrl(chats[state.unitId]);
-  const currentUrl = canonicalConversationUrl(url);
-  if (mappedUrl && mappedUrl !== currentUrl) {
+  if (mappedUrl && !sameConversation(mappedUrl, url)) {
     await failOperation(state.operationId, extensionError("CHATGPT_TAB_CHANGED", "The ChatGPT conversation changed before Meoi received its result."));
     return;
   }

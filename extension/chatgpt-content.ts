@@ -1,4 +1,8 @@
 import { buildResultRepairPrompt, type ExtensionError } from "../src/integration/protocol";
+import {
+  MEOI_CHATGPT_PROJECT_NAME,
+  placeCurrentConversationInProject,
+} from "./chatgpt-project";
 import type { ChatCommandResponse, ChatOperationEvent, QueuedOperation } from "./shared";
 import { extensionError } from "./shared";
 import {
@@ -25,6 +29,7 @@ const OPERATION_TIMEOUT_MS = 10 * 60_000;
 const RESPONSE_STABLE_MS = 1_200;
 const OBSERVER_POLL_MS = 200;
 const EVENT_DELIVERY_GRACE_MS = 10_000;
+const PROJECT_PLACEMENT_TIMEOUT_MS = 8_000;
 const COMPOSER_PAYLOAD_PREFIX = "meoi-composer-payload-";
 const COMPOSER_READY_ATTRIBUTE = "data-meoi-main-bridge";
 const COMPOSER_RESULT_ATTRIBUTE = "data-meoi-composer-result";
@@ -362,6 +367,27 @@ function operationFailure(error: unknown): ExtensionError {
   return extensionError("SEND_FAILED", error instanceof Error ? error.message : "ChatGPT operation failed.");
 }
 
+async function projectPlacementWarning(deadline: number): Promise<ExtensionError | undefined> {
+  if (!conversationIdFromUrl(window.location.href)) return undefined;
+  const placementDeadline = Math.min(deadline, Date.now() + PROJECT_PLACEMENT_TIMEOUT_MS);
+  try {
+    await placeCurrentConversationInProject(MEOI_CHATGPT_PROJECT_NAME, placementDeadline, {
+      root: document,
+      currentUrl: () => window.location.href,
+      now: () => Date.now(),
+      wait: waitForMutationOrDelay,
+    });
+    return undefined;
+  } catch (error) {
+    return extensionError(
+      "UNSUPPORTED_CHATGPT_UI",
+      error instanceof Error
+        ? `${error.message} The ChatGPT result was still returned to Meoi.`
+        : `Meoi could not move this chat into the ChatGPT project "${MEOI_CHATGPT_PROJECT_NAME}". The result was still returned.`,
+    );
+  }
+}
+
 async function runTrackedOperation(operation: QueuedOperation): Promise<void> {
   const deadline = operation.deadlineAt ?? Date.now() + OPERATION_TIMEOUT_MS;
   const conversation: ConversationLock = { id: conversationIdFromUrl(window.location.href) };
@@ -392,12 +418,14 @@ async function runTrackedOperation(operation: QueuedOperation): Promise<void> {
         `ChatGPT did not return a valid Meoi result after ${repairAttemptNumbers().length} repair attempts (${resultParseFailureReason(parsed)}).`,
       ));
     }
+    const projectWarning = await projectPlacementWarning(deadline);
     await emitOperationEvent({
       operationId: operation.operationId,
       unitId: operation.unitId,
       phase: "completed",
       repairAttempt: completedRepairAttempt,
       result: parsed.result,
+      projectWarning,
       currentUrl: window.location.href,
     }, deadline);
   } catch (error) {
