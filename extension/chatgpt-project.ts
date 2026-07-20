@@ -1,6 +1,7 @@
 import { conversationIdFromUrl } from "./chatgpt-url";
 
 export const MEOI_CHATGPT_PROJECT_NAME = "Meoing";
+export const CHATGPT_PROJECT_PLACEMENT_TIMEOUT_MS = 30_000;
 
 export interface ProjectPlacementEnvironment {
   root: Document;

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  CHATGPT_PROJECT_PLACEMENT_TIMEOUT_MS,
   MEOI_CHATGPT_PROJECT_NAME,
   currentChatProjectName,
   exactMenuItems,
@@ -53,6 +54,10 @@ beforeEach(() => {
 });
 
 describe("ChatGPT project placement", () => {
+  it("allows enough time for ChatGPT's menu and project-creation transitions", () => {
+    expect(CHATGPT_PROJECT_PLACEMENT_TIMEOUT_MS).toBe(30_000);
+  });
+
   it("detects exact project markers and rejects ambiguous menu choices", () => {
     expect(currentChatProjectName()).toBe("Other");
     expect(findConversationOptionsButton()).toBe(document.querySelector("button"));

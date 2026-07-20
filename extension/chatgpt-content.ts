@@ -1,5 +1,6 @@
 import { buildResultRepairPrompt, type ExtensionError } from "../src/integration/protocol";
 import {
+  CHATGPT_PROJECT_PLACEMENT_TIMEOUT_MS,
   MEOI_CHATGPT_PROJECT_NAME,
   placeCurrentConversationInProject,
 } from "./chatgpt-project";
@@ -29,7 +30,6 @@ const OPERATION_TIMEOUT_MS = 10 * 60_000;
 const RESPONSE_STABLE_MS = 1_200;
 const OBSERVER_POLL_MS = 200;
 const EVENT_DELIVERY_GRACE_MS = 10_000;
-const PROJECT_PLACEMENT_TIMEOUT_MS = 8_000;
 const COMPOSER_PAYLOAD_PREFIX = "meoi-composer-payload-";
 const COMPOSER_READY_ATTRIBUTE = "data-meoi-main-bridge";
 const COMPOSER_RESULT_ATTRIBUTE = "data-meoi-composer-result";
@@ -397,7 +397,7 @@ function operationFailure(error: unknown): ExtensionError {
 
 async function projectPlacementWarning(deadline: number): Promise<ExtensionError | undefined> {
   if (!conversationIdFromUrl(window.location.href)) return undefined;
-  const placementDeadline = Math.min(deadline, Date.now() + PROJECT_PLACEMENT_TIMEOUT_MS);
+  const placementDeadline = Math.min(deadline, Date.now() + CHATGPT_PROJECT_PLACEMENT_TIMEOUT_MS);
   try {
     await placeCurrentConversationInProject(MEOI_CHATGPT_PROJECT_NAME, placementDeadline, {
       root: document,
