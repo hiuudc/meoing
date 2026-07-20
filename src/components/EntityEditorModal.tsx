@@ -17,6 +17,7 @@ interface EntityEditorModalProps {
   editor: EditorState | null;
   onClose: () => void;
   onSubmit: (value: Record<string, string>) => void;
+  onAccentPreview: (accent: string | null) => void;
 }
 
 const accentOptions = ["#8B7CF6", "#E7AD67", "#72BDA3", "#EB7198", "#69A9E8"];
@@ -24,7 +25,7 @@ const ACCENT_PICKER_WIDTH = 274;
 const ACCENT_PICKER_HEIGHT = 258;
 const ACCENT_PICKER_MARGIN = 8;
 
-export function EntityEditorModal({ editor, onClose, onSubmit }: EntityEditorModalProps) {
+export function EntityEditorModal({ editor, onClose, onSubmit, onAccentPreview }: EntityEditorModalProps) {
   const [retainedEditor, setRetainedEditor] = useState(editor);
   const [fields, setFields] = useState<Record<string, string>>({});
   const [accentInput, setAccentInput] = useState(accentOptions[0]);
@@ -53,20 +54,24 @@ export function EntityEditorModal({ editor, onClose, onSubmit }: EntityEditorMod
         accent,
       });
       setAccentInput(accent);
+      onAccentPreview(accent);
     } else if (activeEditor.type === "unit") {
+      onAccentPreview(null);
       setFields({
         name: cleanUnitName(activeEditor.value?.name ?? ""),
         description: activeEditor.value?.description ?? "",
         instructionOverride: activeEditor.value?.instructionOverride ?? "",
       });
     } else if (activeEditor.type === "document") {
+      onAccentPreview(null);
       setFields({ title: activeEditor.value?.title ?? "", documentType: activeEditor.value?.type ?? "Notes", body: activeEditor.value?.body ?? "" });
     } else {
+      onAccentPreview(null);
       setFields({ text: activeEditor.value?.text ?? "", translation: activeEditor.value?.translation ?? "", notes: activeEditor.value?.notes ?? "" });
     }
     setAccentPickerOpen(false);
     setError("");
-  }, [activeEditor]);
+  }, [activeEditor, onAccentPreview]);
 
   const title = activeEditor ? getTitle(activeEditor) : "";
   const activeAccent = normalizeHex(fields.accent ?? accentOptions[0], accentOptions[0]);
@@ -80,12 +85,17 @@ export function EntityEditorModal({ editor, onClose, onSubmit }: EntityEditorMod
     const accent = normalizeHex(value, activeAccent);
     updateField("accent", accent);
     setAccentInput(accent);
+    onAccentPreview(accent);
   }
 
   function updateAccentInput(value: string) {
     const nextValue = value.toUpperCase();
     setAccentInput(nextValue);
-    if (isValidHex(nextValue)) updateField("accent", normalizeHex(nextValue));
+    if (isValidHex(nextValue)) {
+      const accent = normalizeHex(nextValue);
+      updateField("accent", accent);
+      onAccentPreview(accent);
+    }
   }
 
   const positionAccentPicker = useCallback(() => {

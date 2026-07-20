@@ -9,6 +9,7 @@ import type {
   WorkspaceState,
 } from "./types";
 import { normalizeLearningProfile } from "./learning/profile";
+import { normalizeUnitQuestionSettings } from "./learning/questionSettings";
 
 export const STORAGE_KEY = "meoi.workspace.v1";
 export const STORAGE_VERSION = 1;
@@ -401,10 +402,13 @@ export function loadWorkspace(storage?: Pick<Storage, "getItem">): WorkspaceStat
       Object.entries(parsed.units ?? {}).map(([id, unit]) => [
         id,
         (() => {
-          const { instructionOverride, ...rest } = unit ?? {};
+          const { instructionOverride, questionSettings, ...rest } = unit ?? {};
           return {
             ...rest,
             ...(typeof instructionOverride === "string" ? { instructionOverride } : {}),
+            ...(questionSettings && typeof questionSettings === "object" && !Array.isArray(questionSettings)
+              ? { questionSettings: normalizeUnitQuestionSettings(questionSettings) }
+              : {}),
           };
         })(),
       ]),

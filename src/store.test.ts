@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   COLOR_THEME_PRESETS,
+  accentStyle,
   addThemeStop,
   cloneTheme,
+  contrastTextColor,
   hexToHsv,
   hsvToHex,
   isValidHex,
@@ -177,6 +179,43 @@ describe("persistence", () => {
 
     expect(loadWorkspace(storage).sidebarWidth).toBe(DEFAULT_SIDEBAR_WIDTH);
   });
+
+  it("loads legacy units without settings and normalizes optional question settings in version 1", () => {
+    const state = createSeedState();
+    const unitId = state.unitOrder[0];
+    const storage = {
+      getItem: () => JSON.stringify({
+        ...state,
+        units: {
+          ...state.units,
+          [unitId]: {
+            ...state.units[unitId],
+            questionSettings: {
+              enabledFormats: ["singleChoice", "selectBlank", "translation", "unknown"],
+              customTemplates: [{
+                id: "daily-greeting",
+                name: "  Daily greeting  ",
+                baseFormat: "selectBlank",
+                guidance: "  Use one greeting.  ",
+              }],
+            },
+          },
+        },
+      }),
+    };
+
+    const loaded = loadWorkspace(storage);
+    expect(loaded.version).toBe(1);
+    expect(loaded.units[unitId].questionSettings?.enabledFormats).toEqual(["singleChoice", "selectBlank", "translation"]);
+    expect(loaded.units[unitId].questionSettings?.customTemplates[0]).toMatchObject({
+      name: "Daily greeting",
+      guidance: "Use one greeting.",
+      enabled: true,
+    });
+
+    const legacyStorage = { getItem: () => JSON.stringify(state) };
+    expect(loadWorkspace(legacyStorage).units[unitId].questionSettings).toBeUndefined();
+  });
 });
 
 describe("unit names", () => {
@@ -244,6 +283,19 @@ describe("theme drafts", () => {
     expect(neutral["--bg-main"]).not.toContain("linear-gradient");
     expect(neutral["--accent"]).toBe("#655BF5");
     expect(collectionAccent["--accent"]).toBe("#123456");
+  });
+
+  it("derives readable text and foreground colors for extreme accents", () => {
+    const lightTheme = selectBaseTheme(DEFAULT_THEME, "light");
+    const lightAccent = accentStyle(lightTheme, "#FFFFFF");
+    const darkAccent = accentStyle(selectBaseTheme(DEFAULT_THEME, "black"), "#FFFFFF");
+
+    expect(contrastTextColor("#FFFFFF")).toBe("#17171C");
+    expect(contrastTextColor("#000000")).toBe("#FFFFFF");
+    expect(lightAccent["--accent"]).toBe("#FFFFFF");
+    expect(lightAccent["--accent-contrast"]).toBe("#17171C");
+    expect(lightAccent["--accent-readable"]).not.toBe("#FFFFFF");
+    expect(darkAccent["--accent-readable"]).toBe("#FFFFFF");
   });
 
   it("applies color presets as canonical dusk themes while retaining preferences", () => {

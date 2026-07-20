@@ -8,8 +8,10 @@ import { LearningWorkspace } from "./components/LearningWorkspace";
 import { pruneStoredLessonsFromStorage } from "./integration/learningStorage";
 import { ThemeCustomizerDrawer } from "./components/ThemeCustomizerDrawer";
 import { WorkspaceSidebar } from "./components/WorkspaceSidebar";
+import { UnitSettingsModal, type UnitSettingsRequest } from "./components/UnitSettingsModal";
+import { normalizeLearningProfile } from "./learning/profile";
 import { loadWorkspace, makeId, saveWorkspace, workspaceReducer } from "./store";
-import { cloneTheme, reconcileThemeSelection, themeStyle } from "./theme";
+import { accentStyle, cloneTheme, reconcileThemeSelection, themeStyle } from "./theme";
 import type { Collection, Document, StudyItem, StudyKind, Unit } from "./types";
 import { cleanUnitName } from "./unit";
 import type { WorkspaceMode } from "./components/WorkspaceModeSwitch";
@@ -17,6 +19,7 @@ import type { WorkspaceMode } from "./components/WorkspaceModeSwitch";
 export function App() {
   const [state, dispatch] = useReducer(workspaceReducer, undefined, () => loadWorkspace(window.localStorage));
   const [editor, setEditor] = useState<EditorState | null>(null);
+  const [collectionAccentPreview, setCollectionAccentPreview] = useState<string | null>(null);
   const [appearanceDraft, setAppearanceDraft] = useState<ReturnType<typeof cloneTheme> | null>(null);
   const [themeDraft, setThemeDraft] = useState<ReturnType<typeof cloneTheme> | null>(null);
   const [pendingAppearanceDraft, setPendingAppearanceDraft] = useState<ReturnType<typeof cloneTheme> | null>(null);
@@ -24,6 +27,7 @@ export function App() {
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const [sidebarWidthDraft, setSidebarWidthDraft] = useState<number | null>(null);
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>("library");
+  const [unitSettingsRequest, setUnitSettingsRequest] = useState<UnitSettingsRequest | null>(null);
 
   useEffect(() => {
     saveWorkspace(state, window.localStorage);
@@ -34,13 +38,13 @@ export function App() {
   }, [state.unitOrder]);
 
   useEffect(() => {
-    if (!mobileNavigationOpen || editor || appearanceDraft || themeDraft || pendingAppearanceDraft || pendingThemeDraft) return;
+    if (!mobileNavigationOpen || editor || unitSettingsRequest || appearanceDraft || themeDraft || pendingAppearanceDraft || pendingThemeDraft) return;
     function onEscape(event: KeyboardEvent) {
       if (event.key === "Escape") setMobileNavigationOpen(false);
     }
     window.addEventListener("keydown", onEscape);
     return () => window.removeEventListener("keydown", onEscape);
-  }, [appearanceDraft, editor, mobileNavigationOpen, pendingAppearanceDraft, pendingThemeDraft, themeDraft]);
+  }, [appearanceDraft, editor, mobileNavigationOpen, pendingAppearanceDraft, pendingThemeDraft, themeDraft, unitSettingsRequest]);
 
   const collections = useMemo(
     () => state.collectionOrder.map((id) => state.collections[id]).filter(Boolean),
@@ -77,8 +81,18 @@ export function App() {
 
   function createContent() {
     if (!activeUnit) return;
-    if (state.activeKind === "document") setEditor({ type: "document", unitId: activeUnit.id });
-    else setEditor({ type: "studyItem", unitId: activeUnit.id, kind: state.activeKind });
+    if (state.activeKind === "document") openEditor({ type: "document", unitId: activeUnit.id });
+    else openEditor({ type: "studyItem", unitId: activeUnit.id, kind: state.activeKind });
+  }
+
+  function openEditor(nextEditor: EditorState) {
+    setCollectionAccentPreview(null);
+    setEditor(nextEditor);
+  }
+
+  function closeEditor() {
+    setCollectionAccentPreview(null);
+    setEditor(null);
   }
 
   function submitEditor(fields: Record<string, string>) {
@@ -99,6 +113,7 @@ export function App() {
         name: fields.name.trim(),
         description: fields.description.trim(),
         instructionOverride: fields.instructionOverride.trim(),
+        questionSettings: editor.value?.questionSettings,
       };
       dispatch({ type: editor.value ? "updateUnit" : "createUnit", unit });
     } else if (editor.type === "document") {
@@ -123,7 +138,7 @@ export function App() {
       };
       dispatch({ type: editor.value ? "updateStudyItem" : "createStudyItem", item });
     }
-    setEditor(null);
+    closeEditor();
   }
 
   function closeMobileNavigation() {
@@ -166,8 +181,10 @@ export function App() {
   }
 
   const sidebarWidth = sidebarWidthDraft ?? state.sidebarWidth;
+  const activeTheme = themeDraft ?? pendingThemeDraft ?? pendingAppearanceDraft ?? appearanceDraft ?? state.theme;
   const shellStyle = {
-    ...themeStyle(themeDraft ?? pendingThemeDraft ?? pendingAppearanceDraft ?? appearanceDraft ?? state.theme, activeCollection.accent),
+    ...themeStyle(activeTheme, activeCollection.accent),
+    ...(collectionAccentPreview ? accentStyle(activeTheme, collectionAccentPreview) : {}),
     "--sidebar-width": `${sidebarWidth}px`,
   } as React.CSSProperties;
 
@@ -176,12 +193,16 @@ export function App() {
       <CollectionRail
         collections={collections}
         activeId={activeCollection.id}
+        accentPreview={collectionAccentPreview && editor?.type === "collection" && editor.value ? {
+          collectionId: editor.value.id,
+          accent: collectionAccentPreview,
+        } : undefined}
         onSelect={(id) => {
           dispatch({ type: "selectCollection", id });
           closeMobileNavigation();
         }}
-        onCreate={() => setEditor({ type: "collection" })}
-        onEdit={(collection) => setEditor({ type: "collection", value: collection })}
+        onCreate={() => openEditor({ type: "collection" })}
+        onEdit={(collection) => openEditor({ type: "collection", value: collection })}
         onDelete={(collection) => confirmDelete(collection.name, () => dispatch({ type: "deleteCollection", id: collection.id }))}
       />
       <WorkspaceSidebar
@@ -200,8 +221,9 @@ export function App() {
           dispatch({ type: "selectUnit", id });
           closeMobileNavigation();
         }}
-        onCreateUnit={() => setEditor({ type: "unit", collectionId: activeCollection.id })}
-        onEditUnit={(unit) => setEditor({ type: "unit", value: unit, collectionId: activeCollection.id })}
+        onCreateUnit={() => openEditor({ type: "unit", collectionId: activeCollection.id })}
+        onEditUnit={(unit) => setUnitSettingsRequest({ unit, initialTab: "general" })}
+        onOpenUnitQuestions={(unit) => setUnitSettingsRequest({ unit, initialTab: "questions" })}
         onDeleteUnit={(unit) => confirmDelete(cleanUnitName(unit.name), () => dispatch({ type: "deleteUnit", id: unit.id }))}
         onMoveUnit={(id, targetId, placement) => dispatch({ type: "moveUnit", id, targetId, placement })}
         onOpenAppearance={() => setAppearanceDraft(cloneTheme(state.theme))}
@@ -230,9 +252,9 @@ export function App() {
         onOpenMobileNavigation={() => setMobileNavigationOpen(true)}
         onSelectKind={(kind) => dispatch({ type: "selectKind", kind })}
         onCreate={createContent}
-        onEditDocument={(document) => setEditor({ type: "document", value: document, unitId: document.unitId })}
+        onEditDocument={(document) => openEditor({ type: "document", value: document, unitId: document.unitId })}
         onDeleteDocument={(document) => confirmDelete(document.title, () => dispatch({ type: "deleteDocument", id: document.id }))}
-        onEditStudyItem={(item) => setEditor({ type: "studyItem", value: item, unitId: item.unitId, kind: item.kind as StudyKind })}
+        onEditStudyItem={(item) => openEditor({ type: "studyItem", value: item, unitId: item.unitId, kind: item.kind as StudyKind })}
         onDeleteStudyItem={(item) => confirmDelete(item.text, () => dispatch({ type: "deleteStudyItem", id: item.id }))}
         mode={workspaceMode}
         onModeChange={setWorkspaceMode}
@@ -253,7 +275,21 @@ export function App() {
           })}
         />
       )}
-      <EntityEditorModal editor={editor} onClose={() => setEditor(null)} onSubmit={submitEditor} />
+      <EntityEditorModal
+        editor={editor}
+        onClose={closeEditor}
+        onSubmit={submitEditor}
+        onAccentPreview={setCollectionAccentPreview}
+      />
+      <UnitSettingsModal
+        request={unitSettingsRequest}
+        profile={normalizeLearningProfile(activeCollection.learningProfile)}
+        onClose={() => setUnitSettingsRequest(null)}
+        onSave={(unit) => {
+          dispatch({ type: "updateUnit", unit });
+          setUnitSettingsRequest(null);
+        }}
+      />
       <AppearanceModal
         open={Boolean(appearanceDraft)}
         draft={appearanceDraft}

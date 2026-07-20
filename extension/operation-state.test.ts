@@ -15,6 +15,7 @@ import {
   transitionOperation,
 } from "./operation-state";
 import type { PersistedOperationState, QueuedOperation } from "./shared";
+import { QUESTION_FORMATS } from "../src/learning/types";
 
 function operation(operationId = "op-1", unitId = "unit-1"): QueuedOperation {
   return {
@@ -28,6 +29,8 @@ function operation(operationId = "op-1", unitId = "unit-1"): QueuedOperation {
       level: "elementary",
       questionCount: 10,
       speaking: true,
+      allowedFormats: [...QUESTION_FORMATS],
+      requiredTemplates: [],
     },
     queuedAt: "2026-07-17T00:00:00.000Z",
   };

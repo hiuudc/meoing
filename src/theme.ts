@@ -71,6 +71,9 @@ export interface HsvColor {
 }
 
 const FALLBACK_COLOR = "#655BF5";
+const LIGHT_CONTRAST_COLOR = "#FFFFFF";
+const DARK_CONTRAST_COLOR = "#17171C";
+const MIN_TEXT_CONTRAST = 4.5;
 const COLOR_THEME_DIRECTION = 135;
 const COLOR_THEME_INTENSITY = 74;
 
@@ -108,6 +111,58 @@ export function hexToRgb(value: string): RgbColor {
     g: Number.parseInt(hex.slice(2, 4), 16),
     b: Number.parseInt(hex.slice(4, 6), 16),
   };
+}
+
+function relativeLuminance(value: string): number {
+  const channels = Object.values(hexToRgb(value)).map((channel) => {
+    const normalized = channel / 255;
+    return normalized <= 0.04045
+      ? normalized / 12.92
+      : ((normalized + 0.055) / 1.055) ** 2.4;
+  });
+  return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+}
+
+function contrastRatio(first: string, second: string): number {
+  const firstLuminance = relativeLuminance(first);
+  const secondLuminance = relativeLuminance(second);
+  const lighter = Math.max(firstLuminance, secondLuminance);
+  const darker = Math.min(firstLuminance, secondLuminance);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function mixHex(first: string, second: string, amount: number): string {
+  const start = hexToRgb(first);
+  const end = hexToRgb(second);
+  return rgbToHex({
+    r: start.r + (end.r - start.r) * amount,
+    g: start.g + (end.g - start.g) * amount,
+    b: start.b + (end.b - start.b) * amount,
+  });
+}
+
+export function contrastTextColor(background: string): string {
+  const color = normalizeHex(background);
+  return contrastRatio(color, LIGHT_CONTRAST_COLOR) >= contrastRatio(color, DARK_CONTRAST_COLOR)
+    ? LIGHT_CONTRAST_COLOR
+    : DARK_CONTRAST_COLOR;
+}
+
+function readableAccentColor(accent: string, background: string, fallback: string): string {
+  const color = normalizeHex(accent);
+  if (contrastRatio(color, background) >= MIN_TEXT_CONTRAST) return color;
+
+  for (let step = 1; step <= 20; step += 1) {
+    const candidate = mixHex(color, fallback, step / 20);
+    if (contrastRatio(candidate, background) >= MIN_TEXT_CONTRAST) return candidate;
+  }
+  return normalizeHex(fallback);
+}
+
+function gradientContrastTextColor(colors: string[]): string {
+  const lightContrast = Math.min(...colors.map((color) => contrastRatio(color, LIGHT_CONTRAST_COLOR)));
+  const darkContrast = Math.min(...colors.map((color) => contrastRatio(color, DARK_CONTRAST_COLOR)));
+  return lightContrast >= darkContrast ? LIGHT_CONTRAST_COLOR : DARK_CONTRAST_COLOR;
 }
 
 export function rgbToHex({ r, g, b }: RgbColor): string {
@@ -261,6 +316,17 @@ export function surpriseTheme(theme: ThemeConfig, random = Math.random): ThemeCo
   });
 }
 
+export function accentStyle(theme: ThemeConfig, value: string): ThemeStyle {
+  const surface = BASE_SURFACES[theme.base];
+  const accent = normalizeHex(value);
+  return {
+    "--accent": accent,
+    "--accent-soft": `${accent}32`,
+    "--accent-contrast": contrastTextColor(accent),
+    "--accent-readable": readableAccentColor(accent, surface.main, surface.text),
+  };
+}
+
 export function themeStyle(theme: ThemeConfig, collectionAccent?: string): ThemeStyle {
   const surface = BASE_SURFACES[theme.base];
   const colors = theme.colorStops.length ? theme.colorStops.map((stop) => normalizeHex(stop)) : [FALLBACK_COLOR];
@@ -295,10 +361,10 @@ export function themeStyle(theme: ThemeConfig, collectionAccent?: string): Theme
     "--text-secondary": surface.secondary,
     "--text-muted": surface.muted,
     "--border": surface.border,
-    "--accent": accent,
-    "--accent-soft": `${accent}32`,
+    ...accentStyle(theme, accent),
     "--highlight": "#E7AD67",
     "--theme-gradient": `linear-gradient(${theme.gradientDirection}deg, ${stops})`,
+    "--theme-gradient-contrast": gradientContrastTextColor(colors),
     "--theme-intensity": `${theme.intensity}%`,
   };
 }

@@ -98,6 +98,11 @@ export function gradeAnswer(question: LessonQuestion, answer: QuestionAnswer): G
       return localResult(question, typeof answer === "boolean" && answer === question.correct ? 1 : 0, question.correct ? "True" : "False");
     case "fillBlank":
       return localResult(question, matchesAccepted(asString(answer), question.acceptedAnswers, question.match) ? 1 : 0, question.acceptedAnswers[0]);
+    case "selectBlank": {
+      const actual = asString(answer);
+      const expected = question.options.find((option) => option.id === question.correctOptionId)?.label ?? question.correctOptionId;
+      return localResult(question, actual === question.correctOptionId ? 1 : 0, expected);
+    }
     case "multiCloze": {
       const answers = asMap(answer);
       const correct = question.blanks.filter((blank) => matchesAccepted(answers[blank.id] ?? "", blank.acceptedAnswers, question.match)).length;

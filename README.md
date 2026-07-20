@@ -41,12 +41,12 @@ ChatGPT account quotas still apply. If a response fails validation, the extensio
 
 ## Result contract
 
-The page and extension use wire protocol v2. A successful coaching result looks like this:
+The page and extension use wire protocol v3. A successful coaching result looks like this:
 
 ```json
 {
   "type": "meoi.operation.result",
-  "protocolVersion": 2,
+  "protocolVersion": 3,
   "operationId": "...",
   "kind": "coaching",
   "outcome": "completed",
@@ -60,7 +60,7 @@ Supported text operations:
 - `evaluate_answer` → `result.evaluation`
 - `coaching` → `result.coachingReply`
 
-The parser accepts raw JSON or exactly one standalone `json` fence, rejects surrounding commentary and extra fields, and limits responses to 1 MiB. Lesson and evaluation objects are deeply validated before they leave the ChatGPT tab. A lesson must also match the expected unit, language, level, exact question count, grading modes, and speaking setting.
+The parser accepts raw JSON or exactly one standalone `json` fence, rejects surrounding commentary and extra fields, and limits responses to 1 MiB. Lesson and evaluation objects are deeply validated before they leave the ChatGPT tab. A lesson must also match the expected unit, language, level, exact question count, enabled formats, required custom blueprints, grading modes, and speaking setting.
 
 Audio is not uploaded. Speaking evaluation sends only transcript and timing metadata and does not claim pronunciation assessment. The Voice button opens the unit's conversation but does not sync or save a Voice session.
 

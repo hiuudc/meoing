@@ -1,11 +1,16 @@
 import { Compass, FolderPlus, LibraryBig, Pencil, Plus, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { contrastTextColor } from "../theme";
 import type { Collection } from "../types";
 import { ContextMenu } from "./ContextMenu";
 
 interface CollectionRailProps {
   collections: Collection[];
   activeId: string;
+  accentPreview?: {
+    collectionId: string;
+    accent: string;
+  };
   onSelect: (id: string) => void;
   onCreate: () => void;
   onEdit: (collection: Collection) => void;
@@ -35,6 +40,7 @@ const COLLECTION_LONG_PRESS_MOVEMENT = 8;
 export function CollectionRail({
   collections,
   activeId,
+  accentPreview,
   onSelect,
   onCreate,
   onEdit,
@@ -110,11 +116,17 @@ export function CollectionRail({
       </button>
       <span className="rail-divider" />
       <div className="collection-stack">
-        {collections.map((collection) => (
-          <div className="rail-item-wrap" key={collection.id}>
+        {collections.map((collection) => {
+          const accent = accentPreview?.collectionId === collection.id
+            ? accentPreview.accent
+            : collection.accent;
+          return <div className="rail-item-wrap" key={collection.id}>
             <button
               className={`collection-button ${activeId === collection.id ? "is-active" : ""}`}
-              style={{ "--collection-color": collection.accent } as React.CSSProperties}
+              style={{
+                "--collection-color": accent,
+                "--collection-contrast": contrastTextColor(accent),
+              } as React.CSSProperties}
               type="button"
               onClick={() => {
                 if (suppressCollectionClickRef.current === collection.id) {
@@ -138,8 +150,8 @@ export function CollectionRail({
             >
               <span>{collection.icon}</span>
             </button>
-          </div>
-        ))}
+          </div>;
+        })}
       </div>
       <div className="rail-bottom-actions">
         <button className="rail-action" type="button" aria-label="Add collection" onClick={onCreate}>

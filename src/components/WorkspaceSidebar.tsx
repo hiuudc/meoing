@@ -39,6 +39,7 @@ interface WorkspaceSidebarProps {
   onSelectUnit: (id: string) => void;
   onCreateUnit: () => void;
   onEditUnit: (unit: Unit) => void;
+  onOpenUnitQuestions: (unit: Unit) => void;
   onDeleteUnit: (unit: Unit) => void;
   onMoveUnit: (id: string, targetId: string, placement: "before" | "after") => void;
   onOpenAppearance: () => void;
@@ -79,6 +80,7 @@ export function WorkspaceSidebar({
   onSelectUnit,
   onCreateUnit,
   onEditUnit,
+  onOpenUnitQuestions,
   onDeleteUnit,
   onMoveUnit,
   onOpenAppearance,
@@ -358,9 +360,17 @@ export function WorkspaceSidebar({
                     >
                       <span>{cleanName}</span>
                     </button>
-                    <span className="unit-settings-placeholder" aria-hidden="true">
+                    <button
+                      className="unit-settings-placeholder"
+                      type="button"
+                      aria-label={`Open question settings for ${cleanName}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onOpenUnitQuestions(unit);
+                      }}
+                    >
                       <Settings size={14} />
-                    </span>
+                    </button>
                     <button
                       className="unit-overflow-button"
                       type="button"

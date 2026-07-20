@@ -1,0 +1,358 @@
+import type { LessonQuestion, QuestionFormat, QuestionPresentationSettings } from "./types";
+
+export type QuestionFormatBadge = "local" | "ai" | "speaking";
+
+export interface QuestionFormatDefinition {
+  id: QuestionFormat;
+  label: string;
+  description: string;
+  badge: QuestionFormatBadge;
+  evaluationMode: "local" | "ai";
+  presentation: Record<keyof QuestionPresentationSettings, boolean>;
+  sample: LessonQuestion;
+}
+
+const localBase = {
+  explanation: "This sample uses the answer key stored with the question.",
+  hint: "Use the lesson context to choose the best answer.",
+  evaluationMode: "local" as const,
+};
+
+const aiBase = {
+  explanation: "ChatGPT evaluates meaning and explains the result.",
+  hint: "Focus on meaning before polishing the wording.",
+  evaluationMode: "ai" as const,
+};
+
+const presentation = {
+  readQuestion: true,
+  readAnswers: true,
+  wordTooltips: true,
+};
+
+export const QUESTION_FORMAT_REGISTRY = {
+  singleChoice: {
+    id: "singleChoice",
+    label: "Single choice",
+    description: "Choose one answer from a short list.",
+    badge: "local",
+    evaluationMode: "local",
+    presentation,
+    sample: {
+      ...localBase,
+      id: "preview-single-choice",
+      type: "singleChoice",
+      prompt: "Choose the greeting used in the morning.",
+      options: [{ id: "a", label: "Good morning" }, { id: "b", label: "Good night" }, { id: "c", label: "Goodbye" }],
+      correctOptionId: "a",
+    },
+  },
+  multipleChoice: {
+    id: "multipleChoice",
+    label: "Multiple choice",
+    description: "Select every answer that applies.",
+    badge: "local",
+    evaluationMode: "local",
+    presentation,
+    sample: {
+      ...localBase,
+      id: "preview-multiple-choice",
+      type: "multipleChoice",
+      prompt: "Select the polite greetings.",
+      options: [{ id: "a", label: "Hello" }, { id: "b", label: "Good morning" }, { id: "c", label: "Move" }],
+      correctOptionIds: ["a", "b"],
+    },
+  },
+  trueFalse: {
+    id: "trueFalse",
+    label: "True or false",
+    description: "Judge whether a statement is accurate.",
+    badge: "local",
+    evaluationMode: "local",
+    presentation,
+    sample: {
+      ...localBase,
+      id: "preview-true-false",
+      type: "trueFalse",
+      prompt: "Is this statement correct?",
+      statement: "Good morning is a greeting.",
+      correct: true,
+    },
+  },
+  fillBlank: {
+    id: "fillBlank",
+    label: "Fill in the blank",
+    description: "Type the missing word or phrase.",
+    badge: "local",
+    evaluationMode: "local",
+    presentation,
+    sample: {
+      ...localBase,
+      id: "preview-fill-blank",
+      type: "fillBlank",
+      prompt: "Complete the greeting.",
+      template: "Good ___.",
+      acceptedAnswers: ["morning"],
+      match: { ignorePunctuation: true },
+    },
+  },
+  selectBlank: {
+    id: "selectBlank",
+    label: "Select the blank",
+    description: "Choose a chip to complete one inline blank.",
+    badge: "local",
+    evaluationMode: "local",
+    presentation,
+    sample: {
+      ...localBase,
+      id: "preview-select-blank",
+      type: "selectBlank",
+      prompt: "Choose the word that completes the sentence.",
+      template: "I drink {{blank}} every morning.",
+      options: [{ id: "tea", label: "tea" }, { id: "read", label: "read" }, { id: "early", label: "early" }],
+      correctOptionId: "tea",
+    },
+  },
+  multiCloze: {
+    id: "multiCloze",
+    label: "Multiple blanks",
+    description: "Complete several blanks in one passage.",
+    badge: "local",
+    evaluationMode: "local",
+    presentation,
+    sample: {
+      ...localBase,
+      id: "preview-multi-cloze",
+      type: "multiCloze",
+      prompt: "Complete both blanks.",
+      template: "___ morning. How ___ you?",
+      blanks: [{ id: "one", acceptedAnswers: ["Good"] }, { id: "two", acceptedAnswers: ["are"] }],
+    },
+  },
+  wordBank: {
+    id: "wordBank",
+    label: "Word bank",
+    description: "Build an answer from a bank of tokens.",
+    badge: "local",
+    evaluationMode: "local",
+    presentation,
+    sample: {
+      ...localBase,
+      id: "preview-word-bank",
+      type: "wordBank",
+      prompt: "Build the sentence.",
+      tokens: [{ id: "i", label: "I" }, { id: "study", label: "study" }, { id: "daily", label: "daily" }],
+      correctOrderIds: ["i", "study", "daily"],
+    },
+  },
+  matching: {
+    id: "matching",
+    label: "Matching",
+    description: "Connect terms with their meanings.",
+    badge: "local",
+    evaluationMode: "local",
+    presentation,
+    sample: {
+      ...localBase,
+      id: "preview-matching",
+      type: "matching",
+      prompt: "Match each greeting.",
+      pairs: [
+        { leftId: "hello", left: "Hello", rightId: "xin-chao", right: "Xin chao" },
+        { leftId: "bye", left: "Goodbye", rightId: "tam-biet", right: "Tam biet" },
+      ],
+    },
+  },
+  reorderTokens: {
+    id: "reorderTokens",
+    label: "Reorder words",
+    description: "Arrange shuffled words into a sentence.",
+    badge: "local",
+    evaluationMode: "local",
+    presentation,
+    sample: {
+      ...localBase,
+      id: "preview-reorder-tokens",
+      type: "reorderTokens",
+      prompt: "Put the words in order.",
+      tokens: [{ id: "morning", label: "morning" }, { id: "good", label: "Good" }],
+      correctOrderIds: ["good", "morning"],
+    },
+  },
+  reorderDialogue: {
+    id: "reorderDialogue",
+    label: "Reorder dialogue",
+    description: "Put conversation turns in a natural order.",
+    badge: "local",
+    evaluationMode: "local",
+    presentation,
+    sample: {
+      ...localBase,
+      id: "preview-reorder-dialogue",
+      type: "reorderDialogue",
+      prompt: "Order the conversation.",
+      turns: [{ id: "hello", label: "Hello!", speaker: "A" }, { id: "reply", label: "Hi, nice to meet you.", speaker: "B" }],
+      correctOrderIds: ["hello", "reply"],
+    },
+  },
+  categorize: {
+    id: "categorize",
+    label: "Categorize",
+    description: "Sort words or phrases into groups.",
+    badge: "local",
+    evaluationMode: "local",
+    presentation,
+    sample: {
+      ...localBase,
+      id: "preview-categorize",
+      type: "categorize",
+      prompt: "Sort each word by type.",
+      categories: [{ id: "noun", label: "Noun" }, { id: "verb", label: "Verb" }],
+      items: [{ id: "book", label: "book", categoryId: "noun" }, { id: "read", label: "read", categoryId: "verb" }],
+    },
+  },
+  translation: {
+    id: "translation",
+    label: "Translation",
+    description: "Translate a source sentence with AI feedback.",
+    badge: "ai",
+    evaluationMode: "ai",
+    presentation,
+    sample: {
+      ...aiBase,
+      id: "preview-translation",
+      type: "translation",
+      prompt: "Translate into English.",
+      sourceText: "Buenos dias.",
+      targetLanguage: "English",
+      referenceAnswer: "Good morning.",
+      rubric: ["Preserve the greeting and time of day."],
+    },
+  },
+  shortAnswer: {
+    id: "shortAnswer",
+    label: "Short answer",
+    description: "Answer briefly and receive semantic feedback.",
+    badge: "ai",
+    evaluationMode: "ai",
+    presentation,
+    sample: {
+      ...aiBase,
+      id: "preview-short-answer",
+      type: "shortAnswer",
+      prompt: "When would you say good morning?",
+      referenceAnswer: "You say it when greeting someone in the morning.",
+      requiredIdeas: ["greeting", "morning"],
+      rubric: ["Answer the question directly."],
+    },
+  },
+  errorCorrection: {
+    id: "errorCorrection",
+    label: "Error correction",
+    description: "Rewrite a sentence to fix its mistake.",
+    badge: "local",
+    evaluationMode: "local",
+    presentation,
+    sample: {
+      ...localBase,
+      id: "preview-error-correction",
+      type: "errorCorrection",
+      prompt: "Correct the sentence.",
+      incorrectText: "She study every day.",
+      acceptedAnswers: ["She studies every day."],
+      match: { ignorePunctuation: true },
+    },
+  },
+  sentenceTransformation: {
+    id: "sentenceTransformation",
+    label: "Sentence transformation",
+    description: "Rewrite a sentence under a stated constraint.",
+    badge: "local",
+    evaluationMode: "local",
+    presentation,
+    sample: {
+      ...localBase,
+      id: "preview-transformation",
+      type: "sentenceTransformation",
+      prompt: "Rewrite the sentence in the past tense.",
+      sourceText: "I study every day.",
+      constraint: "Use the simple past.",
+      acceptedAnswers: ["I studied every day."],
+      match: { ignorePunctuation: true },
+    },
+  },
+  dictation: {
+    id: "dictation",
+    label: "Dictation",
+    description: "Listen, then type what you heard.",
+    badge: "local",
+    evaluationMode: "local",
+    presentation,
+    sample: {
+      ...localBase,
+      id: "preview-dictation",
+      type: "dictation",
+      prompt: "Listen and type the sentence.",
+      transcript: "Good morning. How are you?",
+      acceptedAnswers: ["Good morning. How are you?"],
+      match: { ignorePunctuation: true },
+    },
+  },
+  freeWriting: {
+    id: "freeWriting",
+    label: "Free writing",
+    description: "Write a longer response against an AI rubric.",
+    badge: "ai",
+    evaluationMode: "ai",
+    presentation,
+    sample: {
+      ...aiBase,
+      id: "preview-free-writing",
+      type: "freeWriting",
+      prompt: "Describe your morning routine.",
+      minWords: 20,
+      maxWords: 80,
+      rubric: ["Use clear sequence words.", "Use the target vocabulary."],
+    },
+  },
+  speakingRepeat: {
+    id: "speakingRepeat",
+    label: "Repeat aloud",
+    description: "Repeat a model sentence and receive AI feedback.",
+    badge: "speaking",
+    evaluationMode: "ai",
+    presentation,
+    sample: {
+      ...aiBase,
+      id: "preview-speaking-repeat",
+      type: "speakingRepeat",
+      prompt: "Repeat the sentence aloud.",
+      modelText: "Good morning. It is nice to meet you.",
+      rubric: ["Match the words and natural pacing."],
+    },
+  },
+  speakingRoleplay: {
+    id: "speakingRoleplay",
+    label: "Speaking roleplay",
+    description: "Respond aloud in a practical scenario.",
+    badge: "speaking",
+    evaluationMode: "ai",
+    presentation,
+    sample: {
+      ...aiBase,
+      id: "preview-speaking-roleplay",
+      type: "speakingRoleplay",
+      prompt: "Respond as the customer.",
+      role: "Customer",
+      scenario: "You enter a cafe in the morning.",
+      goal: "Greet the server and order tea.",
+      rubric: ["Complete the greeting and order."],
+    },
+  },
+} satisfies Record<QuestionFormat, QuestionFormatDefinition>;
+
+export const QUESTION_FORMAT_DEFINITIONS = Object.values(QUESTION_FORMAT_REGISTRY);
+
+export function getQuestionFormatDefinition(format: QuestionFormat): QuestionFormatDefinition {
+  return QUESTION_FORMAT_REGISTRY[format];
+}

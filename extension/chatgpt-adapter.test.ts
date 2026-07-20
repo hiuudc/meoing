@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createLocalPreviewLesson } from "../src/learning/demoLesson";
 import { DEFAULT_LEARNING_PROFILE } from "../src/learning/profile";
+import { QUESTION_FORMATS, type LessonQuestion } from "../src/learning/types";
 import type { ChatOperationKind, OperationExpectation } from "../src/integration/protocol";
 import {
   CHAT_RESULT_MAX_BYTES,
@@ -25,7 +26,20 @@ const expectation: OperationExpectation = {
   level: "elementary",
   questionCount: 15,
   speaking: true,
+  allowedFormats: [...QUESTION_FORMATS],
+  requiredTemplates: [],
 };
+
+function generatedPreviewLesson() {
+  const lesson = createLocalPreviewLesson("unit-1", "ignored", DEFAULT_LEARNING_PROFILE);
+  return {
+    ...lesson,
+    questions: lesson.questions.map((question) => {
+      const { presentation: _presentation, ...generatedQuestion } = question;
+      return generatedQuestion as LessonQuestion;
+    }),
+  };
+}
 
 function parse(text: string, operationId = "op-1", kind: ChatOperationKind = "coaching", expected = expectation) {
   return parseChatOperationResult(text, operationId, kind, expected);
@@ -115,10 +129,10 @@ describe("ChatGPT selector adapter", () => {
 });
 
 describe("strict ChatGPT result parsing", () => {
-  const raw = '{"type":"meoi.operation.result","protocolVersion":2,"operationId":"op-1","kind":"coaching","outcome":"completed","result":{"coachingReply":"Try again."}}';
+  const raw = '{"type":"meoi.operation.result","protocolVersion":3,"operationId":"op-1","kind":"coaching","outcome":"completed","result":{"coachingReply":"Try again."}}';
 
   it("parses exact raw JSON or one standalone json fence", () => {
-    expect(parse(raw)).toMatchObject({ ok: true, result: { protocolVersion: 2, operationId: "op-1" } });
+    expect(parse(raw)).toMatchObject({ ok: true, result: { protocolVersion: 3, operationId: "op-1" } });
     expect(parse(`\`\`\`json\n${raw}\n\`\`\``).ok).toBe(true);
     document.body.innerHTML = `<div data-message-author-role="assistant"><pre><code>${raw}</code></pre></div>`;
     expect(parse(assistantTurnText(findAssistantTurns()[0])).ok).toBe(true);
@@ -134,17 +148,17 @@ describe("strict ChatGPT result parsing", () => {
   });
 
   it("accepts needs_source and strict structured failures", () => {
-    const needsSource = '{"type":"meoi.operation.result","protocolVersion":2,"operationId":"op-1","kind":"create_lesson","outcome":"needs_source","result":{"sourceRequest":"Paste a transcript."}}';
-    const failed = '{"type":"meoi.operation.result","protocolVersion":2,"operationId":"op-2","kind":"evaluate_answer","outcome":"failed","error":{"code":"NO_ANSWER","message":"No answer was supplied."}}';
+    const needsSource = '{"type":"meoi.operation.result","protocolVersion":3,"operationId":"op-1","kind":"create_lesson","outcome":"needs_source","result":{"sourceRequest":"Paste a transcript."}}';
+    const failed = '{"type":"meoi.operation.result","protocolVersion":3,"operationId":"op-2","kind":"evaluate_answer","outcome":"failed","error":{"code":"NO_ANSWER","message":"No answer was supplied."}}';
     expect(parse(needsSource, "op-1", "create_lesson").ok).toBe(true);
     expect(parse(failed, "op-2", "evaluate_answer").ok).toBe(true);
   });
 
   it("deeply validates a lesson against the expected unit and profile", () => {
-    const lesson = createLocalPreviewLesson("unit-1", "ignored", DEFAULT_LEARNING_PROFILE);
+    const lesson = generatedPreviewLesson();
     const valid = JSON.stringify({
       type: "meoi.operation.result",
-      protocolVersion: 2,
+      protocolVersion: 3,
       operationId: "op-1",
       kind: "create_lesson",
       outcome: "completed",
@@ -159,6 +173,45 @@ describe("strict ChatGPT result parsing", () => {
     const parsed = parse(wrongUnit, "op-1", "create_lesson");
     expect(parsed).toMatchObject({ ok: false, code: "INVALID_RESULT_SCHEMA" });
     if (!parsed.ok) expect(resultParseFailureReason(parsed)).toContain("lesson.unitId");
+
+    const disabledFormatExpectation = {
+      ...expectation,
+      allowedFormats: QUESTION_FORMATS.filter((format) => format !== "singleChoice"),
+    };
+    expect(parse(valid, "op-1", "create_lesson", disabledFormatExpectation)).toMatchObject({ ok: false, code: "INVALID_RESULT_SCHEMA" });
+
+    const locallyDecorated = createLocalPreviewLesson("unit-1", "ignored", DEFAULT_LEARNING_PROFILE);
+    const untrustedPresentation = JSON.stringify({
+      ...JSON.parse(valid),
+      result: { lesson: locallyDecorated },
+    });
+    expect(parse(untrustedPresentation, "op-1", "create_lesson")).toMatchObject({ ok: false, code: "INVALID_RESULT_SCHEMA" });
+  });
+
+  it("requires known blueprint IDs with their declared base format", () => {
+    const lesson = generatedPreviewLesson();
+    const requiredExpectation: OperationExpectation = {
+      ...expectation,
+      requiredTemplates: [{ id: "blueprint-1", format: "singleChoice" }],
+    };
+    const envelope = (candidate: typeof lesson) => JSON.stringify({
+      type: "meoi.operation.result",
+      protocolVersion: 3,
+      operationId: "op-1",
+      kind: "create_lesson",
+      outcome: "completed",
+      result: { lesson: candidate },
+    });
+    const valid = {
+      ...lesson,
+      questions: lesson.questions.map((question, index) => index === 0 ? { ...question, templateId: "blueprint-1" } : question),
+    };
+    expect(parse(envelope(valid), "op-1", "create_lesson", requiredExpectation).ok).toBe(true);
+    expect(parse(envelope(lesson), "op-1", "create_lesson", requiredExpectation)).toMatchObject({ ok: false, code: "INVALID_RESULT_SCHEMA" });
+    const unknown = { ...valid, questions: valid.questions.map((question, index) => index === 0 ? { ...question, templateId: "unknown" } : question) };
+    expect(parse(envelope(unknown), "op-1", "create_lesson", requiredExpectation)).toMatchObject({ ok: false, code: "INVALID_RESULT_SCHEMA" });
+    const mismatched = { ...lesson, questions: lesson.questions.map((question, index) => index === 1 ? { ...question, templateId: "blueprint-1" } : question) };
+    expect(parse(envelope(mismatched), "op-1", "create_lesson", requiredExpectation)).toMatchObject({ ok: false, code: "INVALID_RESULT_SCHEMA" });
   });
 
   it("deeply validates evaluation fields and rejects extras", () => {
@@ -172,17 +225,17 @@ describe("strict ChatGPT result parsing", () => {
       nextHint: "Check the verb.",
     };
     const envelope = (value: unknown) => JSON.stringify({
-      type: "meoi.operation.result", protocolVersion: 2, operationId: "op-1", kind: "evaluate_answer", outcome: "completed", result: { evaluation: value },
+      type: "meoi.operation.result", protocolVersion: 3, operationId: "op-1", kind: "evaluate_answer", outcome: "completed", result: { evaluation: value },
     });
     expect(parse(envelope(evaluation), "op-1", "evaluate_answer").ok).toBe(true);
     expect(parse(envelope({ ...evaluation, saved: true }), "op-1", "evaluate_answer")).toMatchObject({ ok: false, code: "INVALID_RESULT_SCHEMA" });
   });
 
   it("rejects wrong IDs, kinds, extra envelope fields, and oversized responses", () => {
-    const wrong = '{"type":"meoi.operation.result","protocolVersion":2,"operationId":"op-2","kind":"coaching","outcome":"completed","result":{"coachingReply":"ok"}}';
+    const wrong = '{"type":"meoi.operation.result","protocolVersion":3,"operationId":"op-2","kind":"coaching","outcome":"completed","result":{"coachingReply":"ok"}}';
     expect(parse(wrong, "op-1", "coaching")).toMatchObject({ ok: false, code: "WRONG_OPERATION_ID" });
     expect(parse(wrong, "op-2", "create_lesson")).toMatchObject({ ok: false, code: "WRONG_OPERATION_KIND" });
-    expect(parse('{"type":"meoi.operation.result","protocolVersion":2,"operationId":"op-1","kind":"coaching","outcome":"completed","result":{"coachingReply":"ok"},"extra":true}'))
+    expect(parse('{"type":"meoi.operation.result","protocolVersion":3,"operationId":"op-1","kind":"coaching","outcome":"completed","result":{"coachingReply":"ok"},"extra":true}'))
       .toMatchObject({ ok: false, code: "INVALID_RESULT_SCHEMA" });
     expect(parse("x".repeat(CHAT_RESULT_MAX_BYTES + 1))).toMatchObject({ ok: false, code: "RESPONSE_TOO_LARGE" });
   });

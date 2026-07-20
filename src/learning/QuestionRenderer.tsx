@@ -1,4 +1,5 @@
-import { ArrowDown, ArrowUp, Headphones, Plus, RotateCcw, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Plus, RotateCcw, X } from "lucide-react";
+import type { ReactNode } from "react";
 import type { ChoiceOption, LessonQuestion, QuestionAnswer, SpeakingSubmission } from "./types";
 import { SpeakingRecorder } from "./SpeakingRecorder";
 import { languageTagForSpeech } from "./speech";
@@ -10,6 +11,7 @@ interface QuestionRendererProps {
   disabled?: boolean;
   onChange: (answer: QuestionAnswer) => void;
   onSpeakingChange?: (submission: SpeakingSubmission | null) => void;
+  renderText?: (text: string) => ReactNode;
 }
 
 function stringAnswer(answer: QuestionAnswer): string {
@@ -37,7 +39,7 @@ function TextResponse({ value, onChange, disabled, label, multiline = false }: {
   );
 }
 
-function ReorderResponse({ options, value, onChange, disabled }: { options: ChoiceOption[]; value: string[]; onChange: (value: string[]) => void; disabled?: boolean }) {
+function ReorderResponse({ options, value, onChange, disabled, renderText }: { options: ChoiceOption[]; value: string[]; onChange: (value: string[]) => void; disabled?: boolean; renderText: (text: string) => ReactNode }) {
   const labels = new Map(options.map((option) => [option.id, option.label]));
   const available = options.filter((option) => !value.includes(option.id));
 
@@ -55,7 +57,7 @@ function ReorderResponse({ options, value, onChange, disabled }: { options: Choi
       <ol className="reorder-selected-list">
         {value.map((id, index) => (
           <li key={id}>
-            <span>{labels.get(id) ?? id}</span>
+            <span>{renderText(labels.get(id) ?? id)}</span>
             <span className="reorder-buttons">
               <button type="button" aria-label={`Move ${labels.get(id) ?? id} up`} onClick={() => move(index, -1)} disabled={disabled || index === 0}><ArrowUp size={14} /></button>
               <button type="button" aria-label={`Move ${labels.get(id) ?? id} down`} onClick={() => move(index, 1)} disabled={disabled || index === value.length - 1}><ArrowDown size={14} /></button>
@@ -68,7 +70,7 @@ function ReorderResponse({ options, value, onChange, disabled }: { options: Choi
         <div className="token-bank" aria-label="Available tokens">
           {available.map((option) => (
             <button type="button" key={option.id} onClick={() => onChange([...value, option.id])} disabled={disabled}>
-              <Plus size={13} /> {option.label}
+              <Plus size={13} /> {renderText(option.label)}
             </button>
           ))}
         </div>
@@ -82,15 +84,8 @@ function ReorderResponse({ options, value, onChange, disabled }: { options: Choi
   );
 }
 
-function speakText(text: string, language: string) {
-  if (!("speechSynthesis" in window)) return;
-  window.speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = languageTagForSpeech(language);
-  window.speechSynthesis.speak(utterance);
-}
-
-export function QuestionRenderer({ question, answer, language, disabled, onChange, onSpeakingChange }: QuestionRendererProps) {
+export function QuestionRenderer({ question, answer, language, disabled, onChange, onSpeakingChange, renderText }: QuestionRendererProps) {
+  const render = renderText ?? ((text: string) => text);
   switch (question.type) {
     case "singleChoice":
       return (
@@ -99,7 +94,7 @@ export function QuestionRenderer({ question, answer, language, disabled, onChang
           {question.options.map((option) => (
             <label key={option.id} className={stringAnswer(answer) === option.id ? "is-selected" : ""}>
               <input type="radio" name={question.id} value={option.id} checked={stringAnswer(answer) === option.id} onChange={() => onChange(option.id)} />
-              <span>{option.label}</span>
+              <span>{render(option.label)}</span>
             </label>
           ))}
         </fieldset>
@@ -117,7 +112,7 @@ export function QuestionRenderer({ question, answer, language, disabled, onChang
                 checked={selected.includes(option.id)}
                 onChange={(event) => onChange(event.target.checked ? [...selected, option.id] : selected.filter((id) => id !== option.id))}
               />
-              <span>{option.label}</span>
+              <span>{render(option.label)}</span>
             </label>
           ))}
         </fieldset>
@@ -126,7 +121,7 @@ export function QuestionRenderer({ question, answer, language, disabled, onChang
     case "trueFalse":
       return (
         <fieldset className="choice-list choice-list-inline" disabled={disabled}>
-          <legend>{question.statement}</legend>
+          <legend>{render(question.statement)}</legend>
           {[{ value: true, label: "True" }, { value: false, label: "False" }].map((option) => (
             <label key={String(option.value)} className={answer === option.value ? "is-selected" : ""}>
               <input type="radio" name={question.id} checked={answer === option.value} onChange={() => onChange(option.value)} />
@@ -138,15 +133,45 @@ export function QuestionRenderer({ question, answer, language, disabled, onChang
     case "fillBlank":
       return (
         <div className="blank-response">
-          <p>{question.template}</p>
+          <p>{render(question.template)}</p>
           <TextResponse label="Missing word or phrase" value={stringAnswer(answer)} onChange={onChange} disabled={disabled} />
         </div>
       );
+    case "selectBlank": {
+      const selectedId = stringAnswer(answer);
+      const selectedOption = question.options.find((option) => option.id === selectedId);
+      const [before, after] = question.template.split("{{blank}}");
+      return (
+        <div className="select-blank-response">
+          <p className="select-blank-sentence">
+            <span>{render(before)}</span>
+            <span className={selectedOption ? "select-blank-slot is-filled" : "select-blank-slot"}>
+              {selectedOption ? render(selectedOption.label) : "Choose"}
+            </span>
+            <span>{render(after)}</span>
+          </p>
+          <div className="select-blank-options" role="group" aria-label="Blank choices">
+            {question.options.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                className={selectedId === option.id ? "is-selected" : ""}
+                aria-pressed={selectedId === option.id}
+                onClick={() => onChange(option.id)}
+                disabled={disabled}
+              >
+                {render(option.label)}
+              </button>
+            ))}
+          </div>
+        </div>
+      );
+    }
     case "multiCloze": {
       const values = mapAnswer(answer);
       return (
         <div className="multi-cloze-response">
-          <p>{question.template}</p>
+          <p>{render(question.template)}</p>
           <div className="cloze-input-grid">
             {question.blanks.map((blank, index) => (
               <TextResponse
@@ -162,14 +187,14 @@ export function QuestionRenderer({ question, answer, language, disabled, onChang
       );
     }
     case "wordBank":
-      return <ReorderResponse options={question.tokens} value={stringArrayAnswer(answer)} onChange={onChange} disabled={disabled} />;
+      return <ReorderResponse options={question.tokens} value={stringArrayAnswer(answer)} onChange={onChange} disabled={disabled} renderText={render} />;
     case "matching": {
       const values = mapAnswer(answer);
       return (
         <div className="mapping-response" role="group" aria-label="Match pairs">
           {question.pairs.map((pair) => (
             <label key={pair.leftId}>
-              <span>{pair.left}</span>
+              <span>{render(pair.left)}</span>
               <select value={values[pair.leftId] ?? ""} onChange={(event) => onChange({ ...values, [pair.leftId]: event.target.value })} disabled={disabled}>
                 <option value="">Choose a match...</option>
                 {question.pairs.map((candidate) => <option value={candidate.rightId} key={candidate.rightId}>{candidate.right}</option>)}
@@ -180,7 +205,7 @@ export function QuestionRenderer({ question, answer, language, disabled, onChang
       );
     }
     case "reorderTokens":
-      return <ReorderResponse options={question.tokens} value={stringArrayAnswer(answer)} onChange={onChange} disabled={disabled} />;
+      return <ReorderResponse options={question.tokens} value={stringArrayAnswer(answer)} onChange={onChange} disabled={disabled} renderText={render} />;
     case "reorderDialogue":
       return (
         <ReorderResponse
@@ -188,6 +213,7 @@ export function QuestionRenderer({ question, answer, language, disabled, onChang
           value={stringArrayAnswer(answer)}
           onChange={onChange}
           disabled={disabled}
+          renderText={render}
         />
       );
     case "categorize": {
@@ -196,7 +222,7 @@ export function QuestionRenderer({ question, answer, language, disabled, onChang
         <div className="mapping-response" role="group" aria-label="Categorize items">
           {question.items.map((item) => (
             <label key={item.id}>
-              <span>{item.label}</span>
+              <span>{render(item.label)}</span>
               <select value={values[item.id] ?? ""} onChange={(event) => onChange({ ...values, [item.id]: event.target.value })} disabled={disabled}>
                 <option value="">Choose a category...</option>
                 {question.categories.map((category) => <option value={category.id} key={category.id}>{category.label}</option>)}
@@ -209,7 +235,7 @@ export function QuestionRenderer({ question, answer, language, disabled, onChang
     case "translation":
       return (
         <div className="open-response">
-          <blockquote>{question.sourceText}</blockquote>
+          <blockquote>{render(question.sourceText)}</blockquote>
           <TextResponse label={`${question.targetLanguage} translation`} value={stringAnswer(answer)} onChange={onChange} disabled={disabled} multiline />
           <p className="rubric-copy">ChatGPT rubric: {question.rubric.join(" · ")}</p>
         </div>
@@ -224,26 +250,23 @@ export function QuestionRenderer({ question, answer, language, disabled, onChang
     case "errorCorrection":
       return (
         <div className="open-response">
-          <blockquote className="incorrect-source">{question.incorrectText}</blockquote>
+          <blockquote className="incorrect-source">{render(question.incorrectText)}</blockquote>
           <TextResponse label="Corrected sentence" value={stringAnswer(answer)} onChange={onChange} disabled={disabled} />
         </div>
       );
     case "sentenceTransformation":
       return (
         <div className="open-response">
-          <blockquote>{question.sourceText}</blockquote>
-          <p className="constraint-copy">Constraint: {question.constraint}</p>
+          <blockquote>{render(question.sourceText)}</blockquote>
+          <p className="constraint-copy">Constraint: {render(question.constraint)}</p>
           <TextResponse label="New sentence" value={stringAnswer(answer)} onChange={onChange} disabled={disabled} />
         </div>
       );
     case "dictation":
       return (
         <div className="open-response">
-          <button className="secondary-button" type="button" onClick={() => speakText(question.transcript, language)} disabled={disabled || !("speechSynthesis" in window)}>
-            <Headphones size={16} /> Play sentence
-          </button>
           <TextResponse label="What you heard" value={stringAnswer(answer)} onChange={onChange} disabled={disabled} />
-          <details className="transcript-fallback"><summary>Cannot hear it? Show the fallback transcript</summary><p>{question.transcript}</p></details>
+          <details className="transcript-fallback"><summary>Cannot hear it? Show the fallback transcript</summary><p>{render(question.transcript)}</p></details>
         </div>
       );
     case "freeWriting": {
@@ -259,7 +282,7 @@ export function QuestionRenderer({ question, answer, language, disabled, onChang
     case "speakingRepeat":
       return (
         <div className="speaking-response">
-          <blockquote>{question.modelText}</blockquote>
+          <blockquote>{render(question.modelText)}</blockquote>
           <SpeakingRecorder language={languageTagForSpeech(language)} disabled={disabled} onChange={(submission) => onSpeakingChange?.(submission)} onTranscriptChange={onChange} />
           <TextResponse label="Transcript (editable)" value={stringAnswer(answer)} onChange={onChange} disabled={disabled} multiline />
         </div>
@@ -268,9 +291,9 @@ export function QuestionRenderer({ question, answer, language, disabled, onChang
       return (
         <div className="speaking-response">
           <dl className="roleplay-brief">
-            <div><dt>Role</dt><dd>{question.role}</dd></div>
-            <div><dt>Scenario</dt><dd>{question.scenario}</dd></div>
-            <div><dt>Goal</dt><dd>{question.goal}</dd></div>
+            <div><dt>Role</dt><dd>{render(question.role)}</dd></div>
+            <div><dt>Scenario</dt><dd>{render(question.scenario)}</dd></div>
+            <div><dt>Goal</dt><dd>{render(question.goal)}</dd></div>
           </dl>
           <SpeakingRecorder language={languageTagForSpeech(language)} disabled={disabled} onChange={(submission) => onSpeakingChange?.(submission)} onTranscriptChange={onChange} />
           <TextResponse label="Transcript (editable)" value={stringAnswer(answer)} onChange={onChange} disabled={disabled} multiline />

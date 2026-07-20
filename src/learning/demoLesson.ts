@@ -1,11 +1,11 @@
 import type { LearningProfile, Lesson } from "./types";
+import { decorateLessonPresentation } from "./questionSettings";
 
 export function createLocalPreviewLesson(unitId: string, unitName: string, profile: LearningProfile): Lesson {
   void unitName;
-  void profile;
   const prefix = `${unitId}-preview`;
-  return {
-    schemaVersion: 1,
+  const lesson: Lesson = {
+    schemaVersion: 2,
     id: `${prefix}-lesson`,
     unitId,
     title: "Player demo: English daily routine",
@@ -90,12 +90,16 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
       },
       {
         id: `${prefix}-q4`,
-        type: "fillBlank",
+        type: "selectBlank",
         evaluationMode: "local",
-        prompt: "Complete the sentence with a sequence marker.",
-        template: "___, I make coffee before I start work.",
-        acceptedAnswers: ["First", "First of all"],
-        match: { ignorePunctuation: true },
+        prompt: "Choose the sequence marker that completes the sentence.",
+        template: "{{blank}}, I make coffee before I start work.",
+        options: [
+          { id: "first", label: "First" },
+          { id: "sometimes", label: "Sometimes" },
+          { id: "because", label: "Because" },
+        ],
+        correctOptionId: "first",
         explanation: "First introduces the opening action in a sequence.",
         hint: "This is the opening step.",
       },
@@ -245,4 +249,5 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
     ],
     createdAt: new Date().toISOString(),
   };
+  return decorateLessonPresentation(lesson, undefined, profile);
 }

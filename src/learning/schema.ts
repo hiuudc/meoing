@@ -5,7 +5,9 @@ import {
   type LearningProfile,
   type Lesson,
   type LessonProgressSnapshot,
+  type QuestionFormat,
 } from "./types";
+import { QUESTION_FORMAT_REGISTRY } from "./questionRegistry";
 
 const id = z.string().min(1).max(120);
 const plainText = z.string().min(1).max(16_000);
@@ -17,6 +19,13 @@ const textMatchSchema = z
     ignorePunctuation: z.boolean().optional(),
   })
   .strict();
+const presentationSchema = z
+  .object({
+    readQuestion: z.boolean(),
+    readAnswers: z.boolean(),
+    wordTooltips: z.boolean(),
+  })
+  .strict();
 
 const baseFields = {
   id,
@@ -26,6 +35,8 @@ const baseFields = {
   supplementalHint: plainText.optional(),
   sourceReferenceIds: z.array(id).max(20).optional(),
   evaluationMode: z.enum(["local", "ai"]),
+  templateId: id.optional(),
+  presentation: presentationSchema.optional(),
 };
 
 export const lessonQuestionSchema = z.discriminatedUnion("type", [
@@ -33,6 +44,7 @@ export const lessonQuestionSchema = z.discriminatedUnion("type", [
   z.object({ ...baseFields, type: z.literal("multipleChoice"), options: z.array(optionSchema).min(2).max(12), correctOptionIds: z.array(id).min(1).max(12) }).strict(),
   z.object({ ...baseFields, type: z.literal("trueFalse"), statement: plainText, correct: z.boolean() }).strict(),
   z.object({ ...baseFields, type: z.literal("fillBlank"), template: plainText, acceptedAnswers: z.array(plainText.max(500)).min(1).max(20), match: textMatchSchema.optional() }).strict(),
+  z.object({ ...baseFields, type: z.literal("selectBlank"), template: plainText, options: z.array(optionSchema).min(2).max(8), correctOptionId: id }).strict(),
   z.object({
     ...baseFields,
     type: z.literal("multiCloze"),
@@ -67,11 +79,24 @@ export const lessonQuestionSchema = z.discriminatedUnion("type", [
   z.object({ ...baseFields, type: z.literal("freeWriting"), minWords: z.number().int().min(1).max(1_000), maxWords: z.number().int().min(1).max(2_000), rubric: z.array(plainText.max(500)).min(1).max(12) }).strict(),
   z.object({ ...baseFields, type: z.literal("speakingRepeat"), modelText: plainText, rubric: z.array(plainText.max(500)).min(1).max(12) }).strict(),
   z.object({ ...baseFields, type: z.literal("speakingRoleplay"), role: plainText.max(500), scenario: plainText, goal: plainText, rubric: z.array(plainText.max(500)).min(1).max(12) }).strict(),
-]);
+]).superRefine((question, context) => {
+  if (question.type !== "selectBlank") return;
+  const blankCount = question.template.split("{{blank}}").length - 1;
+  if (blankCount !== 1) {
+    context.addIssue({ code: "custom", path: ["template"], message: "selectBlank requires exactly one {{blank}} marker." });
+  }
+  const optionIds = new Set(question.options.map((option) => option.id));
+  if (optionIds.size !== question.options.length) {
+    context.addIssue({ code: "custom", path: ["options"], message: "selectBlank option IDs must be unique." });
+  }
+  if (!optionIds.has(question.correctOptionId)) {
+    context.addIssue({ code: "custom", path: ["correctOptionId"], message: "selectBlank correctOptionId must reference an option." });
+  }
+});
 
 export const lessonSchema = z
   .object({
-    schemaVersion: z.literal(1),
+    schemaVersion: z.union([z.literal(1), z.literal(2)]),
     id,
     unitId: id,
     title: plainText.max(300),
@@ -181,19 +206,48 @@ export interface LessonExpectation {
   level: LearningProfile["level"];
   questionCount: number;
   speaking: boolean;
+  allowedFormats: QuestionFormat[];
+  requiredTemplates: Array<{ id: string; format: QuestionFormat }>;
 }
 
 export function validateLessonForExpectation(lesson: Lesson, expectation: LessonExpectation): string[] {
   const errors: string[] = [];
+  const allowedFormats = new Set(expectation.allowedFormats);
+  const requiredTemplates = new Map(expectation.requiredTemplates.map((template) => [template.id, template.format]));
+  if (lesson.schemaVersion !== 2) errors.push("Generated lessons must use schemaVersion 2.");
   if (new Set(lesson.questions.map((question) => question.type)).size < 5) {
     errors.push("Lesson must use at least five formats.");
   }
-  if (expectation.speaking && !lesson.questions.some((question) => question.type === "speakingRepeat" || question.type === "speakingRoleplay")) {
+  const speakingFormatAllowed = expectation.allowedFormats.some((format) => format === "speakingRepeat" || format === "speakingRoleplay");
+  if (expectation.speaking && speakingFormatAllowed && !lesson.questions.some((question) => question.type === "speakingRepeat" || question.type === "speakingRoleplay")) {
     errors.push("Speaking is enabled, so the lesson needs at least one speaking question.");
   }
   if (lesson.questions.some((question) => !QUESTION_FORMATS.includes(question.type))) {
     errors.push("Lesson contains an unsupported question format.");
   }
+  if (lesson.questions.some((question) => !allowedFormats.has(question.type))) {
+    errors.push("Lesson contains a disabled question format.");
+  }
+  if (lesson.questions.some((question) => question.presentation !== undefined)) {
+    errors.push("Generated questions must not provide presentation settings.");
+  }
+  lesson.questions.forEach((question) => {
+    if (question.evaluationMode !== QUESTION_FORMAT_REGISTRY[question.type].evaluationMode) {
+      errors.push(`${question.type} must use ${QUESTION_FORMAT_REGISTRY[question.type].evaluationMode} evaluation.`);
+    }
+    if (!question.templateId) return;
+    const requiredFormat = requiredTemplates.get(question.templateId);
+    if (!requiredFormat) {
+      errors.push(`Question ${question.id} contains unknown templateId ${question.templateId}.`);
+    } else if (requiredFormat !== question.type) {
+      errors.push(`Template ${question.templateId} must use ${requiredFormat}, not ${question.type}.`);
+    }
+  });
+  expectation.requiredTemplates.forEach((template) => {
+    if (!lesson.questions.some((question) => question.templateId === template.id)) {
+      errors.push(`Lesson is missing required template ${template.id}.`);
+    }
+  });
   if (lesson.unitId !== expectation.unitId) errors.push(`lesson.unitId must equal ${expectation.unitId}.`);
   if (lesson.targetLanguage.trim().toLocaleLowerCase() !== expectation.targetLanguage.trim().toLocaleLowerCase()) {
     errors.push(`lesson.targetLanguage must equal ${expectation.targetLanguage}.`);

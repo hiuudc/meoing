@@ -8,7 +8,6 @@ import {
   Link2,
   LoaderCircle,
   Menu,
-  MessageCircle,
   Mic,
   Play,
   RefreshCw,
@@ -19,8 +18,14 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createLocalPreviewLesson } from "../learning/demoLesson";
-import { LessonPlayer } from "../learning/LessonPlayer";
+import { LessonPlayer, type CoachChatMessage } from "../learning/LessonPlayer";
 import { normalizeLearningProfile } from "../learning/profile";
+import {
+  buildQuestionGenerationConstraints,
+  decorateLessonPresentation,
+  getEffectiveUnitQuestionSettings,
+  validateUnitQuestionSettings,
+} from "../learning/questionSettings";
 import { parseEvaluation, parseLesson } from "../learning/schema";
 import type {
   AttemptRecord,
@@ -70,11 +75,6 @@ interface LearningWorkspaceProps {
   onModeChange: (mode: WorkspaceMode) => void;
   onOpenMobileNavigation: () => void;
   onUpdateProfile: (profile: LearningProfile) => void;
-}
-
-interface CoachContext {
-  question: LessonQuestion;
-  evaluation: Evaluation;
 }
 
 interface RetryAttempt {
@@ -214,12 +214,10 @@ export function LearningWorkspace({
   const [youtubeUrl, setYoutubeUrl] = useState("");
   const [transcript, setTranscript] = useState("");
   const [sourceRequest, setSourceRequest] = useState("");
-  const [coachContext, setCoachContext] = useState<CoachContext | null>(null);
-  const [coachDraft, setCoachDraft] = useState("");
-  const [coachReply, setCoachReply] = useState("");
   const activeAbortRef = useRef<AbortController | null>(null);
   const retryAttemptsRef = useRef<Partial<Record<ChatOperationKind, RetryAttempt>>>({});
   const learningCacheRef = useRef(learningCache);
+  const learningScrollRef = useRef<HTMLDivElement>(null);
 
   const lesson = unit ? session.lessonsByUnit[unit.id] : undefined;
   const savedLessons = unit ? learningCache.lessonsByUnit[unit.id] ?? [] : [];
@@ -234,6 +232,7 @@ export function LearningWorkspace({
 
   useEffect(() => {
     activeAbortRef.current?.abort();
+    learningScrollRef.current?.scrollTo({ top: 0 });
     retryAttemptsRef.current = {};
     setBusy(false);
     setStatus(INITIAL_STATUS);
@@ -241,9 +240,6 @@ export function LearningWorkspace({
     setYoutubeUrl("");
     setTranscript("");
     setSourceRequest("");
-    setCoachContext(null);
-    setCoachDraft("");
-    setCoachReply("");
     setError("");
     setWarning("");
   }, [unit?.id]);
@@ -283,24 +279,26 @@ export function LearningWorkspace({
   }
 
   function resetLessonPanels() {
-    setCoachContext(null);
-    setCoachDraft("");
-    setCoachReply("");
     setError("");
     setWarning("");
+  }
+
+  function setLearningView(nextView: UnitLearningView) {
+    learningScrollRef.current?.scrollTo({ top: 0 });
+    setUnitView(nextView);
   }
 
   function startLesson(nextLesson: StoredLessonEntry["lesson"], nextStatus: string) {
     if (!unit || nextLesson.unitId !== unit.id) return;
     setSession((current) => putSessionLesson(current, nextLesson));
-    setUnitView({ unitId: unit.id, view: "lesson", playerRunId: crypto.randomUUID() });
+    setLearningView({ unitId: unit.id, view: "lesson", playerRunId: crypto.randomUUID() });
     resetLessonPanels();
     setStatus(nextStatus);
   }
 
   function openNewLesson() {
     if (!unit) return;
-    setUnitView({ unitId: unit.id, view: "new", playerRunId: unitView.playerRunId });
+    setLearningView({ unitId: unit.id, view: "new", playerRunId: unitView.playerRunId });
     setCustomRequest("");
     setYoutubeUrl("");
     setTranscript("");
@@ -311,7 +309,7 @@ export function LearningWorkspace({
 
   function openSavedLessons() {
     if (!unit || !savedLessons.length) return;
-    setUnitView({ unitId: unit.id, view: "choose", playerRunId: unitView.playerRunId });
+    setLearningView({ unitId: unit.id, view: "choose", playerRunId: unitView.playerRunId });
     resetLessonPanels();
     setStatus(`${savedLessons.length} saved ${savedLessons.length === 1 ? "lesson is" : "lessons are"} available for this unit.`);
   }
@@ -332,12 +330,14 @@ export function LearningWorkspace({
     const targetLanguage = profile.targetLanguage.trim();
     if (!targetLanguage) throw new Error("Enter a target language in the learning profile.");
     if (targetLanguage.length > 100) throw new Error("The target language name must be 100 characters or fewer.");
+    const constraints = buildQuestionGenerationConstraints(unit.questionSettings, profile);
     return {
       unitId: unit.id,
       targetLanguage,
       level: profile.level,
       questionCount: profile.lessonQuestionCount,
       speaking: profile.speakingEnabled,
+      ...constraints,
     };
   }
 
@@ -379,6 +379,14 @@ export function LearningWorkspace({
 
   async function createLesson() {
     if (!unit) return;
+    const questionSettingsErrors = validateUnitQuestionSettings(
+      getEffectiveUnitQuestionSettings(unit.questionSettings, profile),
+      profile,
+    );
+    if (questionSettingsErrors.length) {
+      setError(`Update this unit's question settings before generating a lesson: ${questionSettingsErrors.join(" ")}`);
+      return;
+    }
     if (youtubeUrl && !embedUrl) {
       setError("Enter a valid YouTube URL.");
       return;
@@ -415,10 +423,11 @@ export function LearningWorkspace({
       if (result.outcome !== "completed" || !result.result?.lesson) throw new Error("ChatGPT did not return a valid lesson.");
       const parsedLesson = parseLesson(result.result.lesson);
       if (parsedLesson.unitId !== unit.id) throw new Error("The returned lesson does not match the active unit.");
-      const nextCache = putStoredLesson(learningCacheRef.current, parsedLesson);
+      const preparedLesson = decorateLessonPresentation(parsedLesson, unit.questionSettings, profile);
+      const nextCache = putStoredLesson(learningCacheRef.current, preparedLesson);
       const stored = commitLearningCache(nextCache);
       startLesson(
-        parsedLesson,
+        preparedLesson,
         stored
           ? "Lesson received from ChatGPT and saved locally in this browser."
           : "Lesson received from ChatGPT and loaded for this session.",
@@ -467,38 +476,38 @@ export function LearningWorkspace({
     }
   }
 
-  async function askCoach(message?: string, context = coachContext) {
-    if (!unit || !lesson || !context) return;
-    const text = message?.trim() || "Explain this mistake in another way and give me a fresh example without revealing the answer to my next retry.";
+  async function askCoach(
+    question: LessonQuestion,
+    evaluation: Evaluation,
+    message: string,
+    history: CoachChatMessage[],
+  ): Promise<string> {
+    if (!unit || !lesson) throw new Error("No active lesson was found.");
+    if (!extensionConnected) throw new Error("Meoi Bridge is offline. Check the extension and try again.");
+    const text = message.trim();
     if (textByteLength(text) > MEOI_TEXT_FIELD_MAX_BYTES) {
-      setError("The coaching message must be 16 KiB or smaller.");
-      return;
+      throw new Error("The coaching message must be 16 KiB or smaller.");
     }
-    setBusy(true);
-    setError("");
-    setWarning("");
-    try {
-      const result = await sendOperation("coaching", {
-        unit: { id: unit.id, name: unit.name },
-        collection: { id: collection.id, name: collection.name, learningProfile: profile },
-        lesson: { id: lesson.id, title: lesson.title },
-        question: context.question,
-        evaluation: context.evaluation,
-        message: text,
-      });
-      const reply = result.result?.coachingReply?.trim();
-      if (result.outcome !== "completed" || !reply || textByteLength(reply) > MEOI_TEXT_FIELD_MAX_BYTES) {
-        throw new Error("ChatGPT did not return a valid coaching reply.");
-      }
-      setCoachReply(reply);
-      setCoachDraft("");
-      await extensionBridge.acknowledgeOperation(result.operationId).catch(() => false);
-      setStatus("Coaching reply received from ChatGPT and loaded in Meoi.");
-    } catch (caught) {
-      if (!isAbortError(caught)) setError(publicError(caught));
-    } finally {
-      setBusy(false);
+    const recentHistory = history.slice(-8).map((entry) => ({
+      role: entry.role,
+      content: entry.content.slice(0, 2_000),
+    }));
+    const result = await sendOperation("coaching", {
+      unit: { id: unit.id, name: unit.name },
+      collection: { id: collection.id, name: collection.name, learningProfile: profile },
+      lesson: { id: lesson.id, title: lesson.title },
+      question,
+      evaluation,
+      message: text,
+      history: recentHistory,
+    });
+    const reply = result.result?.coachingReply?.trim();
+    if (result.outcome !== "completed" || !reply || textByteLength(reply) > MEOI_TEXT_FIELD_MAX_BYTES) {
+      throw new Error("ChatGPT did not return a valid coaching reply.");
     }
+    await extensionBridge.acknowledgeOperation(result.operationId).catch(() => false);
+    setStatus("Coaching reply received from ChatGPT and loaded in Meoi.");
+    return reply;
   }
 
   async function handleTranscriptFile(file?: File) {
@@ -530,7 +539,7 @@ export function LearningWorkspace({
           </div>
         </header>
 
-        <div className="content-scroll learning-scroll">
+        <div className="content-scroll learning-scroll" ref={learningScrollRef}>
           <section className="learn-hero">
             <div>
               <p className="section-kicker">ChatGPT lesson studio</p>
@@ -617,13 +626,17 @@ export function LearningWorkspace({
             <LessonPlayer
               key={`${lesson.id}-${playerRunId}`}
               lesson={lesson}
+              coachingAvailable={extensionConnected}
               onEvaluate={evaluateAnswer}
               onProgressBatch={saveProgress}
-              onAskCoach={(question, evaluation) => {
-                const context = { question, evaluation };
-                setCoachContext(context);
-                setCoachReply("");
-                void askCoach(undefined, context);
+              onAskCoach={askCoach}
+              onExit={() => {
+                setLearningView({
+                  unitId: unit!.id,
+                  view: savedLessons.length ? "choose" : "new",
+                  playerRunId,
+                });
+                setStatus("Lesson closed after saving the latest local progress.");
               }}
             />
           ) : learningView === "lesson" ? (
@@ -657,18 +670,6 @@ export function LearningWorkspace({
         </section>
 
         <ProfileEditor profile={profile} onChange={onUpdateProfile} />
-
-        {coachContext ? (
-          <section className="control-section coaching-panel">
-            <h3><MessageCircle size={15} /> Coaching</h3>
-            {coachReply ? <p className="coach-reply" aria-live="polite">{coachReply}</p> : <p className="control-copy">Sending a coaching request to ChatGPT Web...</p>}
-            <label className="form-field">
-              <span>Ask about this mistake</span>
-              <textarea rows={3} value={coachDraft} onChange={(event) => setCoachDraft(event.target.value)} />
-            </label>
-            <button className="secondary-button wide-button" type="button" onClick={() => void askCoach(coachDraft)} disabled={!coachDraft.trim() || busy}><Send size={15} /> Send to ChatGPT</button>
-          </section>
-        ) : null}
 
         <section className="control-section voice-controls">
           <h3><Mic size={15} /> Live speaking</h3>

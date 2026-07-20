@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { ExtensionBridge } from "./extensionBridge";
 import type { ChatOperationState, ExtensionCommand, SendOperationPayload } from "./protocol";
+import { QUESTION_FORMATS } from "../learning/types";
 
 function state(phase: ChatOperationState["phase"], patch: Partial<ChatOperationState> = {}): ChatOperationState {
   return {
@@ -42,7 +43,15 @@ const payload: SendOperationPayload = {
   operationId: "op-1",
   kind: "coaching",
   prompt: "prompt",
-  expectation: { unitId: "unit-1", targetLanguage: "English", level: "elementary", questionCount: 10, speaking: false },
+  expectation: {
+    unitId: "unit-1",
+    targetLanguage: "English",
+    level: "elementary",
+    questionCount: 10,
+    speaking: false,
+    allowedFormats: QUESTION_FORMATS.filter((format) => format !== "speakingRepeat" && format !== "speakingRoleplay"),
+    requiredTemplates: [],
+  },
 };
 
 describe("ExtensionBridge operation waiting", () => {
@@ -54,7 +63,7 @@ describe("ExtensionBridge operation waiting", () => {
       state("completed", {
         result: {
           type: "meoi.operation.result",
-          protocolVersion: 2,
+          protocolVersion: 3,
           operationId: "op-1",
           kind: "coaching",
           outcome: "completed",
@@ -90,7 +99,7 @@ describe("ExtensionBridge operation waiting", () => {
       state("completed", {
         result: {
           type: "meoi.operation.result",
-          protocolVersion: 2,
+          protocolVersion: 3,
           operationId: "op-1",
           kind: "coaching",
           outcome: "completed",

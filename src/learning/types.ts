@@ -3,6 +3,7 @@ export const QUESTION_FORMATS = [
   "multipleChoice",
   "trueFalse",
   "fillBlank",
+  "selectBlank",
   "multiCloze",
   "wordBank",
   "matching",
@@ -22,6 +23,27 @@ export const QUESTION_FORMATS = [
 export type QuestionFormat = (typeof QUESTION_FORMATS)[number];
 export type EvaluationStatus = "correct" | "partial" | "incorrect";
 export type EvaluationMode = "local" | "ai";
+
+export interface QuestionPresentationSettings {
+  readQuestion: boolean;
+  readAnswers: boolean;
+  wordTooltips: boolean;
+}
+
+export interface CustomQuestionTemplate {
+  id: string;
+  name: string;
+  baseFormat: QuestionFormat;
+  guidance: string;
+  enabled: boolean;
+  presentation: QuestionPresentationSettings;
+}
+
+export interface UnitQuestionSettings {
+  enabledFormats: QuestionFormat[];
+  formatPresentation: Partial<Record<QuestionFormat, QuestionPresentationSettings>>;
+  customTemplates: CustomQuestionTemplate[];
+}
 
 export interface LearningProfile {
   targetLanguage: string;
@@ -54,6 +76,8 @@ export interface BaseQuestion {
   supplementalHint?: string;
   sourceReferenceIds?: string[];
   evaluationMode: EvaluationMode;
+  templateId?: string;
+  presentation?: QuestionPresentationSettings;
 }
 
 export interface SingleChoiceQuestion extends BaseQuestion {
@@ -79,6 +103,13 @@ export interface FillBlankQuestion extends BaseQuestion {
   template: string;
   acceptedAnswers: string[];
   match?: TextMatchOptions;
+}
+
+export interface SelectBlankQuestion extends BaseQuestion {
+  type: "selectBlank";
+  template: string;
+  options: ChoiceOption[];
+  correctOptionId: string;
 }
 
 export interface ClozeBlank {
@@ -202,6 +233,7 @@ export type LessonQuestion =
   | MultipleChoiceQuestion
   | TrueFalseQuestion
   | FillBlankQuestion
+  | SelectBlankQuestion
   | MultiClozeQuestion
   | WordBankQuestion
   | MatchingQuestion
@@ -248,7 +280,7 @@ export interface SourceReference {
 }
 
 export interface Lesson {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   id: string;
   unitId: string;
   title: string;

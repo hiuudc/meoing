@@ -6,6 +6,7 @@ import {
   buildResultRepairPrompt,
   type OperationExpectation,
 } from "./protocol";
+import { QUESTION_FORMATS } from "../learning/types";
 
 const expectation: OperationExpectation = {
   unitId: "unit-1",
@@ -13,9 +14,11 @@ const expectation: OperationExpectation = {
   level: "elementary",
   questionCount: 10,
   speaking: true,
+  allowedFormats: [...QUESTION_FORMATS],
+  requiredTemplates: [{ id: "daily-greeting", format: "selectBlank" }],
 };
 
-describe("extension protocol v2 prompts", () => {
+describe("extension protocol v3 prompts", () => {
   it("uses a readable browser-local contract without tools or persistence", () => {
     const prompt = buildOperationPrompt({
       operationId: "operation-1",
@@ -24,7 +27,7 @@ describe("extension protocol v2 prompts", () => {
       input: { message: "Explain this mistake" },
     });
     expect(prompt).toContain("You are completing a browser-local learning task for Meoi.");
-    expect(prompt).toContain('"protocolVersion":2');
+    expect(prompt).toContain('"protocolVersion":3');
     expect(prompt).toContain('"operationId":"operation-1"');
     expect(prompt).toContain('"coachingReply":"..."');
     expect(prompt).toContain("do not invoke apps, connectors, actions, MCP, APIs, or persistence tools");
@@ -34,16 +37,19 @@ describe("extension protocol v2 prompts", () => {
     expect(prompt).toContain('"message": "Explain this mistake"');
   });
 
-  it("keeps all 18 question formats and exact lesson expectations", () => {
+  it("keeps all 19 question formats, enabled formats, and required blueprints", () => {
     const prompt = buildOperationPrompt({ operationId: "operation-2", kind: "create_lesson", expectation, input: {} });
     for (const format of [
-      "singleChoice", "multipleChoice", "trueFalse", "fillBlank", "multiCloze", "wordBank", "matching",
+      "singleChoice", "multipleChoice", "trueFalse", "fillBlank", "selectBlank", "multiCloze", "wordBank", "matching",
       "reorderTokens", "reorderDialogue", "categorize", "translation", "shortAnswer", "errorCorrection",
       "sentenceTransformation", "dictation", "freeWriting", "speakingRepeat", "speakingRoleplay",
     ]) expect(prompt).toContain(`- ${format}:`);
     expect(prompt).toContain("Create exactly 10 questions");
     expect(prompt).toContain("at least one locally graded question and at least one AI-graded question");
     expect(prompt).toContain("at least one speakingRepeat or speakingRoleplay question");
+    expect(prompt).toContain('"daily-greeting","format":"selectBlank"');
+    expect(prompt).toContain("schemaVersion:2");
+    expect(prompt).toContain("Never return presentation settings, HTML, scripts");
   });
 
   it("rejects a prompt larger than 640 KiB instead of truncating it", () => {

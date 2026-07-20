@@ -6,6 +6,7 @@ import {
   type ExtensionRequest,
   type ExtensionResponse,
 } from "../src/integration/protocol";
+import { QUESTION_FORMATS } from "../src/learning/types";
 import { isAllowedMeoiOrigin } from "./integration-policy";
 
 const commands = new Set([
@@ -29,17 +30,24 @@ function validRequest(value: unknown): value is ExtensionRequest<Record<string, 
   if (value.command === "OPEN_VOICE" && typeof payload.unitId !== "string") return false;
   if (["GET_OPERATION_STATE", "RETRY_OPERATION", "ACK_OPERATION_RESULT"].includes(value.command) && typeof payload.operationId !== "string") return false;
   if (value.command === "SEND_OPERATION") {
+    const expectation = payload.expectation;
+    if (!isRecord(expectation) || !Array.isArray(expectation.allowedFormats) || !Array.isArray(expectation.requiredTemplates)) return false;
+    const allowedFormats = expectation.allowedFormats;
+    const requiredTemplates = expectation.requiredTemplates;
     if (
       typeof payload.unitId !== "string"
       || typeof payload.operationId !== "string"
       || typeof payload.prompt !== "string"
       || byteLength(payload.prompt) > MEOI_PROMPT_MAX_BYTES
-      || !isRecord(payload.expectation)
-      || payload.expectation.unitId !== payload.unitId
-      || typeof payload.expectation.targetLanguage !== "string"
-      || typeof payload.expectation.level !== "string"
-      || !Number.isInteger(payload.expectation.questionCount)
-      || typeof payload.expectation.speaking !== "boolean"
+      || expectation.unitId !== payload.unitId
+      || typeof expectation.targetLanguage !== "string"
+      || typeof expectation.level !== "string"
+      || !Number.isInteger(expectation.questionCount)
+      || typeof expectation.speaking !== "boolean"
+      || allowedFormats.length < 5
+      || allowedFormats.some((format) => !QUESTION_FORMATS.includes(format as (typeof QUESTION_FORMATS)[number]))
+      || requiredTemplates.length > 20
+      || requiredTemplates.some((template) => !isRecord(template) || typeof template.id !== "string" || !allowedFormats.includes(template.format))
       || !["create_lesson", "evaluate_answer", "coaching"].includes(String(payload.kind))
     ) return false;
   }

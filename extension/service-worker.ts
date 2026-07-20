@@ -10,6 +10,7 @@ import {
   type OperationExpectation,
   type SendOperationPayload,
 } from "../src/integration/protocol";
+import { QUESTION_FORMATS, type QuestionFormat } from "../src/learning/types";
 import { isAllowedMeoiOrigin } from "./integration-policy";
 import {
   canonicalConversationUrl,
@@ -54,10 +55,11 @@ const CONTENT_SCRIPT_CONTACT_MS = 8_000;
 const LEGACY_TRANSIENT_KEYS = [
   "meoi.queues.v1",
   "meoi.operationStates.v1",
-  "meoi.queues.v3.session",
-  "meoi.operationStates.v3.session",
-  "meoi.pausedForQuota.v3.session",
-  "meoi.lastError.v3.session",
+  "meoi.queues.v2.session",
+  "meoi.operationStates.v2.session",
+  "meoi.provisionalUnitTabs.v2.session",
+  "meoi.pausedForQuota.v2.session",
+  "meoi.lastError.v2.session",
 ];
 
 const processingUnits = new Set<string>();
@@ -100,7 +102,30 @@ function validOperationId(value: unknown): value is string {
 }
 
 function validExpectation(value: unknown, unitId: string): value is OperationExpectation {
-  if (!isRecord(value) || !exactKeys(value, ["unitId", "targetLanguage", "level", "questionCount", "speaking"])) return false;
+  if (!isRecord(value) || !exactKeys(value, ["unitId", "targetLanguage", "level", "questionCount", "speaking", "allowedFormats", "requiredTemplates"])) return false;
+  if (!Array.isArray(value.allowedFormats) || !Array.isArray(value.requiredTemplates)) return false;
+  const formatSet = new Set<string>(QUESTION_FORMATS);
+  const allowedFormats = value.allowedFormats.filter((format): format is QuestionFormat => typeof format === "string" && formatSet.has(format));
+  if (allowedFormats.length !== value.allowedFormats.length || new Set(allowedFormats).size !== allowedFormats.length || allowedFormats.length < 5) return false;
+  const aiFormats = new Set<QuestionFormat>(["translation", "shortAnswer", "freeWriting", "speakingRepeat", "speakingRoleplay"]);
+  if (!allowedFormats.some((format) => aiFormats.has(format)) || !allowedFormats.some((format) => !aiFormats.has(format))) return false;
+  const allowedSet = new Set(allowedFormats);
+  const templateIds = new Set<string>();
+  const requiredTemplatesValid = value.requiredTemplates.length <= 20
+    && value.requiredTemplates.length <= Number(value.questionCount)
+    && value.requiredTemplates.every((template) => {
+      if (!isRecord(template) || !exactKeys(template, ["id", "format"]) || !validId(template.id) || !allowedSet.has(template.format as QuestionFormat)) return false;
+      if (templateIds.has(template.id)) return false;
+      templateIds.add(template.id);
+      return true;
+    });
+  if (!requiredTemplatesValid) return false;
+  const requiredFormats = new Set(value.requiredTemplates.map((template) => (template as { format: QuestionFormat }).format));
+  const distinctCapacity = requiredFormats.size + Math.min(
+    Number(value.questionCount) - value.requiredTemplates.length,
+    allowedFormats.filter((format) => !requiredFormats.has(format)).length,
+  );
+  if (distinctCapacity < 5) return false;
   return value.unitId === unitId
     && validId(value.unitId)
     && typeof value.targetLanguage === "string"
@@ -110,7 +135,8 @@ function validExpectation(value: unknown, unitId: string): value is OperationExp
     && Number.isInteger(value.questionCount)
     && Number(value.questionCount) >= 8
     && Number(value.questionCount) <= 15
-    && typeof value.speaking === "boolean";
+    && typeof value.speaking === "boolean"
+    && (value.speaking || !allowedFormats.some((format) => format === "speakingRepeat" || format === "speakingRoleplay"));
 }
 
 function validateSendPayload(value: unknown): SendOperationPayload {
