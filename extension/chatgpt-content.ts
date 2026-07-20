@@ -35,6 +35,8 @@ const COMPOSER_READY_ATTRIBUTE = "data-meoi-main-bridge";
 const COMPOSER_RESULT_ATTRIBUTE = "data-meoi-composer-result";
 const PROJECT_NAME_PAYLOAD_PREFIX = "meoi-project-name-payload-";
 const PROJECT_NAME_RESULT_ATTRIBUTE = "data-meoi-project-name-result";
+const PROJECT_CREATE_PAYLOAD_PREFIX = "meoi-project-create-payload-";
+const PROJECT_CREATE_RESULT_ATTRIBUTE = "data-meoi-project-create-result";
 
 let lastMainWorldComposerResult = "not-ready";
 
@@ -137,6 +139,30 @@ async function setProjectNameThroughMainWorld(
     if (result?.startsWith(`${requestId}:`)) {
       document.documentElement.removeAttribute(PROJECT_NAME_RESULT_ATTRIBUTE);
       return input.isConnected && input.value === value;
+    }
+    await waitForMutationOrDelay(50);
+  }
+  payload.remove();
+  return false;
+}
+
+async function createProjectThroughMainWorld(
+  button: HTMLButtonElement,
+  deadline: number,
+): Promise<boolean> {
+  const requestId = crypto.randomUUID();
+  const payload = document.createElement("script");
+  payload.id = `${PROJECT_CREATE_PAYLOAD_PREFIX}${requestId}`;
+  payload.type = "application/json";
+  payload.hidden = true;
+  payload.dataset.meoiRequestId = requestId;
+  document.documentElement.append(payload);
+  const clickDeadline = Math.min(deadline, Date.now() + 1_200);
+  while (Date.now() < clickDeadline) {
+    const result = document.documentElement.getAttribute(PROJECT_CREATE_RESULT_ATTRIBUTE);
+    if (result?.startsWith(`${requestId}:`)) {
+      document.documentElement.removeAttribute(PROJECT_CREATE_RESULT_ATTRIBUTE);
+      return result === `${requestId}:clicked` || !button.isConnected;
     }
     await waitForMutationOrDelay(50);
   }
@@ -405,6 +431,7 @@ async function projectPlacementWarning(deadline: number): Promise<ExtensionError
       now: () => Date.now(),
       wait: waitForMutationOrDelay,
       setProjectName: setProjectNameThroughMainWorld,
+      createProject: createProjectThroughMainWorld,
     });
     return undefined;
   } catch (error) {

@@ -9,6 +9,7 @@ export interface ProjectPlacementEnvironment {
   now(): number;
   wait(milliseconds: number): Promise<void>;
   setProjectName?(input: HTMLInputElement, value: string, deadline: number): Promise<boolean>;
+  createProject?(button: HTMLButtonElement, deadline: number): Promise<boolean>;
 }
 
 export interface ProjectPlacementResult {
@@ -165,7 +166,10 @@ export async function placeCurrentConversationInProject(
 
   const createButton = await waitForValue(() => findCreateProjectButton(dialog), deadline, environment);
   if (!createButton) throw placementFailure("could not enable the Create project button.");
-  createButton.click();
+  const created = environment.createProject
+    ? await environment.createProject(createButton, deadline)
+    : false;
+  if (!created) createButton.click();
   await waitForPlacement(projectName, conversationId, deadline, environment);
   return { created: true };
 }

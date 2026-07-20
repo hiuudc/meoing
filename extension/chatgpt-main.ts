@@ -5,6 +5,9 @@ const COMPOSER_RESULT_ATTRIBUTE = "data-meoi-composer-result";
 const PROJECT_NAME_PAYLOAD_PREFIX = "meoi-project-name-payload-";
 const PROJECT_NAME_PAYLOAD_SELECTOR = `script[id^="${PROJECT_NAME_PAYLOAD_PREFIX}"][data-meoi-request-id]`;
 const PROJECT_NAME_RESULT_ATTRIBUTE = "data-meoi-project-name-result";
+const PROJECT_CREATE_PAYLOAD_PREFIX = "meoi-project-create-payload-";
+const PROJECT_CREATE_PAYLOAD_SELECTOR = `script[id^="${PROJECT_CREATE_PAYLOAD_PREFIX}"][data-meoi-request-id]`;
+const PROJECT_CREATE_RESULT_ATTRIBUTE = "data-meoi-project-create-result";
 const MAX_COMPOSER_TEXT_BYTES = 700 * 1024;
 const MAX_PROJECT_NAME_BYTES = 1024;
 
@@ -311,6 +314,40 @@ function applyProjectName(value: string): string {
   return setNativeInputValue(input, value) ? "native-input" : "input-mismatch";
 }
 
+function findCreateProjectButton(): HTMLButtonElement | null {
+  const dialogs = Array.from(document.querySelectorAll<HTMLElement>('dialog, [role="dialog"]')).filter((dialog) => (
+    visibleElement(dialog)
+    && Array.from(dialog.querySelectorAll("h1, h2, h3")).some((heading) => normalizedText(heading) === "Create project")
+  ));
+  if (dialogs.length !== 1) return null;
+  const buttons = Array.from(dialogs[0].querySelectorAll<HTMLButtonElement>("button")).filter((button) => (
+    visibleElement(button)
+    && normalizedText(button) === "Create project"
+    && !button.disabled
+    && button.getAttribute("aria-disabled") !== "true"
+  ));
+  return buttons.length === 1 ? buttons[0] : null;
+}
+
+export function activateProjectCreateButton(button: HTMLButtonElement): boolean {
+  if (!button.isConnected || button.disabled || button.getAttribute("aria-disabled") === "true") return false;
+  const mouse = { bubbles: true, cancelable: true, composed: true, button: 0 };
+  const pointer = { ...mouse, pointerId: 1, pointerType: "mouse", isPrimary: true };
+  button.focus();
+  if (typeof PointerEvent !== "undefined") button.dispatchEvent(new PointerEvent("pointerdown", pointer));
+  button.dispatchEvent(new MouseEvent("mousedown", mouse));
+  if (typeof PointerEvent !== "undefined") button.dispatchEvent(new PointerEvent("pointerup", pointer));
+  button.dispatchEvent(new MouseEvent("mouseup", mouse));
+  button.click();
+  return true;
+}
+
+function applyProjectCreate(): string {
+  const button = findCreateProjectButton();
+  if (!button) return "no-create-button";
+  return activateProjectCreateButton(button) ? "clicked" : "click-rejected";
+}
+
 function handleComposerPayload(payload: Element) {
   const requestId = payload.getAttribute("data-meoi-request-id");
   if (!requestId || !/^[a-f0-9-]{36}$/i.test(requestId)) return;
@@ -337,10 +374,22 @@ function handleProjectNamePayload(payload: Element) {
   document.documentElement.setAttribute(PROJECT_NAME_RESULT_ATTRIBUTE, `${requestId}:${strategy}`);
 }
 
+function handleProjectCreatePayload(payload: Element) {
+  const requestId = payload.getAttribute("data-meoi-request-id");
+  if (!requestId || !/^[a-f0-9-]{36}$/i.test(requestId)) return;
+  if (!(payload instanceof HTMLScriptElement)
+    || payload.id !== `${PROJECT_CREATE_PAYLOAD_PREFIX}${requestId}`
+    || payload.type !== "application/json") return;
+  payload.remove();
+  const strategy = applyProjectCreate();
+  document.documentElement.setAttribute(PROJECT_CREATE_RESULT_ATTRIBUTE, `${requestId}:${strategy}`);
+}
+
 if (typeof document !== "undefined") {
   document.documentElement.setAttribute(COMPOSER_READY_ATTRIBUTE, "ready");
   document.querySelectorAll(COMPOSER_PAYLOAD_SELECTOR).forEach(handleComposerPayload);
   document.querySelectorAll(PROJECT_NAME_PAYLOAD_SELECTOR).forEach(handleProjectNamePayload);
+  document.querySelectorAll(PROJECT_CREATE_PAYLOAD_SELECTOR).forEach(handleProjectCreatePayload);
   new MutationObserver((records) => {
     for (const record of records) {
       for (const node of record.addedNodes) {
@@ -349,6 +398,8 @@ if (typeof document !== "undefined") {
         node.querySelectorAll(COMPOSER_PAYLOAD_SELECTOR).forEach(handleComposerPayload);
         if (node.matches(PROJECT_NAME_PAYLOAD_SELECTOR)) handleProjectNamePayload(node);
         node.querySelectorAll(PROJECT_NAME_PAYLOAD_SELECTOR).forEach(handleProjectNamePayload);
+        if (node.matches(PROJECT_CREATE_PAYLOAD_SELECTOR)) handleProjectCreatePayload(node);
+        node.querySelectorAll(PROJECT_CREATE_PAYLOAD_SELECTOR).forEach(handleProjectCreatePayload);
       }
     }
   }).observe(document.documentElement, { childList: true, subtree: true });

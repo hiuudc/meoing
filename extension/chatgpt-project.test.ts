@@ -101,12 +101,18 @@ describe("ChatGPT project placement", () => {
       input.dispatchEvent(new InputEvent("input", { bubbles: true }));
       return true;
     });
+    const createProject = vi.fn(async (button: HTMLButtonElement) => {
+      button.click();
+      return true;
+    });
     await expect(placeCurrentConversationInProject(MEOI_CHATGPT_PROJECT_NAME, Date.now() + 1_000, {
       ...environment(),
       setProjectName,
+      createProject,
     }))
       .resolves.toEqual({ created: true });
     expect(setProjectName).toHaveBeenCalledOnce();
+    expect(createProject).toHaveBeenCalledOnce();
     expect(currentChatProjectName()).toBe(MEOI_CHATGPT_PROJECT_NAME);
   });
 

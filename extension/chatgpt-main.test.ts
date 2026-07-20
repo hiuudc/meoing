@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  activateProjectCreateButton,
   findComposerController,
   findCreateProjectNameInput,
   setNativeInputValue,
@@ -58,6 +59,16 @@ describe("ChatGPT main-world composer bridge", () => {
       <dialog style="display:none"><h2>Create project</h2><input type="text"></dialog>
     `;
     expect(findCreateProjectNameInput()).toBe(document.querySelector("dialog[open] input"));
+  });
+
+  it("activates the project Create button once in the page world", () => {
+    document.body.innerHTML = '<button type="button">Create project</button>';
+    const button = document.querySelector<HTMLButtonElement>("button")!;
+    const onClick = vi.fn();
+    button.addEventListener("click", onClick);
+
+    expect(activateProjectCreateButton(button)).toBe(true);
+    expect(onClick).toHaveBeenCalledOnce();
   });
 });
 
