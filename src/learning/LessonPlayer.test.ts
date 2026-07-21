@@ -3,7 +3,8 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LessonPlayer } from "./LessonPlayer";
-import type { Lesson } from "./types";
+import { LESSON_PLAYER_PREFERENCE_KEY } from "./playerPreferences";
+import type { Lesson, LessonQuestion } from "./types";
 
 const lesson: Lesson = {
   schemaVersion: 2,
@@ -72,7 +73,25 @@ async function selectAnswer(value: string) {
   await act(async () => input.click());
 }
 
+async function setTextValue(input: HTMLInputElement | HTMLTextAreaElement, value: string) {
+  await act(async () => {
+    const prototype = input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(prototype, "value")?.set?.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+function lessonWithQuestions(
+  id: string,
+  questions: LessonQuestion[],
+  questionAlternates?: Lesson["questionAlternates"],
+  glossary: Lesson["glossary"] = [],
+): Lesson {
+  return { ...lesson, id, schemaVersion: questionAlternates ? 3 : 2, questions, questionAlternates, glossary };
+}
+
 beforeEach(() => {
+  window.localStorage.clear();
   Object.defineProperty(window, "speechSynthesis", {
     configurable: true,
     value: {
@@ -149,5 +168,132 @@ describe("fullscreen lesson player", () => {
     );
     expect(document.querySelector(".lesson-coach-messages")?.textContent).toContain("Why is A correct?");
     expect(document.querySelector(".lesson-coach-messages")?.textContent).toContain("matches the answer key");
+  });
+
+  it("moves a skipped slot without progress and activates its prepared format on skip four", async () => {
+    const primary = { ...lesson.questions[0], id: "skip-primary", prompt: "Original question" } as LessonQuestion;
+    const alternate = { ...lesson.questions[1], id: "skip-alternate", prompt: "Replacement question" } as LessonQuestion;
+    const onProgressBatch = vi.fn();
+    await renderPlayer({
+      lesson: lessonWithQuestions("skip-test", [primary], [{ questionId: primary.id, question: alternate }]),
+      onProgressBatch,
+    });
+
+    for (let count = 1; count <= 3; count += 1) {
+      await act(async () => button("Skip").click());
+      expect(document.querySelector("#lesson-player-title")?.textContent).toContain("Original question");
+    }
+    await act(async () => button("Skip").click());
+
+    expect(document.querySelector("#lesson-player-title")?.textContent).toContain("Replacement question");
+    expect(document.querySelector(".lesson-fullscreen-progress strong")?.textContent).toBe("1/1");
+    expect(document.querySelector(".lesson-player-notice")?.textContent).toContain("Skipped 4 times");
+    expect(onProgressBatch).not.toHaveBeenCalled();
+  });
+
+  it("persists a listening cooldown and automatically uses a non-listening alternate after reload", async () => {
+    const primary: LessonQuestion = {
+      id: "listen-primary",
+      type: "dictation",
+      prompt: "Listen and type",
+      explanation: "Transcript match.",
+      evaluationMode: "local",
+      transcript: "Good morning",
+      acceptedAnswers: ["Good morning"],
+    };
+    const alternate = { ...lesson.questions[0], id: "listen-alternate", prompt: "Read instead" } as LessonQuestion;
+    const listeningLesson = lessonWithQuestions("listening-test", [primary], [{ questionId: primary.id, question: alternate }]);
+    await renderPlayer({ lesson: listeningLesson });
+
+    await act(async () => button("Can't listen now").click());
+    expect(document.querySelector("#lesson-player-title")?.textContent).toContain("Read instead");
+    expect(Array.from(document.querySelectorAll("button")).some((candidate) => candidate.textContent?.includes("Can't listen now"))).toBe(false);
+    const stored = JSON.parse(window.localStorage.getItem(LESSON_PLAYER_PREFERENCE_KEY) ?? "{}") as { listeningDisabledUntil?: number };
+    expect(stored.listeningDisabledUntil).toBeGreaterThan(Date.now());
+
+    await act(async () => root?.unmount());
+    root = null;
+    await renderPlayer({ lesson: listeningLesson });
+    expect(document.querySelector("#lesson-player-title")?.textContent).toContain("Read instead");
+  });
+
+  it("persists learning-aid overrides and resets them with pronunciation defaults", async () => {
+    await renderPlayer();
+    await act(async () => button("Lesson settings").click());
+    const labels = Array.from(document.querySelectorAll<HTMLLabelElement>(".lesson-settings-toggle"));
+    const readQuestion = labels.find((label) => label.textContent?.includes("Read question"))!.querySelector<HTMLInputElement>("input")!;
+    const pronunciation = labels.find((label) => label.textContent?.includes("Show pronunciation"))!.querySelector<HTMLInputElement>("input")!;
+
+    await act(async () => readQuestion.click());
+    await act(async () => pronunciation.click());
+    await act(async () => button("Native reading").click());
+    let stored = JSON.parse(window.localStorage.getItem(LESSON_PLAYER_PREFERENCE_KEY) ?? "{}") as Record<string, unknown>;
+    expect(stored).toMatchObject({ readQuestion: true, showPronunciation: false, pronunciationMode: "native" });
+
+    await act(async () => button("Reset to lesson defaults").click());
+    expect(readQuestion.checked).toBe(false);
+    expect(pronunciation.checked).toBe(true);
+    expect(button("Romanized").getAttribute("aria-pressed")).toBe("true");
+    stored = JSON.parse(window.localStorage.getItem(LESSON_PLAYER_PREFERENCE_KEY) ?? "{}") as Record<string, unknown>;
+    expect(stored).not.toHaveProperty("readQuestion");
+    expect(stored).toMatchObject({ showPronunciation: true, pronunciationMode: "romanized" });
+  });
+
+  it("renders ruby pronunciation and a safe multi-meaning glossary tooltip", async () => {
+    const question = {
+      ...lesson.questions[0],
+      id: "glossary-question",
+      prompt: "Choose \u6c34",
+      presentation: { readQuestion: false, readAnswers: false, wordTooltips: true },
+    } as LessonQuestion;
+    await renderPlayer({
+      lesson: lessonWithQuestions("glossary-test", [question], undefined, [{
+        term: "\u6c34",
+        meaning: "water",
+        otherMeanings: ["a liquid element in compounds"],
+        pronunciation: { native: "\u307f\u305a", romanized: "mizu" },
+        example: "\u6c34\u3092\u98f2\u307f\u307e\u3059\u3002",
+      }]),
+    });
+
+    expect(document.querySelector("ruby rt")?.textContent).toBe("mizu");
+    const term = document.querySelector<HTMLElement>(".glossary-term")!;
+    await act(async () => term.click());
+    expect(document.querySelector(".glossary-tooltip")?.textContent).toContain("a liquid element in compounds");
+    expect(document.querySelector(".glossary-tooltip")?.textContent).toContain("mizu");
+
+    await act(async () => button("Lesson settings").click());
+    await act(async () => button("Native reading").click());
+    expect(document.querySelector("ruby rt")?.textContent).toBe("\u307f\u305a");
+  });
+
+  it("keeps a free-writing draft while adding, removing, and reordering word-bank chips", async () => {
+    const writing: LessonQuestion = {
+      id: "writing",
+      type: "freeWriting",
+      prompt: "Write a routine",
+      explanation: "Use a clear sequence.",
+      evaluationMode: "ai",
+      minWords: 2,
+      maxWords: 30,
+      rubric: ["Clarity"],
+      supportBank: [
+        { id: "usually", label: "usually" }, { id: "then", label: "then" },
+        { id: "wake", label: "wake up" }, { id: "eat", label: "eat" },
+        { id: "walk", label: "walk" }, { id: "work", label: "work" },
+        { id: "home", label: "home" }, { id: "finally", label: "finally" },
+      ],
+      supportBankSeparator: "space",
+    };
+    await renderPlayer({ lesson: lessonWithQuestions("writing-test", [writing]) });
+    await setTextValue(document.querySelector<HTMLTextAreaElement>(".free-writing-response textarea")!, "I");
+    await act(async () => button("Use word bank").click());
+    await act(async () => button("usually").click());
+    await act(async () => button("then").click());
+    await act(async () => button("Move then up").click());
+    await act(async () => button("Remove usually").click());
+    await act(async () => button("Use keyboard").click());
+
+    expect(document.querySelector<HTMLTextAreaElement>(".free-writing-response textarea")?.value).toBe("I then");
   });
 });

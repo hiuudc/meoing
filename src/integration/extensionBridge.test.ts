@@ -63,7 +63,7 @@ describe("ExtensionBridge operation waiting", () => {
       state("completed", {
         result: {
           type: "meoi.operation.result",
-          protocolVersion: 3,
+          protocolVersion: 4,
           operationId: "op-1",
           kind: "coaching",
           outcome: "completed",
@@ -99,7 +99,7 @@ describe("ExtensionBridge operation waiting", () => {
       state("completed", {
         result: {
           type: "meoi.operation.result",
-          protocolVersion: 3,
+          protocolVersion: 4,
           operationId: "op-1",
           kind: "coaching",
           outcome: "completed",

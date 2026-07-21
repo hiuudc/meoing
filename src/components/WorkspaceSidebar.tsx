@@ -3,6 +3,7 @@ import {
   ChevronDown,
   ChevronRight,
   FileText,
+  GraduationCap,
   MessageSquareQuote,
   MoreHorizontal,
   Palette,
@@ -19,6 +20,7 @@ import { MAX_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH, normalizeSidebarWidth } from "../
 import type { Collection, ContentKind, Unit } from "../types";
 import { cleanUnitName } from "../unit";
 import { CONTEXT_MENU_WIDTH, ContextMenu } from "./ContextMenu";
+import type { WorkspaceMode } from "./WorkspaceModeSwitch";
 
 const libraryItems: { kind: ContentKind; label: string; icon: typeof FileText }[] = [
   { kind: "document", label: "Documents", icon: FileText },
@@ -32,11 +34,13 @@ interface WorkspaceSidebarProps {
   units: Unit[];
   activeUnitId: string;
   activeKind: ContentKind;
+  mode: WorkspaceMode;
   sidebarWidth: number;
   openOnMobile: boolean;
   onCloseMobile: () => void;
   onSelectKind: (kind: ContentKind) => void;
   onSelectUnit: (id: string) => void;
+  onOpenLessons: (unitId: string) => void;
   onCreateUnit: () => void;
   onEditUnit: (unit: Unit) => void;
   onOpenUnitQuestions: (unit: Unit) => void;
@@ -73,11 +77,13 @@ export function WorkspaceSidebar({
   units,
   activeUnitId,
   activeKind,
+  mode,
   sidebarWidth,
   openOnMobile,
   onCloseMobile,
   onSelectKind,
   onSelectUnit,
+  onOpenLessons,
   onCreateUnit,
   onEditUnit,
   onOpenUnitQuestions,
@@ -94,15 +100,21 @@ export function WorkspaceSidebar({
   const dragStateRef = useRef<UnitDragState | null>(null);
   const dragStartRef = useRef<UnitDragStart | null>(null);
   const suppressUnitClickRef = useRef("");
+  const suppressAutoExpandRef = useRef("");
   const resizeStart = useRef<{ pointerId: number; x: number; width: number; nextWidth: number } | null>(null);
 
   useEffect(() => {
+    suppressAutoExpandRef.current = "";
     setUnitMenu(null);
     setExpandedUnitIds(new Set(activeUnitId ? [activeUnitId] : []));
   }, [collection.id]);
 
   useEffect(() => {
     if (!activeUnitId) return;
+    if (suppressAutoExpandRef.current === activeUnitId) {
+      suppressAutoExpandRef.current = "";
+      return;
+    }
     setExpandedUnitIds((current) => {
       if (current.has(activeUnitId)) return current;
       return new Set([...current, activeUnitId]);
@@ -261,10 +273,6 @@ export function WorkspaceSidebar({
     });
   }
 
-  function expandUnit(id: string) {
-    setExpandedUnitIds((current) => current.has(id) ? current : new Set([...current, id]));
-  }
-
   return (
     <>
       <aside className={`workspace-sidebar ${openOnMobile ? "is-mobile-open" : ""}`} aria-label="Workspace navigation">
@@ -286,7 +294,7 @@ export function WorkspaceSidebar({
         <div className="sidebar-nav-list">
           {libraryItems.map(({ kind, label, icon: Icon }) => (
             <button
-              className={`sidebar-nav-row ${activeKind === kind ? "is-current" : ""}`}
+              className={`sidebar-nav-row ${mode === "library" && activeKind === kind ? "is-current" : ""}`}
               type="button"
               key={kind}
               onClick={() => onSelectKind(kind)}
@@ -308,6 +316,7 @@ export function WorkspaceSidebar({
             units.map((unit, index) => {
               const cleanName = cleanUnitName(unit.name);
               const expanded = expandedUnitIds.has(unit.id);
+              const subnavId = `unit-subnav-${encodeURIComponent(unit.id)}`;
               const dropClass =
                 dragState?.targetId === unit.id && dragState.placement
                   ? ` is-drop-${dragState.placement}`
@@ -330,6 +339,7 @@ export function WorkspaceSidebar({
                       type="button"
                       aria-label={`${expanded ? "Collapse" : "Expand"} ${cleanName}`}
                       aria-expanded={expanded}
+                      aria-controls={subnavId}
                       onClick={(event) => {
                         event.stopPropagation();
                         toggleUnitExpanded(unit.id);
@@ -341,12 +351,15 @@ export function WorkspaceSidebar({
                       className="unit-row"
                       type="button"
                       aria-describedby="unit-reorder-instructions"
+                      aria-expanded={expanded}
+                      aria-controls={subnavId}
                       onClick={() => {
                         if (suppressUnitClickRef.current === unit.id) {
                           suppressUnitClickRef.current = "";
                           return;
                         }
-                        expandUnit(unit.id);
+                        suppressAutoExpandRef.current = expanded && activeUnitId !== unit.id ? unit.id : "";
+                        toggleUnitExpanded(unit.id);
                         onSelectUnit(unit.id);
                       }}
                       onKeyDown={(event) => {
@@ -387,10 +400,10 @@ export function WorkspaceSidebar({
                     </button>
                   </div>
                   {expanded ? (
-                    <div className="unit-subnav">
+                    <div className="unit-subnav" id={subnavId}>
                       {libraryItems.map(({ kind, label, icon: Icon }) => (
                         <button
-                          className={activeUnitId === unit.id && activeKind === kind ? "is-current" : ""}
+                          className={mode === "library" && activeUnitId === unit.id && activeKind === kind ? "is-current" : ""}
                           type="button"
                           key={kind}
                           onClick={() => {
@@ -402,6 +415,14 @@ export function WorkspaceSidebar({
                           <span>{label}</span>
                         </button>
                       ))}
+                      <button
+                        className={mode === "learn" && activeUnitId === unit.id ? "is-current" : ""}
+                        type="button"
+                        onClick={() => onOpenLessons(unit.id)}
+                      >
+                        <GraduationCap size={13} />
+                        <span>Lessons</span>
+                      </button>
                     </div>
                   ) : null}
                 </div>

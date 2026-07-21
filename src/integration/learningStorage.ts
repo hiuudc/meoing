@@ -145,6 +145,21 @@ export function putStoredLessonProgress(
   };
 }
 
+export function removeStoredLesson(
+  cache: LocalLearningCache,
+  unitId: string,
+  lessonId: string,
+): LocalLearningCache {
+  const current = cache.lessonsByUnit[unitId];
+  if (!current?.some((entry) => entry.lesson.id === lessonId)) return cache;
+
+  const remaining = current.filter((entry) => entry.lesson.id !== lessonId);
+  const lessonsByUnit = { ...cache.lessonsByUnit };
+  if (remaining.length) lessonsByUnit[unitId] = remaining;
+  else delete lessonsByUnit[unitId];
+  return { ...cache, lessonsByUnit };
+}
+
 export function pruneStoredLessons(
   cache: LocalLearningCache,
   validUnitIds: ReadonlySet<string>,

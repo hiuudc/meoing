@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { createLocalPreviewLesson } from "./demoLesson";
 import { gradeAnswer, normalizeAnswer } from "./grader";
 import { segmentGlossaryText } from "./glossary";
+import {
+  LISTENING_PAUSE_DURATION_MS,
+  effectivePresentation,
+  normalizeLessonPlayerPreference,
+  pauseListening,
+  resetLessonPlayerPreference,
+  resetPresentationOverrides,
+} from "./playerPreferences";
 import { firstTryAccuracy, shouldFlushProgress } from "./progress";
 import { DEFAULT_LEARNING_PROFILE, normalizeLearningProfile, resolveLearningProfile } from "./profile";
 import {
@@ -9,8 +18,15 @@ import {
   normalizeUnitQuestionSettings,
   validateUnitQuestionSettings,
 } from "./questionSettings";
-import { applyAttempt, createRetryState, masteryPercent, scheduleRetry } from "./retry";
-import { jsonByteLength, lessonSchema, parseEvaluation, validateLessonForExpectation, validateLessonForProfile } from "./schema";
+import { applyAttempt, createRetryState, masteryPercent, scheduleRetry, skipQuestion, useListeningAlternate } from "./retry";
+import {
+  jsonByteLength,
+  lessonSchema,
+  parseEvaluation,
+  parseLessonProgressSnapshot,
+  validateLessonForExpectation,
+  validateLessonForProfile,
+} from "./schema";
 import { normalizeSpeechPreference } from "./speech";
 import { QUESTION_FORMATS, type AttemptRecord, type Lesson, type LessonQuestion, type QuestionAnswer } from "./types";
 
@@ -124,7 +140,24 @@ describe("lesson schema", () => {
 
   it("matches the unit, language, level, exact count, and both grading modes", () => {
     const translationQuestion = questions.find((question) => question.type === "translation")!;
-    const expectedLesson: Lesson = { ...lesson, schemaVersion: 2, questions: [...lesson.questions.slice(0, 9), translationQuestion] };
+    const generatedQuestions: LessonQuestion[] = [...lesson.questions.slice(0, 9), translationQuestion].map((question) => ({
+      ...question,
+      prompt: `Lesson: ${question.prompt}`,
+      glossaryTargets: ["Lesson"],
+    }));
+    const expectedLesson: Lesson = {
+      ...lesson,
+      schemaVersion: 3,
+      glossary: [...lesson.glossary, { term: "Lesson", meaning: "a period of learning" }],
+      questions: generatedQuestions,
+      questionAlternates: generatedQuestions.map((question, index) => ({
+        questionId: question.id,
+        question: {
+          ...generatedQuestions[(index + 1) % generatedQuestions.length],
+          id: `${question.id}-alternate`,
+        } as LessonQuestion,
+      })),
+    };
     const expectation = {
       unitId: "unit-1",
       targetLanguage: "English",
@@ -138,6 +171,7 @@ describe("lesson schema", () => {
     expect(validateLessonForExpectation({ ...expectedLesson, unitId: "wrong" }, expectation)).toContain("lesson.unitId must equal unit-1.");
     expect(validateLessonForExpectation({ ...expectedLesson, questions: expectedLesson.questions.slice(0, 9) }, expectation))
       .toContain("lesson.questions must contain exactly 10 items.");
+    expect(() => lessonSchema.parse(expectedLesson)).not.toThrow();
   });
 
   it("validates one inline selectBlank marker and its answer key", () => {
@@ -181,6 +215,32 @@ describe("retry scheduler", () => {
     state = applyAttempt(state, "q1", "correct");
     expect(masteryPercent(state, 2)).toBe(100);
     expect(state.firstTryCorrect).toBe(1);
+  });
+
+  it("moves skipped slots to the end and activates one alternate on skip four", () => {
+    let state = createRetryState(["q1", "q2"]);
+    for (let skip = 1; skip <= 3; skip += 1) {
+      state = skipQuestion(state, "q1", true);
+      expect(state.alternateQuestionIds).toEqual([]);
+      state = skipQuestion(state, "q2", true);
+    }
+    state = skipQuestion(state, "q1", true);
+    expect(state.queue).toEqual(["q2", "q1"]);
+    expect(state.skipsByQuestion.q1).toBe(4);
+    expect(state.alternateQuestionIds).toEqual(["q1"]);
+    expect(state.attemptsByQuestion).toEqual({});
+    expect(state.completed).toEqual([]);
+
+    state = skipQuestion(state, "q1", true);
+    expect(state.alternateQuestionIds.filter((id) => id === "q1")).toHaveLength(1);
+  });
+
+  it("switches a listening slot to its prepared alternate without counting a skip", () => {
+    const state = useListeningAlternate(createRetryState(["dictation", "next"]), "dictation", true);
+    expect(state.queue).toEqual(["next", "dictation"]);
+    expect(state.alternateQuestionIds).toEqual(["dictation"]);
+    expect(state.skipsByQuestion).toEqual({});
+    expect(state.attemptsByQuestion).toEqual({});
   });
 });
 
@@ -289,5 +349,74 @@ describe("glossary and speech preferences", () => {
       voiceURI: "voice-1",
       rate: 2,
     });
+  });
+
+  it("matches inflected aliases and retains multiple meanings and pronunciation", () => {
+    const entry = {
+      term: "drink",
+      meaning: "consume a liquid",
+      otherMeanings: ["an alcoholic beverage"],
+      forms: ["drank"],
+      aliases: ["beverage"],
+      pronunciation: { native: "drink", romanized: "drink" },
+    };
+    const segments = segmentGlossaryText("She drank a beverage.", [entry]);
+    expect(segments.filter((segment) => segment.entry).map((segment) => segment.text)).toEqual(["drank", "beverage"]);
+    expect(segments.find((segment) => segment.entry)?.entry).toMatchObject({
+      otherMeanings: ["an alcoholic beverage"],
+      pronunciation: { romanized: "drink" },
+    });
+  });
+
+  it("normalizes lesson-player overrides and clamps listening cooldown", () => {
+    const now = 1_000;
+    const normalized = normalizeLessonPlayerPreference({
+      version: 99,
+      readQuestion: true,
+      readAnswers: "yes",
+      wordTooltips: false,
+      showPronunciation: false,
+      pronunciationMode: "native",
+      listeningDisabledUntil: now + LISTENING_PAUSE_DURATION_MS * 2,
+      autoplay: true,
+    }, now);
+    expect(normalized).toEqual({
+      version: 1,
+      readQuestion: true,
+      wordTooltips: false,
+      showPronunciation: false,
+      pronunciationMode: "native",
+      listeningDisabledUntil: now + LISTENING_PAUSE_DURATION_MS,
+    });
+    expect(pauseListening(normalized, now).listeningDisabledUntil).toBe(now + LISTENING_PAUSE_DURATION_MS);
+    expect(resetPresentationOverrides(normalized)).not.toHaveProperty("readQuestion");
+    expect(resetLessonPlayerPreference(normalized)).toEqual({
+      version: 1,
+      showPronunciation: true,
+      pronunciationMode: "romanized",
+      listeningDisabledUntil: now + LISTENING_PAUSE_DURATION_MS,
+    });
+    expect(effectivePresentation(
+      { readQuestion: false, readAnswers: true, wordTooltips: true },
+      normalized,
+    )).toEqual({ readQuestion: true, readAnswers: true, wordTooltips: false });
+  });
+
+  it("builds a schema-v3 demo with every format, one alternate per slot, and 19-question progress", () => {
+    const demo = createLocalPreviewLesson("unit-demo", "Demo", { ...DEFAULT_LEARNING_PROFILE, targetLanguage: "Japanese" });
+    expect(demo.schemaVersion).toBe(3);
+    expect(demo.questions).toHaveLength(19);
+    expect(new Set(demo.questions.map((question) => question.type))).toEqual(new Set(QUESTION_FORMATS));
+    expect(demo.questionAlternates).toHaveLength(19);
+    expect(() => lessonSchema.parse(demo)).not.toThrow();
+    expect(parseLessonProgressSnapshot({
+      lessonId: demo.id,
+      completedQuestionIds: demo.questions.map((question) => question.id),
+      attemptsByQuestion: Object.fromEntries(demo.questions.map((question) => [question.id, 1])),
+      firstTryCorrect: 19,
+      totalQuestions: 19,
+      masteryPercent: 100,
+      updatedAt: "2026-07-22T00:00:00.000Z",
+    }).totalQuestions).toBe(19);
   });
 });

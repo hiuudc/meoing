@@ -11,6 +11,7 @@ import {
   pruneStoredLessons,
   putStoredLesson,
   putStoredLessonProgress,
+  removeStoredLesson,
   saveLocalLearningCache,
 } from "./learningStorage";
 
@@ -120,6 +121,20 @@ describe("local learning cache", () => {
     const pruned = pruneStoredLessons(cache, new Set(["unit-2"]));
     expect(Object.keys(pruned.lessonsByUnit)).toEqual(["unit-2"]);
     expect(pruneStoredLessons(pruned, new Set(["unit-2"]))).toBe(pruned);
+  });
+
+  it("removes only the requested lesson and drops empty unit histories", () => {
+    let cache = putStoredLesson(createLocalLearningCache(), lesson("lesson-1"));
+    cache = putStoredLesson(cache, lesson("lesson-2"));
+
+    const unchanged = removeStoredLesson(cache, "unit-1", "missing");
+    expect(unchanged).toBe(cache);
+
+    cache = removeStoredLesson(cache, "unit-1", "lesson-1");
+    expect(cache.lessonsByUnit["unit-1"].map((entry) => entry.lesson.id)).toEqual(["lesson-2"]);
+
+    cache = removeStoredLesson(cache, "unit-1", "lesson-2");
+    expect(cache.lessonsByUnit["unit-1"]).toBeUndefined();
   });
 
   it("reports storage quota failures without mutating the in-memory cache", () => {

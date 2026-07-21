@@ -32,12 +32,20 @@ const expectation: OperationExpectation = {
 
 function generatedPreviewLesson() {
   const lesson = createLocalPreviewLesson("unit-1", "ignored", DEFAULT_LEARNING_PROFILE);
+  const questions = lesson.questions.slice(0, expectation.questionCount).map((question) => {
+    const { presentation: _presentation, ...generatedQuestion } = question;
+    return generatedQuestion as LessonQuestion;
+  });
+  const primaryIds = new Set(questions.map((question) => question.id));
   return {
     ...lesson,
-    questions: lesson.questions.map((question) => {
-      const { presentation: _presentation, ...generatedQuestion } = question;
-      return generatedQuestion as LessonQuestion;
-    }),
+    questions,
+    questionAlternates: lesson.questionAlternates
+      ?.filter((alternate) => primaryIds.has(alternate.questionId))
+      .map((alternate) => {
+        const { presentation: _presentation, ...generatedQuestion } = alternate.question;
+        return { ...alternate, question: generatedQuestion as LessonQuestion };
+      }),
   };
 }
 
@@ -129,10 +137,10 @@ describe("ChatGPT selector adapter", () => {
 });
 
 describe("strict ChatGPT result parsing", () => {
-  const raw = '{"type":"meoi.operation.result","protocolVersion":3,"operationId":"op-1","kind":"coaching","outcome":"completed","result":{"coachingReply":"Try again."}}';
+  const raw = '{"type":"meoi.operation.result","protocolVersion":4,"operationId":"op-1","kind":"coaching","outcome":"completed","result":{"coachingReply":"Try again."}}';
 
   it("parses exact raw JSON or one standalone json fence", () => {
-    expect(parse(raw)).toMatchObject({ ok: true, result: { protocolVersion: 3, operationId: "op-1" } });
+    expect(parse(raw)).toMatchObject({ ok: true, result: { protocolVersion: 4, operationId: "op-1" } });
     expect(parse(`\`\`\`json\n${raw}\n\`\`\``).ok).toBe(true);
     document.body.innerHTML = `<div data-message-author-role="assistant"><pre><code>${raw}</code></pre></div>`;
     expect(parse(assistantTurnText(findAssistantTurns()[0])).ok).toBe(true);
@@ -148,8 +156,8 @@ describe("strict ChatGPT result parsing", () => {
   });
 
   it("accepts needs_source and strict structured failures", () => {
-    const needsSource = '{"type":"meoi.operation.result","protocolVersion":3,"operationId":"op-1","kind":"create_lesson","outcome":"needs_source","result":{"sourceRequest":"Paste a transcript."}}';
-    const failed = '{"type":"meoi.operation.result","protocolVersion":3,"operationId":"op-2","kind":"evaluate_answer","outcome":"failed","error":{"code":"NO_ANSWER","message":"No answer was supplied."}}';
+    const needsSource = '{"type":"meoi.operation.result","protocolVersion":4,"operationId":"op-1","kind":"create_lesson","outcome":"needs_source","result":{"sourceRequest":"Paste a transcript."}}';
+    const failed = '{"type":"meoi.operation.result","protocolVersion":4,"operationId":"op-2","kind":"evaluate_answer","outcome":"failed","error":{"code":"NO_ANSWER","message":"No answer was supplied."}}';
     expect(parse(needsSource, "op-1", "create_lesson").ok).toBe(true);
     expect(parse(failed, "op-2", "evaluate_answer").ok).toBe(true);
   });
@@ -158,7 +166,7 @@ describe("strict ChatGPT result parsing", () => {
     const lesson = generatedPreviewLesson();
     const valid = JSON.stringify({
       type: "meoi.operation.result",
-      protocolVersion: 3,
+      protocolVersion: 4,
       operationId: "op-1",
       kind: "create_lesson",
       outcome: "completed",
@@ -180,7 +188,12 @@ describe("strict ChatGPT result parsing", () => {
     };
     expect(parse(valid, "op-1", "create_lesson", disabledFormatExpectation)).toMatchObject({ ok: false, code: "INVALID_RESULT_SCHEMA" });
 
-    const locallyDecorated = createLocalPreviewLesson("unit-1", "ignored", DEFAULT_LEARNING_PROFILE);
+    const locallyDecorated = {
+      ...lesson,
+      questions: lesson.questions.map((question, index) => index === 0
+        ? { ...question, presentation: { readQuestion: true, readAnswers: true, wordTooltips: true } }
+        : question),
+    };
     const untrustedPresentation = JSON.stringify({
       ...JSON.parse(valid),
       result: { lesson: locallyDecorated },
@@ -196,7 +209,7 @@ describe("strict ChatGPT result parsing", () => {
     };
     const envelope = (candidate: typeof lesson) => JSON.stringify({
       type: "meoi.operation.result",
-      protocolVersion: 3,
+      protocolVersion: 4,
       operationId: "op-1",
       kind: "create_lesson",
       outcome: "completed",
@@ -214,6 +227,40 @@ describe("strict ChatGPT result parsing", () => {
     expect(parse(envelope(mismatched), "op-1", "create_lesson", requiredExpectation)).toMatchObject({ ok: false, code: "INVALID_RESULT_SCHEMA" });
   });
 
+  it("rejects disabled alternate formats, alternate template IDs, and missing glossary coverage", () => {
+    const lesson = generatedPreviewLesson();
+    const envelope = (candidate: typeof lesson) => JSON.stringify({
+      type: "meoi.operation.result",
+      protocolVersion: 4,
+      operationId: "op-1",
+      kind: "create_lesson",
+      outcome: "completed",
+      result: { lesson: candidate },
+    });
+    const disabledAlternateExpectation: OperationExpectation = {
+      ...expectation,
+      allowedFormats: QUESTION_FORMATS.filter((format) => format !== "fillBlank"),
+    };
+    expect(parse(envelope(lesson), "op-1", "create_lesson", disabledAlternateExpectation))
+      .toMatchObject({ ok: false, code: "INVALID_RESULT_SCHEMA" });
+
+    const alternateTemplate = {
+      ...lesson,
+      questionAlternates: lesson.questionAlternates?.map((alternate, index) => index === 0
+        ? { ...alternate, question: { ...alternate.question, templateId: "not-allowed" } }
+        : alternate),
+    };
+    expect(parse(envelope(alternateTemplate), "op-1", "create_lesson"))
+      .toMatchObject({ ok: false, code: "INVALID_RESULT_SCHEMA" });
+
+    const missingCoverage = {
+      ...lesson,
+      questions: lesson.questions.map((question, index) => index === 0 ? { ...question, glossaryTargets: [] } : question),
+    };
+    expect(parse(envelope(missingCoverage), "op-1", "create_lesson"))
+      .toMatchObject({ ok: false, code: "INVALID_RESULT_SCHEMA" });
+  });
+
   it("deeply validates evaluation fields and rejects extras", () => {
     const evaluation = {
       status: "partial",
@@ -225,17 +272,17 @@ describe("strict ChatGPT result parsing", () => {
       nextHint: "Check the verb.",
     };
     const envelope = (value: unknown) => JSON.stringify({
-      type: "meoi.operation.result", protocolVersion: 3, operationId: "op-1", kind: "evaluate_answer", outcome: "completed", result: { evaluation: value },
+      type: "meoi.operation.result", protocolVersion: 4, operationId: "op-1", kind: "evaluate_answer", outcome: "completed", result: { evaluation: value },
     });
     expect(parse(envelope(evaluation), "op-1", "evaluate_answer").ok).toBe(true);
     expect(parse(envelope({ ...evaluation, saved: true }), "op-1", "evaluate_answer")).toMatchObject({ ok: false, code: "INVALID_RESULT_SCHEMA" });
   });
 
   it("rejects wrong IDs, kinds, extra envelope fields, and oversized responses", () => {
-    const wrong = '{"type":"meoi.operation.result","protocolVersion":3,"operationId":"op-2","kind":"coaching","outcome":"completed","result":{"coachingReply":"ok"}}';
+    const wrong = '{"type":"meoi.operation.result","protocolVersion":4,"operationId":"op-2","kind":"coaching","outcome":"completed","result":{"coachingReply":"ok"}}';
     expect(parse(wrong, "op-1", "coaching")).toMatchObject({ ok: false, code: "WRONG_OPERATION_ID" });
     expect(parse(wrong, "op-2", "create_lesson")).toMatchObject({ ok: false, code: "WRONG_OPERATION_KIND" });
-    expect(parse('{"type":"meoi.operation.result","protocolVersion":3,"operationId":"op-1","kind":"coaching","outcome":"completed","result":{"coachingReply":"ok"},"extra":true}'))
+    expect(parse('{"type":"meoi.operation.result","protocolVersion":4,"operationId":"op-1","kind":"coaching","outcome":"completed","result":{"coachingReply":"ok"},"extra":true}'))
       .toMatchObject({ ok: false, code: "INVALID_RESULT_SCHEMA" });
     expect(parse("x".repeat(CHAT_RESULT_MAX_BYTES + 1))).toMatchObject({ ok: false, code: "RESPONSE_TOO_LARGE" });
   });

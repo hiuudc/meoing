@@ -36,3 +36,22 @@ export function putSessionProgress(state: LearningSessionState, snapshot: Lesson
     : state.unitSummaries;
   return { ...state, progressByLesson: { ...state.progressByLesson, [snapshot.lessonId]: snapshot }, unitSummaries };
 }
+
+export function removeSessionLesson(
+  state: LearningSessionState,
+  unitId: string,
+  lessonId: string,
+): LearningSessionState {
+  const activeLessonMatches = state.lessonsByUnit[unitId]?.id === lessonId;
+  const hasProgress = Boolean(state.progressByLesson[lessonId]);
+  const summaryMatches = state.unitSummaries[unitId]?.lastLessonId === lessonId;
+  if (!activeLessonMatches && !hasProgress && !summaryMatches) return state;
+
+  const lessonsByUnit = { ...state.lessonsByUnit };
+  const progressByLesson = { ...state.progressByLesson };
+  const unitSummaries = { ...state.unitSummaries };
+  if (activeLessonMatches) delete lessonsByUnit[unitId];
+  if (hasProgress) delete progressByLesson[lessonId];
+  if (summaryMatches) delete unitSummaries[unitId];
+  return { lessonsByUnit, progressByLesson, unitSummaries };
+}

@@ -1,5 +1,5 @@
 import { ArrowDown, ArrowUp, Plus, RotateCcw, X } from "lucide-react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { ChoiceOption, LessonQuestion, QuestionAnswer, SpeakingSubmission } from "./types";
 import { SpeakingRecorder } from "./SpeakingRecorder";
 import { languageTagForSpeech } from "./speech";
@@ -11,7 +11,7 @@ interface QuestionRendererProps {
   disabled?: boolean;
   onChange: (answer: QuestionAnswer) => void;
   onSpeakingChange?: (submission: SpeakingSubmission | null) => void;
-  renderText?: (text: string) => ReactNode;
+  renderText?: (text: string, interactive?: boolean) => ReactNode;
 }
 
 function stringAnswer(answer: QuestionAnswer): string {
@@ -39,7 +39,7 @@ function TextResponse({ value, onChange, disabled, label, multiline = false }: {
   );
 }
 
-function ReorderResponse({ options, value, onChange, disabled, renderText }: { options: ChoiceOption[]; value: string[]; onChange: (value: string[]) => void; disabled?: boolean; renderText: (text: string) => ReactNode }) {
+function ReorderResponse({ options, value, onChange, disabled, renderText }: { options: ChoiceOption[]; value: string[]; onChange: (value: string[]) => void; disabled?: boolean; renderText: (text: string, interactive?: boolean) => ReactNode }) {
   const labels = new Map(options.map((option) => [option.id, option.label]));
   const available = options.filter((option) => !value.includes(option.id));
 
@@ -70,7 +70,7 @@ function ReorderResponse({ options, value, onChange, disabled, renderText }: { o
         <div className="token-bank" aria-label="Available tokens">
           {available.map((option) => (
             <button type="button" key={option.id} onClick={() => onChange([...value, option.id])} disabled={disabled}>
-              <Plus size={13} /> {renderText(option.label)}
+              <Plus size={13} /> {renderText(option.label, false)}
             </button>
           ))}
         </div>
@@ -80,6 +80,64 @@ function ReorderResponse({ options, value, onChange, disabled, renderText }: { o
           <RotateCcw size={14} /> Reset order
         </button>
       ) : null}
+    </div>
+  );
+}
+
+function FreeWritingResponse({
+  question,
+  value,
+  onChange,
+  disabled,
+  renderText,
+}: {
+  question: Extract<LessonQuestion, { type: "freeWriting" }>;
+  value: string;
+  onChange: (value: string) => void;
+  disabled?: boolean;
+  renderText: (text: string, interactive?: boolean) => ReactNode;
+}) {
+  const [mode, setMode] = useState<"keyboard" | "bank">("keyboard");
+  const [bankBase, setBankBase] = useState("");
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const options = question.supportBank ?? [];
+  const separator = question.supportBankSeparator === "none" ? "" : " ";
+  const labels = new Map(options.map((option) => [option.id, option.label]));
+  const wordCount = value.trim() ? value.trim().split(/\s+/).length : 0;
+
+  function compose(ids: string[]): string {
+    const selected = ids.map((id) => labels.get(id) ?? "").filter(Boolean).join(separator);
+    if (!bankBase) return selected;
+    if (!selected) return bankBase;
+    return separator ? `${bankBase.trimEnd()}${separator}${selected}` : `${bankBase}${selected}`;
+  }
+
+  function useBank() {
+    setBankBase(value);
+    setSelectedIds([]);
+    setMode("bank");
+  }
+
+  function updateBank(ids: string[]) {
+    setSelectedIds(ids);
+    onChange(compose(ids));
+  }
+
+  return (
+    <div className="open-response free-writing-response">
+      <div className="writing-mode-switch" role="group" aria-label="Writing input mode">
+        <button type="button" className={mode === "keyboard" ? "is-active" : ""} aria-pressed={mode === "keyboard"} onClick={() => setMode("keyboard")} disabled={disabled}>Use keyboard</button>
+        {options.length ? <button type="button" className={mode === "bank" ? "is-active" : ""} aria-pressed={mode === "bank"} onClick={useBank} disabled={disabled}>Use word bank</button> : null}
+      </div>
+      {mode === "keyboard" ? (
+        <TextResponse label="Writing response" value={value} onChange={onChange} disabled={disabled} multiline />
+      ) : (
+        <>
+          {bankBase ? <p className="writing-bank-base"><span>Existing draft</span>{bankBase}</p> : null}
+          <ReorderResponse options={options} value={selectedIds} onChange={updateBank} disabled={disabled} renderText={renderText} />
+        </>
+      )}
+      <p className="rubric-copy">{wordCount}/{question.minWords}-{question.maxWords} words · {question.rubric.join(" · ")}</p>
     </div>
   );
 }
@@ -94,7 +152,7 @@ export function QuestionRenderer({ question, answer, language, disabled, onChang
           {question.options.map((option) => (
             <label key={option.id} className={stringAnswer(answer) === option.id ? "is-selected" : ""}>
               <input type="radio" name={question.id} value={option.id} checked={stringAnswer(answer) === option.id} onChange={() => onChange(option.id)} />
-              <span>{render(option.label)}</span>
+              <span>{render(option.label, false)}</span>
             </label>
           ))}
         </fieldset>
@@ -112,7 +170,7 @@ export function QuestionRenderer({ question, answer, language, disabled, onChang
                 checked={selected.includes(option.id)}
                 onChange={(event) => onChange(event.target.checked ? [...selected, option.id] : selected.filter((id) => id !== option.id))}
               />
-              <span>{render(option.label)}</span>
+              <span>{render(option.label, false)}</span>
             </label>
           ))}
         </fieldset>
@@ -160,7 +218,7 @@ export function QuestionRenderer({ question, answer, language, disabled, onChang
                 onClick={() => onChange(option.id)}
                 disabled={disabled}
               >
-                {render(option.label)}
+                {render(option.label, false)}
               </button>
             ))}
           </div>
@@ -271,13 +329,7 @@ export function QuestionRenderer({ question, answer, language, disabled, onChang
       );
     case "freeWriting": {
       const value = stringAnswer(answer);
-      const wordCount = value.trim() ? value.trim().split(/\s+/).length : 0;
-      return (
-        <div className="open-response">
-          <TextResponse label="Writing response" value={value} onChange={onChange} disabled={disabled} multiline />
-          <p className="rubric-copy">{wordCount}/{question.minWords}-{question.maxWords} words · {question.rubric.join(" · ")}</p>
-        </div>
-      );
+      return <FreeWritingResponse question={question} value={value} onChange={onChange} disabled={disabled} renderText={render} />;
     }
     case "speakingRepeat":
       return (

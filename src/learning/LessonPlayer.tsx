@@ -7,9 +7,11 @@ import {
   Lightbulb,
   LoaderCircle,
   MessageCircle,
+  HeadphoneOff,
   RotateCcw,
   Send,
   Settings2,
+  SkipForward,
   Sparkles,
   Volume2,
   X,
@@ -20,9 +22,18 @@ import { gradeAnswer, isAnswerEmpty } from "./grader";
 import { GlossaryText } from "./GlossaryText";
 import { shouldFlushProgress } from "./progress";
 import { answerSpeechText, questionSpeechText } from "./questionContent";
+import {
+  effectivePresentation,
+  enableListening,
+  loadLessonPlayerPreference,
+  pauseListening,
+  resetLessonPlayerPreference,
+  saveLessonPlayerPreference,
+  type LessonPlayerPreference,
+} from "./playerPreferences";
 import { getQuestionFormatDefinition } from "./questionRegistry";
 import { defaultPresentationForFormat } from "./questionSettings";
-import { applyAttempt, createRetryState, masteryPercent, type RetryState } from "./retry";
+import { applyAttempt, createRetryState, masteryPercent, skipQuestion, useListeningAlternate, type RetryState } from "./retry";
 import {
   loadSpeechPreference,
   resolveSpeechVoice,
@@ -95,6 +106,12 @@ function statusLabel(status: Evaluation["status"]): string {
   return "Not correct yet";
 }
 
+function listeningCountdown(until: number, now: number): string {
+  const seconds = Math.max(0, Math.ceil((until - now) / 1_000));
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
 function getFocusableElements(container: HTMLElement): HTMLElement[] {
   return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
     (element) => !element.hidden && element.getAttribute("aria-hidden") !== "true",
@@ -110,8 +127,16 @@ export function LessonPlayer({
   onExit,
 }: LessonPlayerProps) {
   const questionMap = useMemo(() => new Map(lesson.questions.map((question) => [question.id, question])), [lesson.questions]);
+  const alternateMap = useMemo(
+    () => new Map((lesson.questionAlternates ?? []).map((alternate) => [alternate.questionId, alternate.question])),
+    [lesson.questionAlternates],
+  );
   const [retryState, setRetryState] = useState(() => createRetryState(lesson.questions.map((question) => question.id)));
-  const currentQuestion = questionMap.get(retryState.queue[0]);
+  const currentSlotId = retryState.queue[0];
+  const currentPrimaryQuestion = questionMap.get(currentSlotId);
+  const currentQuestion = retryState.alternateQuestionIds.includes(currentSlotId)
+    ? alternateMap.get(currentSlotId) ?? currentPrimaryQuestion
+    : currentPrimaryQuestion;
   const [answer, setAnswer] = useState<QuestionAnswer>(() => currentQuestion ? initialAnswer(currentQuestion) : "");
   const [speaking, setSpeaking] = useState<SpeakingSubmission | null>(null);
   const [evaluation, setEvaluation] = useState<Evaluation | null>(null);
@@ -121,6 +146,9 @@ export function LessonPlayer({
   const [speechOpen, setSpeechOpen] = useState(false);
   const [speechPosition, setSpeechPosition] = useState({ top: 0, left: 0 });
   const [speechPreference, setSpeechPreference] = useState<BrowserSpeechPreference>(() => loadSpeechPreference(window.localStorage));
+  const [playerPreference, setPlayerPreference] = useState<LessonPlayerPreference>(() => loadLessonPlayerPreference(window.localStorage));
+  const [now, setNow] = useState(() => Date.now());
+  const [notice, setNotice] = useState("");
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [chatByQuestion, setChatByQuestion] = useState<Record<string, CoachChatMessage[]>>({});
   const [coachDraft, setCoachDraft] = useState("");
@@ -136,6 +164,24 @@ export function LessonPlayer({
   const speechButtonRef = useRef<HTMLButtonElement>(null);
   const speechPopoverRef = useRef<HTMLDivElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
+
+  function questionForState(state: RetryState): LessonQuestion | undefined {
+    const slotId = state.queue[0];
+    const primary = questionMap.get(slotId);
+    return state.alternateQuestionIds.includes(slotId) ? alternateMap.get(slotId) ?? primary : primary;
+  }
+
+  function showRetryState(next: RetryState) {
+    setRetryState(next);
+    retryStateRef.current = next;
+    const nextQuestion = questionForState(next);
+    setAnswer(nextQuestion ? initialAnswer(nextQuestion) : "");
+    setSpeaking(null);
+    setEvaluation(null);
+    setError("");
+    setCoachDraft("");
+    setCoachError("");
+  }
 
   useEffect(() => {
     retryStateRef.current = retryState;
@@ -160,6 +206,7 @@ export function LessonPlayer({
     setChatByQuestion({});
     setCoachDraft("");
     setCoachError("");
+    setNotice("");
     pendingAttemptsRef.current = [];
   }, [lesson]);
 
@@ -224,6 +271,36 @@ export function LessonPlayer({
   }, [speechPreference]);
 
   useEffect(() => {
+    saveLessonPlayerPreference(playerPreference, window.localStorage);
+  }, [playerPreference]);
+
+  useEffect(() => {
+    setNow(Date.now());
+    if (playerPreference.listeningDisabledUntil <= Date.now()) return;
+    const interval = window.setInterval(() => {
+      const nextNow = Date.now();
+      setNow(nextNow);
+      if (playerPreference.listeningDisabledUntil <= nextNow) {
+        setPlayerPreference((current) => enableListening(current));
+      }
+    }, 1_000);
+    return () => window.clearInterval(interval);
+  }, [playerPreference.listeningDisabledUntil]);
+
+  useEffect(() => {
+    if (
+      !currentSlotId
+      || currentPrimaryQuestion?.type !== "dictation"
+      || playerPreference.listeningDisabledUntil <= Date.now()
+      || retryState.alternateQuestionIds.includes(currentSlotId)
+      || !alternateMap.has(currentSlotId)
+    ) return;
+    const next = useListeningAlternate(retryState, currentSlotId, true);
+    showRetryState(next);
+    setNotice("Listening is paused. This exercise will return in a non-listening format.");
+  }, [alternateMap, currentPrimaryQuestion?.type, currentSlotId, playerPreference.listeningDisabledUntil, retryState]);
+
+  useEffect(() => {
     window.speechSynthesis?.cancel();
     setCoachDraft("");
     setCoachError("");
@@ -237,8 +314,8 @@ export function LessonPlayer({
     const speechAnchor = anchor;
     const position = () => {
       const rect = speechAnchor.getBoundingClientRect();
-      const width = Math.min(320, window.innerWidth - 16);
-      const height = speechPopoverRef.current?.offsetHeight ?? 220;
+      const width = Math.min(380, window.innerWidth - 16);
+      const height = speechPopoverRef.current?.offsetHeight ?? 560;
       setSpeechPosition({
         top: Math.max(8, Math.min(rect.bottom + 8, window.innerHeight - height - 8)),
         left: Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8)),
@@ -351,12 +428,12 @@ export function LessonPlayer({
   }
 
   function continueLesson() {
-    if (!currentQuestion || !evaluation) return;
+    if (!currentQuestion || !currentSlotId || !evaluation) return;
     window.speechSynthesis?.cancel();
-    const attemptNumber = (retryState.attemptsByQuestion[currentQuestion.id] ?? 0) + 1;
-    const nextState = applyAttempt(retryState, currentQuestion.id, evaluation.status);
+    const attemptNumber = (retryState.attemptsByQuestion[currentSlotId] ?? 0) + 1;
+    const nextState = applyAttempt(retryState, currentSlotId, evaluation.status);
     const record: AttemptRecord = {
-      questionId: currentQuestion.id,
+      questionId: currentSlotId,
       attemptNumber,
       status: evaluation.status,
       score: evaluation.score,
@@ -365,34 +442,44 @@ export function LessonPlayer({
     };
     const pending = [...pendingAttemptsRef.current, record];
     pendingAttemptsRef.current = pending;
-    setRetryState(nextState);
-    retryStateRef.current = nextState;
     const lessonComplete = nextState.queue.length === 0;
     if (shouldFlushProgress({ pending, lessonComplete, pageHidden: document.visibilityState === "hidden" })) {
       pendingAttemptsRef.current = [];
       void onProgressBatch?.(pending, buildSnapshot(lesson, nextState));
     }
-    const nextQuestion = questionMap.get(nextState.queue[0]);
-    setAnswer(nextQuestion ? initialAnswer(nextQuestion) : "");
-    setSpeaking(null);
-    setEvaluation(null);
-    setError("");
-    setCoachDraft("");
-    setCoachError("");
+    showRetryState(nextState);
+    setNotice("");
+  }
+
+  function skipCurrentQuestion() {
+    if (!currentQuestion || !currentSlotId || submitting || evaluation) return;
+    window.speechSynthesis?.cancel();
+    const wasAlternate = retryState.alternateQuestionIds.includes(currentSlotId);
+    const next = skipQuestion(retryState, currentSlotId, alternateMap.has(currentSlotId));
+    const activatedAlternate = !wasAlternate && next.alternateQuestionIds.includes(currentSlotId);
+    const skipCount = next.skipsByQuestion[currentSlotId] ?? 0;
+    showRetryState(next);
+    setNotice(activatedAlternate
+      ? `Skipped ${skipCount} times. This exercise will return as ${getQuestionFormatDefinition(alternateMap.get(currentSlotId)!.type).label}.`
+      : `Exercise moved to the end of the queue · skip ${skipCount}.`);
+  }
+
+  function pauseListeningExercises() {
+    if (!currentSlotId || currentQuestion?.type !== "dictation" || !alternateMap.has(currentSlotId)) return;
+    const nextPreference = pauseListening(playerPreference);
+    setPlayerPreference(nextPreference);
+    setNow(Date.now());
+    const next = useListeningAlternate(retryState, currentSlotId, true);
+    showRetryState(next);
+    setNotice("Listening exercises are paused for 15 minutes and will use non-listening alternatives.");
   }
 
   async function restartLesson() {
     await flushPendingProgress();
     const next = createRetryState(lesson.questions.map((question) => question.id));
-    setRetryState(next);
-    retryStateRef.current = next;
-    setAnswer(lesson.questions[0] ? initialAnswer(lesson.questions[0]) : "");
-    setSpeaking(null);
-    setEvaluation(null);
-    setError("");
+    showRetryState(next);
     setChatByQuestion({});
-    setCoachDraft("");
-    setCoachError("");
+    setNotice("");
     pendingAttemptsRef.current = [];
   }
 
@@ -401,7 +488,8 @@ export function LessonPlayer({
     if (!currentQuestion || !evaluation || !onAskCoach || !coachingAvailable || coachSending) return;
     const message = coachDraft.trim();
     if (!message) return;
-    const history = (chatByQuestion[currentQuestion.id] ?? []).slice(-8);
+    const chatKey = currentSlotId ?? currentQuestion.id;
+    const history = (chatByQuestion[chatKey] ?? []).slice(-8);
     setCoachSending(true);
     setCoachError("");
     try {
@@ -409,8 +497,8 @@ export function LessonPlayer({
       if (!reply) throw new Error("ChatGPT returned an empty coaching reply.");
       setChatByQuestion((current) => ({
         ...current,
-        [currentQuestion.id]: [
-          ...(current[currentQuestion.id] ?? []),
+        [chatKey]: [
+          ...(current[chatKey] ?? []),
           { role: "user", content: message },
           { role: "assistant", content: reply },
         ].slice(-10) as CoachChatMessage[],
@@ -426,12 +514,15 @@ export function LessonPlayer({
   const total = lesson.questions.length;
   const masteredPosition = currentQuestion ? Math.min(retryState.completed.length + 1, total) : total;
   const displayedProgress = total ? (masteredPosition / total) * 100 : 0;
-  const upcomingRetry = currentQuestion ? (retryState.attemptsByQuestion[currentQuestion.id] ?? 0) > 0 : false;
-  const displayedAttempt = currentQuestion ? (retryState.attemptsByQuestion[currentQuestion.id] ?? 0) + 1 : 0;
-  const presentation = currentQuestion?.presentation ?? (currentQuestion ? defaultPresentationForFormat(currentQuestion.type) : null);
-  const currentMessages = currentQuestion ? chatByQuestion[currentQuestion.id] ?? [] : [];
+  const upcomingRetry = currentSlotId ? (retryState.attemptsByQuestion[currentSlotId] ?? 0) > 0 : false;
+  const displayedAttempt = currentSlotId ? (retryState.attemptsByQuestion[currentSlotId] ?? 0) + 1 : 0;
+  const presentationDefaults = currentQuestion?.presentation ?? (currentQuestion ? defaultPresentationForFormat(currentQuestion.type) : null);
+  const presentation = presentationDefaults ? effectivePresentation(presentationDefaults, playerPreference) : null;
+  const currentMessages = currentSlotId ? chatByQuestion[currentSlotId] ?? [] : [];
   const speechSupported = "speechSynthesis" in window;
   const selectedVoice = voices.some((voice) => voice.voiceURI === speechPreference.voiceURI) ? speechPreference.voiceURI : "";
+  const listeningPaused = playerPreference.listeningDisabledUntil > now;
+  const renderGlossaryText = Boolean(presentation?.wordTooltips || playerPreference.showPronunciation);
   const portalTarget = document.querySelector<HTMLElement>(".app-shell") ?? document.body;
 
   const player = (
@@ -456,18 +547,18 @@ export function LessonPlayer({
             <strong>{masteredPosition}/{total}</strong>
           </div>
           <div className="lesson-header-actions">
-            <button type="button" onClick={() => setTheoryOpen((open) => !open)} aria-expanded={theoryOpen}>
+            <button type="button" aria-label="Review theory" onClick={() => setTheoryOpen((open) => !open)} aria-expanded={theoryOpen}>
               <BookOpen size={17} /> <span>Review theory</span>
             </button>
             <button
               ref={speechButtonRef}
               type="button"
+              aria-label="Lesson settings"
               aria-haspopup="dialog"
               aria-expanded={speechOpen}
               onClick={() => setSpeechOpen((open) => !open)}
-              disabled={!speechSupported}
             >
-              <Settings2 size={17} /> <span>Speech</span>
+              <Settings2 size={17} /> <span>Settings</span>
             </button>
           </div>
         </header>
@@ -481,8 +572,14 @@ export function LessonPlayer({
               </div>
               <div className="lesson-question-title-row">
                 <h1 id="lesson-player-title">
-                  {presentation?.wordTooltips
-                    ? <GlossaryText text={currentQuestion.prompt} glossary={lesson.glossary} />
+                  {renderGlossaryText
+                    ? <GlossaryText
+                        text={currentQuestion.prompt}
+                        glossary={lesson.glossary}
+                        tooltipsEnabled={presentation?.wordTooltips}
+                        showPronunciation={playerPreference.showPronunciation}
+                        pronunciationMode={playerPreference.pronunciationMode}
+                      />
                     : currentQuestion.prompt}
                 </h1>
                 <div className="lesson-question-speakers">
@@ -506,8 +603,15 @@ export function LessonPlayer({
                 disabled={Boolean(evaluation) || submitting}
                 onChange={setAnswer}
                 onSpeakingChange={setSpeaking}
-                renderText={presentation?.wordTooltips
-                  ? (text) => <GlossaryText text={text} glossary={lesson.glossary} />
+                renderText={renderGlossaryText
+                  ? (text, interactive = true) => <GlossaryText
+                      text={text}
+                      glossary={lesson.glossary}
+                      tooltipsEnabled={presentation?.wordTooltips}
+                      showPronunciation={playerPreference.showPronunciation}
+                      pronunciationMode={playerPreference.pronunciationMode}
+                      interactive={interactive}
+                    />
                   : undefined}
               />
               {error ? <p className="inline-error" role="alert">{error}</p> : null}
@@ -526,8 +630,20 @@ export function LessonPlayer({
           </main>
         )}
 
+        {notice ? <div className="lesson-player-notice" role="status">{notice}</div> : null}
+
         {currentQuestion && !evaluation ? (
           <footer className="lesson-action-bar">
+            <div className="lesson-skip-actions">
+              <button className="secondary-button" type="button" onClick={skipCurrentQuestion} disabled={submitting}>
+                <SkipForward size={16} /> Skip
+              </button>
+              {currentSlotId && currentQuestion.type === "dictation" && alternateMap.has(currentSlotId) ? (
+                <button className="secondary-button" type="button" onClick={pauseListeningExercises} disabled={submitting}>
+                  <HeadphoneOff size={16} /> Can't listen now
+                </button>
+              ) : null}
+            </div>
             <p>{currentQuestion.hint ? `Hint: ${currentQuestion.hint}` : "Answer the question, then check your response."}</p>
             <button className="primary-button" type="button" onClick={() => void submitAnswer()} disabled={submitting}>
               {submitting ? <LoaderCircle className="spin" size={17} /> : null}
@@ -609,22 +725,55 @@ export function LessonPlayer({
         ) : null}
 
         {speechOpen ? (
-          <div className="lesson-speech-popover" ref={speechPopoverRef} role="dialog" aria-label="Speech settings" style={speechPosition}>
-            <div><strong>Speech settings</strong><button type="button" aria-label="Close speech settings" onClick={() => { setSpeechOpen(false); speechButtonRef.current?.focus(); }}><X size={17} /></button></div>
-            <label>
-              <span>Browser voice</span>
-              <select value={selectedVoice} onChange={(event) => setSpeechPreference((current) => ({ ...current, voiceURI: event.target.value }))}>
-                <option value="">Automatic language match</option>
-                {voices.map((voice) => <option value={voice.voiceURI} key={voice.voiceURI}>{voice.name} · {voice.lang}</option>)}
-              </select>
-            </label>
-            <label>
-              <span>Speed</span>
-              <select value={speechPreference.rate} onChange={(event) => setSpeechPreference((current) => ({ ...current, rate: Number(event.target.value) }))}>
-                {SPEECH_RATES.map((rate) => <option value={rate} key={rate}>{rate}x</option>)}
-              </select>
-            </label>
-            <p>Speech plays only when you press a speaker button.</p>
+          <div className="lesson-speech-popover lesson-settings-popover" ref={speechPopoverRef} role="dialog" aria-label="Lesson settings" style={speechPosition}>
+            <div><strong>Lesson settings</strong><button type="button" aria-label="Close lesson settings" onClick={() => { setSpeechOpen(false); speechButtonRef.current?.focus(); }}><X size={17} /></button></div>
+            <section className="lesson-settings-section">
+              <div className="lesson-settings-section-title"><strong>Learning aids</strong><button type="button" onClick={() => setPlayerPreference((current) => resetLessonPlayerPreference(current))}>Reset to lesson defaults</button></div>
+              {([
+                ["readQuestion", "Read question"],
+                ["readAnswers", "Read answers"],
+                ["wordTooltips", "Word tooltips"],
+              ] as const).map(([key, label]) => (
+                <label className="lesson-settings-toggle" key={key}>
+                  <span>{label}{playerPreference[key] === undefined ? <small>Lesson default</small> : <small>Browser override</small>}</span>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(presentation?.[key])}
+                    onChange={(event) => setPlayerPreference((current) => ({ ...current, [key]: event.target.checked }))}
+                  />
+                </label>
+              ))}
+              <label className="lesson-settings-toggle">
+                <span>Show pronunciation<small>When lesson data provides a reading</small></span>
+                <input type="checkbox" checked={playerPreference.showPronunciation} onChange={(event) => setPlayerPreference((current) => ({ ...current, showPronunciation: event.target.checked }))} />
+              </label>
+              <div className="pronunciation-mode" role="group" aria-label="Pronunciation style">
+                <button type="button" className={playerPreference.pronunciationMode === "romanized" ? "is-active" : ""} aria-pressed={playerPreference.pronunciationMode === "romanized"} onClick={() => setPlayerPreference((current) => ({ ...current, pronunciationMode: "romanized" }))}>Romanized</button>
+                <button type="button" className={playerPreference.pronunciationMode === "native" ? "is-active" : ""} aria-pressed={playerPreference.pronunciationMode === "native"} onClick={() => setPlayerPreference((current) => ({ ...current, pronunciationMode: "native" }))}>Native reading</button>
+              </div>
+            </section>
+            <section className="lesson-settings-section">
+              <div className="lesson-settings-section-title"><strong>Listening</strong>{listeningPaused ? <span>{listeningCountdown(playerPreference.listeningDisabledUntil, now)}</span> : <span>Available</span>}</div>
+              <p>{listeningPaused ? "Dictation exercises use their non-listening alternative." : "Listening exercises are enabled."}</p>
+              {listeningPaused ? <button className="secondary-button" type="button" onClick={() => setPlayerPreference((current) => enableListening(current))}>Enable listening now</button> : null}
+            </section>
+            <section className="lesson-settings-section">
+              <strong>Browser speech</strong>
+              <label>
+                <span>Browser voice</span>
+                <select disabled={!speechSupported} value={selectedVoice} onChange={(event) => setSpeechPreference((current) => ({ ...current, voiceURI: event.target.value }))}>
+                  <option value="">Automatic language match</option>
+                  {voices.map((voice) => <option value={voice.voiceURI} key={voice.voiceURI}>{voice.name} · {voice.lang}</option>)}
+                </select>
+              </label>
+              <label>
+                <span>Speed</span>
+                <select disabled={!speechSupported} value={speechPreference.rate} onChange={(event) => setSpeechPreference((current) => ({ ...current, rate: Number(event.target.value) }))}>
+                  {SPEECH_RATES.map((rate) => <option value={rate} key={rate}>{rate}x</option>)}
+                </select>
+              </label>
+              <p>Speech plays only when you press a speaker button.</p>
+            </section>
           </div>
         ) : null}
       </section>

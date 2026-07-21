@@ -373,10 +373,38 @@
 }
 
 .lesson-action-bar > p {
+  flex: 1;
   margin: 0;
   color: var(--text-muted, #888496);
   font-size: 12px;
   line-height: 1.5;
+}
+
+.lesson-skip-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.lesson-skip-actions .secondary-button {
+  min-height: 40px;
+  white-space: nowrap;
+}
+
+.lesson-player-notice {
+  position: absolute;
+  z-index: 5;
+  right: 18px;
+  bottom: 104px;
+  max-width: min(430px, calc(100vw - 36px));
+  padding: 10px 12px;
+  color: var(--text-primary, #252333);
+  background: var(--bg-elevated, #fff);
+  border: 1px solid color-mix(in srgb, var(--accent, #6e5de7) 38%, var(--border, #dedbe9));
+  border-radius: 9px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .18);
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .lesson-action-bar .primary-button {
@@ -623,12 +651,15 @@
   z-index: 130;
   display: grid;
   gap: 13px;
-  width: min(320px, calc(100vw - 16px));
+  width: min(380px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
   padding: 15px;
   background: var(--bg-elevated, #fff);
   border: 1px solid var(--border, #dedbe9);
   border-radius: 11px;
   box-shadow: 0 18px 50px rgba(0, 0, 0, .3);
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .lesson-speech-popover > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
@@ -637,11 +668,38 @@
 .lesson-speech-popover select { width: 100%; min-width: 0; padding: 8px 9px; color: var(--text-primary, #252333); background: var(--bg-main, #f7f6fb); border: 1px solid var(--border, #dedbe9); border-radius: 8px; }
 .lesson-speech-popover > p { margin: 0; color: var(--text-muted, #888496); font-size: 10px; line-height: 1.45; }
 
+.lesson-settings-popover { gap: 0; padding: 0; }
+.lesson-settings-popover > div { padding: 14px 15px; border-bottom: 1px solid var(--border, #dedbe9); }
+.lesson-settings-section { display: grid; gap: 10px; padding: 13px 15px; border-bottom: 1px solid var(--border, #dedbe9); }
+.lesson-settings-section:last-child { border-bottom: 0; }
+.lesson-settings-section > strong { font-size: 12px; }
+.lesson-settings-section > p { margin: 0; color: var(--text-muted, #888496); font-size: 10px; line-height: 1.45; }
+.lesson-settings-section-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.lesson-settings-section-title > strong { font-size: 12px; }
+.lesson-settings-section-title > span { color: var(--accent-readable, var(--accent, #6e5de7)); font-size: 10px; font-weight: 800; }
+.lesson-settings-section-title > button { padding: 3px 0; color: var(--accent-readable, var(--accent, #6e5de7)); background: transparent; font-size: 9px; font-weight: 800; }
+.lesson-settings-toggle { display: flex !important; grid-template-columns: none !important; align-items: center; justify-content: space-between; gap: 12px; }
+.lesson-settings-toggle > span { display: grid; gap: 2px; color: var(--text-primary, #252333); }
+.lesson-settings-toggle small { color: var(--text-muted, #888496); font-size: 9px; font-weight: 500; }
+.lesson-settings-toggle input { width: 34px; height: 19px; accent-color: var(--accent, #6e5de7); }
+.pronunciation-mode { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.pronunciation-mode button,
+.writing-mode-switch button { padding: 8px 10px; color: var(--text-secondary, #646174); background: var(--bg-main, #f7f6fb); border: 1px solid var(--border, #dedbe9); border-radius: 8px; font-size: 10px; font-weight: 750; }
+.pronunciation-mode button.is-active,
+.writing-mode-switch button.is-active { color: var(--accent-readable, var(--accent, #6e5de7)); border-color: var(--accent, #6e5de7); box-shadow: inset 0 0 0 1px var(--accent, #6e5de7); }
+
 .glossary-term {
-  border-bottom: 1px dotted currentColor;
   cursor: help;
-  text-decoration: none;
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-thickness: 2px;
+  text-underline-offset: .2em;
 }
+
+.glossary-term ruby,
+.glossary-pronunciation ruby { ruby-position: over; }
+.glossary-term rt,
+.glossary-pronunciation rt { color: var(--text-muted, #888496); font-size: .48em; font-weight: 650; letter-spacing: .03em; }
 
 .glossary-term:focus-visible {
   border-radius: 2px;
@@ -676,7 +734,17 @@
 
 .glossary-tooltip strong { font-size: 13px; }
 .glossary-tooltip p { margin: 4px 0 0; color: var(--text-secondary, #646174); font-size: 12px; line-height: 1.45; }
+.glossary-tooltip ul { display: grid; gap: 3px; margin: 7px 0 0; padding-left: 18px; color: var(--text-secondary, #646174); font-size: 11px; line-height: 1.4; }
+.glossary-pronunciations { display: grid; gap: 3px; margin: 8px 0 0; }
+.glossary-pronunciations > div { display: grid; grid-template-columns: 68px 1fr; gap: 7px; }
+.glossary-pronunciations dt { color: var(--text-muted, #888496); font-size: 9px; font-weight: 800; text-transform: uppercase; }
+.glossary-pronunciations dd { margin: 0; color: var(--text-secondary, #646174); font-size: 11px; }
 .glossary-tooltip small { display: block; margin-top: 6px; color: var(--text-muted, #888496); font-size: 10px; line-height: 1.45; }
+
+.free-writing-response { display: grid; gap: 12px; }
+.writing-mode-switch { display: flex; justify-content: flex-end; gap: 7px; }
+.writing-bank-base { display: grid; gap: 4px; margin: 0; padding: 10px 12px; color: var(--text-secondary, #646174); background: var(--bg-elevated, #fff); border: 1px solid var(--border, #dedbe9); border-radius: 9px; font-size: 12px; line-height: 1.5; }
+.writing-bank-base > span { color: var(--text-muted, #888496); font-size: 9px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
 
 .lesson-complete-screen {
   display: grid;
@@ -722,6 +790,9 @@
   .cloze-input-grid { grid-template-columns: 1fr; }
   .mapping-response > label { grid-template-columns: 1fr; }
   .lesson-action-bar { display: grid; gap: 10px; min-height: 104px; padding: 12px; }
+  .lesson-skip-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .lesson-skip-actions .secondary-button { justify-content: center; }
+  .lesson-player-notice { right: 12px; bottom: 166px; }
   .lesson-action-bar .primary-button { width: 100%; }
   .lesson-feedback-tray { max-height: 58vh; padding: 14px 12px; }
   .lesson-feedback-main { grid-template-columns: 36px minmax(0, 1fr); gap: 10px; }

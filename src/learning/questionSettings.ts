@@ -204,18 +204,23 @@ export function decorateLessonPresentation(
 ): Lesson {
   const effective = getEffectiveUnitQuestionSettings(settings, profile);
   const templates = new Map(effective.customTemplates.map((template) => [template.id, template]));
+  const decorateQuestion = (question: Lesson["questions"][number]) => {
+    const template = question.templateId ? templates.get(question.templateId) : undefined;
+    const presentationSettings = template?.baseFormat === question.type
+      ? template.presentation
+      : effective.formatPresentation[question.type] ?? defaultPresentationForFormat(question.type);
+    return {
+      ...question,
+      presentation: { ...presentationSettings },
+    };
+  };
   return {
     ...lesson,
-    schemaVersion: 2,
-    questions: lesson.questions.map((question) => {
-      const template = question.templateId ? templates.get(question.templateId) : undefined;
-      const presentationSettings = template?.baseFormat === question.type
-        ? template.presentation
-        : effective.formatPresentation[question.type] ?? defaultPresentationForFormat(question.type);
-      return {
-        ...question,
-        presentation: { ...presentationSettings },
-      };
-    }),
+    schemaVersion: lesson.schemaVersion === 3 ? 3 : 2,
+    questions: lesson.questions.map(decorateQuestion),
+    questionAlternates: lesson.questionAlternates?.map((alternate) => ({
+      ...alternate,
+      question: decorateQuestion(alternate.question),
+    })),
   };
 }

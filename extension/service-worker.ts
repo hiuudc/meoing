@@ -60,6 +60,11 @@ const LEGACY_TRANSIENT_KEYS = [
   "meoi.provisionalUnitTabs.v2.session",
   "meoi.pausedForQuota.v2.session",
   "meoi.lastError.v2.session",
+  "meoi.queues.v3.session",
+  "meoi.operationStates.v3.session",
+  "meoi.provisionalUnitTabs.v3.session",
+  "meoi.pausedForQuota.v3.session",
+  "meoi.lastError.v3.session",
 ];
 
 const processingUnits = new Set<string>();

@@ -210,15 +210,22 @@ export function App() {
         units={units}
         activeUnitId={state.activeUnitId}
         activeKind={state.activeKind}
+        mode={workspaceMode}
         sidebarWidth={sidebarWidth}
         openOnMobile={mobileNavigationOpen}
         onCloseMobile={closeMobileNavigation}
         onSelectKind={(kind) => {
           dispatch({ type: "selectKind", kind });
+          setWorkspaceMode("library");
           closeMobileNavigation();
         }}
         onSelectUnit={(id) => {
           dispatch({ type: "selectUnit", id });
+          closeMobileNavigation();
+        }}
+        onOpenLessons={(unitId) => {
+          dispatch({ type: "selectUnit", id: unitId });
+          setWorkspaceMode("learn");
           closeMobileNavigation();
         }}
         onCreateUnit={() => openEditor({ type: "unit", collectionId: activeCollection.id })}

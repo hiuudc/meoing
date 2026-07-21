@@ -26,8 +26,10 @@ export function segmentGlossaryText(text: string, glossary: GlossaryEntry[]): Gl
 
   const seenTerms = new Set<string>();
   const entries = glossary
-    .filter((entry) => {
-      const normalized = entry.term.trim().toLocaleLowerCase();
+    .flatMap((entry) => [entry.term, ...(entry.forms ?? []), ...(entry.aliases ?? [])]
+      .map((term) => ({ entry, term: term.trim() })))
+    .filter(({ term }) => {
+      const normalized = term.toLocaleLowerCase();
       if (!normalized || seenTerms.has(normalized)) return false;
       seenTerms.add(normalized);
       return true;
@@ -38,18 +40,18 @@ export function segmentGlossaryText(text: string, glossary: GlossaryEntry[]): Gl
   let plainStart = 0;
   let index = 0;
   while (index < text.length) {
-    const entry = entries.find((candidate) => {
+    const match = entries.find((candidate) => {
       const slice = text.slice(index, index + candidate.term.length);
       return slice.toLocaleLowerCase() === candidate.term.toLocaleLowerCase()
         && hasValidBoundaries(text, index, candidate.term);
     });
-    if (!entry) {
+    if (!match) {
       index += 1;
       continue;
     }
     if (plainStart < index) segments.push({ text: text.slice(plainStart, index) });
-    segments.push({ text: text.slice(index, index + entry.term.length), entry });
-    index += entry.term.length;
+    segments.push({ text: text.slice(index, index + match.term.length), entry: match.entry });
+    index += match.term.length;
     plainStart = index;
   }
   if (plainStart < text.length) segments.push({ text: text.slice(plainStart) });

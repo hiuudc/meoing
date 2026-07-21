@@ -14,6 +14,7 @@ import {
   Send,
   ShieldCheck,
   Sparkles,
+  Trash2,
   Upload,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -41,12 +42,14 @@ import {
   createLearningSession,
   putSessionLesson,
   putSessionProgress,
+  removeSessionLesson,
   type LearningSessionState,
 } from "../integration/learningSession";
 import {
   loadLocalLearningCache,
   putStoredLesson,
   putStoredLessonProgress,
+  removeStoredLesson,
   saveLocalLearningCache,
   type LocalLearningCache,
   type StoredLessonEntry,
@@ -94,6 +97,7 @@ interface UnitLearningView {
 interface SavedLessonChooserProps {
   entries: StoredLessonEntry[];
   onCreateNew: () => void;
+  onDelete: (entry: StoredLessonEntry) => void;
   onReview: (entry: StoredLessonEntry) => void;
 }
 
@@ -149,7 +153,7 @@ function speakingMetadata(speaking?: SpeakingSubmission | null) {
   };
 }
 
-function SavedLessonChooser({ entries, onCreateNew, onReview }: SavedLessonChooserProps) {
+function SavedLessonChooser({ entries, onCreateNew, onDelete, onReview }: SavedLessonChooserProps) {
   return (
     <section className="saved-lessons" aria-labelledby="saved-lessons-title">
       <div className="saved-lessons-heading">
@@ -177,9 +181,20 @@ function SavedLessonChooser({ entries, onCreateNew, onReview }: SavedLessonChoos
                 <div><dt>Questions</dt><dd>{entry.lesson.questions.length}</dd></div>
                 <div><dt>Latest mastery</dt><dd>{entry.progress ? `${Math.round(entry.progress.masteryPercent)}%` : "Not studied"}</dd></div>
               </dl>
-              <button className="secondary-button" type="button" onClick={() => onReview(entry)}>
-                <Play size={15} /> Review from the start
-              </button>
+              <div className="saved-lesson-card-actions">
+                <button className="secondary-button" type="button" onClick={() => onReview(entry)}>
+                  <Play size={15} /> Review from the start
+                </button>
+                <button
+                  className="saved-lesson-delete-button"
+                  type="button"
+                  aria-label={`Delete saved lesson ${entry.lesson.title}`}
+                  title="Delete saved lesson"
+                  onClick={() => onDelete(entry)}
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
             </article>
           </li>
         ))}
@@ -316,6 +331,27 @@ export function LearningWorkspace({
 
   function reviewStoredLesson(entry: StoredLessonEntry) {
     startLesson(entry.lesson, `Reviewing “${entry.lesson.title}” from question one. Saved progress is shown only as a summary.`);
+  }
+
+  function deleteStoredLesson(entry: StoredLessonEntry) {
+    if (!unit || entry.lesson.unitId !== unit.id) return;
+    if (!window.confirm(`Delete saved lesson "${entry.lesson.title}"? This cannot be undone.`)) return;
+
+    setError("");
+    setWarning("");
+    const nextCache = removeStoredLesson(learningCacheRef.current, unit.id, entry.lesson.id);
+    if (nextCache === learningCacheRef.current) return;
+    if (!commitLearningCache(nextCache)) {
+      setError("The browser could not delete this saved lesson. Its local history was left unchanged.");
+      return;
+    }
+
+    setSession((current) => removeSessionLesson(current, unit.id, entry.lesson.id));
+    const remaining = nextCache.lessonsByUnit[unit.id] ?? [];
+    if (!remaining.length) {
+      setLearningView({ unitId: unit.id, view: "new", playerRunId: unitView.playerRunId });
+    }
+    setStatus(`Deleted saved lesson "${entry.lesson.title}".`);
   }
 
   function currentUnitContext() {
@@ -567,7 +603,12 @@ export function LearningWorkspace({
               <p>Choose a unit from the navigation before creating or reviewing a lesson.</p>
             </section>
           ) : learningView === "choose" ? (
-            <SavedLessonChooser entries={savedLessons} onCreateNew={openNewLesson} onReview={reviewStoredLesson} />
+            <SavedLessonChooser
+              entries={savedLessons}
+              onCreateNew={openNewLesson}
+              onDelete={deleteStoredLesson}
+              onReview={reviewStoredLesson}
+            />
           ) : learningView === "new" ? (
           <section className="lesson-request-card" aria-labelledby="lesson-request-title">
             <div className="card-heading-row">
@@ -600,11 +641,10 @@ export function LearningWorkspace({
                 <button className="secondary-button" type="button" onClick={openSavedLessons} disabled={busy}>
                   <ArrowLeft size={16} /> Saved lessons
                 </button>
-              ) : (
-                <button className="secondary-button" type="button" onClick={usePreviewLesson} disabled={busy}>
-                  <Play size={16} /> Player demo
-                </button>
-              )}
+              ) : null}
+              <button className="secondary-button" type="button" onClick={usePreviewLesson} disabled={busy}>
+                <Play size={16} /> Player demo
+              </button>
               <button
                 className="primary-button"
                 type="button"

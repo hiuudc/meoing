@@ -78,6 +78,7 @@ export interface BaseQuestion {
   evaluationMode: EvaluationMode;
   templateId?: string;
   presentation?: QuestionPresentationSettings;
+  glossaryTargets?: string[];
 }
 
 export interface SingleChoiceQuestion extends BaseQuestion {
@@ -212,6 +213,8 @@ export interface FreeWritingQuestion extends BaseQuestion {
   minWords: number;
   maxWords: number;
   rubric: string[];
+  supportBank?: ChoiceOption[];
+  supportBankSeparator?: "space" | "none";
 }
 
 export interface SpeakingRepeatQuestion extends BaseQuestion {
@@ -268,7 +271,19 @@ export interface LessonExample {
 export interface GlossaryEntry {
   term: string;
   meaning: string;
+  otherMeanings?: string[];
+  forms?: string[];
+  aliases?: string[];
+  pronunciation?: {
+    native?: string;
+    romanized?: string;
+  };
   example?: string;
+}
+
+export interface QuestionAlternate {
+  questionId: string;
+  question: LessonQuestion;
 }
 
 export interface SourceReference {
@@ -280,7 +295,7 @@ export interface SourceReference {
 }
 
 export interface Lesson {
-  schemaVersion: 1 | 2;
+  schemaVersion: 1 | 2 | 3;
   id: string;
   unitId: string;
   title: string;
@@ -293,6 +308,7 @@ export interface Lesson {
   glossary: GlossaryEntry[];
   sourceReferences: SourceReference[];
   questions: LessonQuestion[];
+  questionAlternates?: QuestionAlternate[];
   createdAt: string;
 }
 

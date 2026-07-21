@@ -6,6 +6,10 @@ import type { GlossaryEntry } from "./types";
 interface GlossaryTextProps {
   text: string;
   glossary: GlossaryEntry[];
+  tooltipsEnabled?: boolean;
+  showPronunciation?: boolean;
+  pronunciationMode?: "romanized" | "native";
+  interactive?: boolean;
 }
 
 interface OpenGlossary {
@@ -16,7 +20,14 @@ interface OpenGlossary {
 
 const TOOLTIP_MARGIN = 8;
 
-export function GlossaryText({ text, glossary }: GlossaryTextProps) {
+export function GlossaryText({
+  text,
+  glossary,
+  tooltipsEnabled = true,
+  showPronunciation = false,
+  pronunciationMode = "romanized",
+  interactive = true,
+}: GlossaryTextProps) {
   const segments = segmentGlossaryText(text, glossary);
   const [openGlossary, setOpenGlossary] = useState<OpenGlossary | null>(null);
   const [position, setPosition] = useState({ top: 0, left: 0 });
@@ -70,7 +81,16 @@ export function GlossaryText({ text, glossary }: GlossaryTextProps) {
   }, [openGlossary]);
 
   function open(entry: GlossaryEntry, index: number, anchor: HTMLElement) {
+    if (!tooltipsEnabled) return;
     setOpenGlossary({ entry, index, anchor });
+  }
+
+  function renderedTerm(segmentText: string, entry: GlossaryEntry) {
+    if (!showPronunciation || !entry.pronunciation) return segmentText;
+    const pronunciation = pronunciationMode === "native"
+      ? entry.pronunciation.native ?? entry.pronunciation.romanized
+      : entry.pronunciation.romanized ?? entry.pronunciation.native;
+    return pronunciation ? <ruby>{segmentText}<rt>{pronunciation}</rt></ruby> : segmentText;
   }
 
   const portalTarget = document.querySelector<HTMLElement>(".app-shell") ?? document.body;
@@ -79,26 +99,28 @@ export function GlossaryText({ text, glossary }: GlossaryTextProps) {
       {segments.map((segment, index) => segment.entry ? (
         <span
           key={`${index}-${segment.text}`}
-          className="glossary-term"
-          role="button"
-          tabIndex={0}
-          aria-describedby={openGlossary?.index === index ? tooltipId : undefined}
+          className={tooltipsEnabled ? "glossary-term" : "glossary-pronunciation"}
+          role={tooltipsEnabled && interactive ? "button" : undefined}
+          tabIndex={tooltipsEnabled && interactive ? 0 : undefined}
+          aria-describedby={tooltipsEnabled && interactive && openGlossary?.index === index ? tooltipId : undefined}
           onMouseEnter={(event) => open(segment.entry!, index, event.currentTarget)}
           onMouseLeave={() => setOpenGlossary((current) => current?.index === index ? null : current)}
           onFocus={(event) => open(segment.entry!, index, event.currentTarget)}
           onBlur={() => setOpenGlossary((current) => current?.index === index ? null : current)}
           onClick={(event) => {
+            if (!interactive) return;
             event.preventDefault();
             event.stopPropagation();
-            open(segment.entry!, index, event.currentTarget);
+            if (tooltipsEnabled) open(segment.entry!, index, event.currentTarget);
           }}
           onKeyDown={(event) => {
+            if (!interactive) return;
             if (event.key !== "Enter" && event.key !== " ") return;
             event.preventDefault();
-            open(segment.entry!, index, event.currentTarget);
+            if (tooltipsEnabled) open(segment.entry!, index, event.currentTarget);
           }}
         >
-          {segment.text}
+          {renderedTerm(segment.text, segment.entry)}
         </span>
       ) : <span key={`${index}-${segment.text}`}>{segment.text}</span>)}
       {openGlossary && tooltipId ? createPortal(
@@ -111,6 +133,15 @@ export function GlossaryText({ text, glossary }: GlossaryTextProps) {
         >
           <strong>{openGlossary.entry.term}</strong>
           <p>{openGlossary.entry.meaning}</p>
+          {openGlossary.entry.otherMeanings?.length ? (
+            <ul>{openGlossary.entry.otherMeanings.map((meaning) => <li key={meaning}>{meaning}</li>)}</ul>
+          ) : null}
+          {openGlossary.entry.pronunciation ? (
+            <dl className="glossary-pronunciations">
+              {openGlossary.entry.pronunciation.native ? <div><dt>Native</dt><dd>{openGlossary.entry.pronunciation.native}</dd></div> : null}
+              {openGlossary.entry.pronunciation.romanized ? <div><dt>Romanized</dt><dd>{openGlossary.entry.pronunciation.romanized}</dd></div> : null}
+            </dl>
+          ) : null}
           {openGlossary.entry.example ? <small>{openGlossary.entry.example}</small> : null}
         </div>,
         portalTarget,

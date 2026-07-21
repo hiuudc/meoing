@@ -1,4 +1,4 @@
-import type { LearningProfile, Lesson } from "./types";
+import type { LearningProfile, Lesson, LessonQuestion } from "./types";
 import { decorateLessonPresentation } from "./questionSettings";
 
 export function createLocalPreviewLesson(unitId: string, unitName: string, profile: LearningProfile): Lesson {
@@ -220,6 +220,17 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
         minWords: 35,
         maxWords: 80,
         rubric: ["Task completion", "Sequence markers", "Present-simple accuracy", "Clarity"],
+        supportBank: [
+          { id: "first", label: "First" },
+          { id: "usually", label: "usually" },
+          { id: "wake", label: "wake up" },
+          { id: "breakfast", label: "have breakfast" },
+          { id: "then", label: "then" },
+          { id: "commute", label: "commute" },
+          { id: "after", label: "after that" },
+          { id: "finally", label: "finally" },
+        ],
+        supportBankSeparator: "space",
         explanation: "A clear paragraph uses a logical sequence and consistent tense.",
         hint: "Plan four steps before you write.",
       },
@@ -249,5 +260,81 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
     ],
     createdAt: new Date().toISOString(),
   };
-  return decorateLessonPresentation(lesson, undefined, profile);
+  const extraQuestions: LessonQuestion[] = [
+    {
+      id: `${prefix}-q16`,
+      type: "fillBlank",
+      evaluationMode: "local",
+      prompt: "Complete the Japanese sentence with the word for water.",
+      template: "私は___を飲みます。",
+      acceptedAnswers: ["水", "みず"],
+      match: { ignorePunctuation: true },
+      explanation: "水 means water and is read みず.",
+      hint: "Use the noun shown in the glossary.",
+    },
+    {
+      id: `${prefix}-q17`,
+      type: "reorderTokens",
+      evaluationMode: "local",
+      prompt: "Put the Japanese words in a natural order.",
+      tokens: [
+        { id: "watashi", label: "私は" },
+        { id: "mizu", label: "水を" },
+        { id: "nomimasu", label: "飲みます" },
+      ],
+      correctOrderIds: ["watashi", "mizu", "nomimasu"],
+      explanation: "Japanese commonly follows topic, object, then verb order.",
+      hint: "Place the verb last.",
+    },
+    {
+      id: `${prefix}-q18`,
+      type: "shortAnswer",
+      evaluationMode: "ai",
+      prompt: "Why is a sequence marker useful in a routine description?",
+      referenceAnswer: "It makes the order of actions clear.",
+      requiredIdeas: ["order", "clarity"],
+      rubric: ["Answer directly", "Explain the sequencing benefit"],
+      explanation: "Sequence markers make relationships between actions explicit.",
+      hint: "Focus on how a listener follows the order.",
+    },
+    {
+      id: `${prefix}-q19`,
+      type: "sentenceTransformation",
+      evaluationMode: "local",
+      prompt: "Rewrite the sentence with usually.",
+      sourceText: "I walk home after work.",
+      constraint: "Add usually in its natural position.",
+      acceptedAnswers: ["I usually walk home after work."],
+      match: { ignorePunctuation: true },
+      explanation: "Usually appears before the main verb walk.",
+      hint: "Put the frequency adverb before walk.",
+    },
+  ];
+  const demoGlossary = [
+    ...lesson.glossary,
+    { term: "Practice", meaning: "an activity used to improve a skill", otherMeanings: ["to do something repeatedly in order to improve"], forms: ["practice"] },
+    { term: "私", meaning: "I; me", otherMeanings: ["private; personal"], forms: ["私は"], pronunciation: { native: "わたし", romanized: "watashi" }, example: "私は学生です。" },
+    { term: "水", meaning: "water", otherMeanings: ["a liquid element in compounds"], forms: ["水を"], pronunciation: { native: "みず", romanized: "mizu" }, example: "水を飲みます。" },
+    { term: "飲みます", meaning: "drink", forms: ["飲む"], pronunciation: { native: "のみます", romanized: "nomimasu" } },
+  ];
+  const questions = [...lesson.questions, ...extraQuestions].map((question): LessonQuestion => ({
+    ...question,
+    prompt: `Practice · ${question.prompt}`,
+    glossaryTargets: ["Practice"],
+  }));
+  const questionAlternates = questions.map((question, index) => {
+    const source = questions[(index + 1) % questions.length];
+    const { templateId: _templateId, presentation: _presentation, ...alternate } = source;
+    return {
+      questionId: question.id,
+      question: { ...alternate, id: `${question.id}-alternate` } as LessonQuestion,
+    };
+  });
+  return decorateLessonPresentation({
+    ...lesson,
+    schemaVersion: 3,
+    glossary: demoGlossary,
+    questions,
+    questionAlternates,
+  }, undefined, profile);
 }

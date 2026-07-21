@@ -18,7 +18,7 @@ const expectation: OperationExpectation = {
   requiredTemplates: [{ id: "daily-greeting", format: "selectBlank" }],
 };
 
-describe("extension protocol v3 prompts", () => {
+describe("extension protocol v4 prompts", () => {
   it("uses a readable browser-local contract without tools or persistence", () => {
     const prompt = buildOperationPrompt({
       operationId: "operation-1",
@@ -27,7 +27,7 @@ describe("extension protocol v3 prompts", () => {
       input: { message: "Explain this mistake" },
     });
     expect(prompt).toContain("You are completing a browser-local learning task for Meoi.");
-    expect(prompt).toContain('"protocolVersion":3');
+    expect(prompt).toContain('"protocolVersion":4');
     expect(prompt).toContain('"operationId":"operation-1"');
     expect(prompt).toContain('"coachingReply":"..."');
     expect(prompt).toContain("do not invoke apps, connectors, actions, MCP, APIs, or persistence tools");
@@ -48,7 +48,12 @@ describe("extension protocol v3 prompts", () => {
     expect(prompt).toContain("at least one locally graded question and at least one AI-graded question");
     expect(prompt).toContain("at least one speakingRepeat or speakingRoleplay question");
     expect(prompt).toContain('"daily-greeting","format":"selectBlank"');
-    expect(prompt).toContain("schemaVersion:2");
+    expect(prompt).toContain("schemaVersion:3");
+    expect(prompt).toContain("exactly one entry in questionAlternates");
+    expect(prompt).toContain("supportBank[{id,label}] (8-30)");
+    expect(prompt).toContain("otherMeanings?,forms?,aliases?,pronunciation?:{native?,romanized?}");
+    expect(prompt).toContain("Glossary must cover every letter/number-bearing part");
+    expect(prompt).toContain("A dictation alternate must not be dictation");
     expect(prompt).toContain("Never return presentation settings, HTML, scripts");
   });
 
