@@ -1,6 +1,10 @@
-node_modules/
+.qa/
+.vite/
 .tools/
+node_modules/
 dist/
+dist-extension/
+dist-pages/
 *.tsbuildinfo
 vite.config.js
 vite.config.d.ts
@@ -8,6 +12,4 @@ vite.config.d.ts
 .dev.vars
 .wrangler/
 .wrangler-dry-run/
-dist-extension/
-dist-pages/
-meoi-extension-v2.zip
+meoi-extension-v*.zip
