@@ -120,3 +120,7 @@ export function answerSpeechText(question: LessonQuestion, evaluation?: Evaluati
   }
   return "";
 }
+
+export function answerActivationSpeechText(question: LessonQuestion, activatedText: string): string {
+  return targetPartsIn(question, [activatedText]).join(". ");
+}

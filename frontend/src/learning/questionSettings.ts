@@ -216,7 +216,7 @@ export function decorateLessonPresentation(
   };
   return {
     ...lesson,
-    schemaVersion: lesson.schemaVersion === 3 ? 3 : 2,
+    schemaVersion: lesson.schemaVersion >= 3 ? lesson.schemaVersion : 2,
     questions: lesson.questions.map(decorateQuestion),
     questionAlternates: lesson.questionAlternates?.map((alternate) => ({
       ...alternate,

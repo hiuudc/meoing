@@ -41,6 +41,7 @@ function validRequest(value: unknown): value is ExtensionRequest<Record<string, 
       || byteLength(payload.prompt) > MEOI_PROMPT_MAX_BYTES
       || expectation.unitId !== payload.unitId
       || typeof expectation.targetLanguage !== "string"
+      || typeof expectation.sourceLanguage !== "string"
       || typeof expectation.level !== "string"
       || !Number.isInteger(expectation.questionCount)
       || typeof expectation.speaking !== "boolean"

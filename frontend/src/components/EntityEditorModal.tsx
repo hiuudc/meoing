@@ -6,6 +6,11 @@ import type { Collection, Document, StudyItem, StudyKind, Unit } from "../types"
 import { HsvColorPicker } from "./HsvColorPicker";
 import { cleanUnitName } from "../unit";
 import { AnimatedModal } from "./AnimatedModal";
+import {
+  getSupportedLanguage,
+  SUPPORTED_LANGUAGE_NAMES,
+} from "../learning/languages";
+import { normalizeLearningProfile } from "../learning/profile";
 
 export type EditorState =
   | { type: "collection"; value?: Collection }
@@ -48,10 +53,13 @@ export function EntityEditorModal({ editor, onClose, onSubmit, onAccentPreview }
     if (!activeEditor) return;
     if (activeEditor.type === "collection") {
       const accent = normalizeHex(activeEditor.value?.accent ?? accentOptions[0], accentOptions[0]);
+      const profile = normalizeLearningProfile(activeEditor.value?.learningProfile);
       setFields({
         name: activeEditor.value?.name ?? "",
         icon: activeEditor.value?.icon ?? "",
         accent,
+        targetLanguage: profile.targetLanguage,
+        sourceLanguage: profile.sourceLanguage,
       });
       setAccentInput(accent);
       onAccentPreview(accent);
@@ -166,7 +174,7 @@ export function EntityEditorModal({ editor, onClose, onSubmit, onAccentPreview }
     if (!activeEditor) return;
     const required =
       activeEditor.type === "collection"
-        ? ["name", "icon"]
+        ? ["name", "icon", "targetLanguage", "sourceLanguage"]
         : activeEditor.type === "unit"
           ? ["name"]
           : activeEditor.type === "document"
@@ -203,6 +211,20 @@ export function EntityEditorModal({ editor, onClose, onSubmit, onAccentPreview }
             <>
               <Field label="Collection name" value={fields.name} onChange={(value) => updateField("name", value)} autoFocus />
               <Field label="Collection icon" value={fields.icon} onChange={(value) => updateField("icon", value.slice(0, 2))} hint="Use one or two characters." />
+              <SelectField
+                label="Language learning"
+                value={fields.targetLanguage}
+                options={!fields.targetLanguage || getSupportedLanguage(fields.targetLanguage)
+                  ? SUPPORTED_LANGUAGE_NAMES
+                  : [fields.targetLanguage, ...SUPPORTED_LANGUAGE_NAMES]}
+                onChange={(value) => updateField("targetLanguage", value)}
+              />
+              <SelectField
+                label="Language speaking"
+                value={fields.sourceLanguage}
+                options={SUPPORTED_LANGUAGE_NAMES}
+                onChange={(value) => updateField("sourceLanguage", value)}
+              />
               <fieldset className="accent-fieldset">
                 <legend>Accent color</legend>
                 <div className="accent-options">
@@ -337,6 +359,27 @@ function TextArea({ label, value = "", onChange }: { label: string; value?: stri
     <label className="form-field">
       <span>{label}</span>
       <textarea value={value} onChange={(event) => onChange(event.target.value)} rows={5} />
+    </label>
+  );
+}
+
+function SelectField({
+  label,
+  value = "",
+  options,
+  onChange,
+}: {
+  label: string;
+  value?: string;
+  options: readonly string[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="form-field">
+      <span>{label}</span>
+      <select value={value} onChange={(event) => onChange(event.target.value)}>
+        {options.map((option) => <option value={option} key={option}>{option}</option>)}
+      </select>
     </label>
   );
 }

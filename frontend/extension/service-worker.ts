@@ -107,7 +107,7 @@ function validOperationId(value: unknown): value is string {
 }
 
 function validExpectation(value: unknown, unitId: string): value is OperationExpectation {
-  if (!isRecord(value) || !exactKeys(value, ["unitId", "targetLanguage", "level", "questionCount", "speaking", "allowedFormats", "requiredTemplates"])) return false;
+  if (!isRecord(value) || !exactKeys(value, ["unitId", "targetLanguage", "sourceLanguage", "level", "questionCount", "speaking", "allowedFormats", "requiredTemplates"])) return false;
   if (!Array.isArray(value.allowedFormats) || !Array.isArray(value.requiredTemplates)) return false;
   const formatSet = new Set<string>(QUESTION_FORMATS);
   const allowedFormats = value.allowedFormats.filter((format): format is QuestionFormat => typeof format === "string" && formatSet.has(format));
@@ -136,6 +136,9 @@ function validExpectation(value: unknown, unitId: string): value is OperationExp
     && typeof value.targetLanguage === "string"
     && value.targetLanguage.trim().length > 0
     && value.targetLanguage.length <= 100
+    && typeof value.sourceLanguage === "string"
+    && value.sourceLanguage.trim().length > 0
+    && value.sourceLanguage.length <= 100
     && ["beginner", "elementary", "intermediate", "upperIntermediate", "advanced"].includes(String(value.level))
     && Number.isInteger(value.questionCount)
     && Number(value.questionCount) >= 8

@@ -10,6 +10,7 @@ import { ThemeCustomizerDrawer } from "./components/ThemeCustomizerDrawer";
 import { WorkspaceSidebar } from "./components/WorkspaceSidebar";
 import { UnitSettingsModal, type UnitSettingsRequest } from "./components/UnitSettingsModal";
 import { normalizeLearningProfile } from "./learning/profile";
+import { getSupportedLanguage } from "./learning/languages";
 import { loadWorkspace, makeId, saveWorkspace, workspaceReducer } from "./store";
 import { accentStyle, cloneTheme, reconcileThemeSelection, themeStyle } from "./theme";
 import type { Collection, Document, StudyItem, StudyKind, Unit } from "./types";
@@ -98,12 +99,17 @@ export function App() {
   function submitEditor(fields: Record<string, string>) {
     if (!editor) return;
     if (editor.type === "collection") {
+      const currentProfile = normalizeLearningProfile(editor.value?.learningProfile);
       const collection: Collection = {
         id: editor.value?.id ?? makeId("collection"),
         name: fields.name.trim(),
         icon: fields.icon.trim(),
         accent: fields.accent,
-        learningProfile: editor.value?.learningProfile,
+        learningProfile: normalizeLearningProfile({
+          ...currentProfile,
+          targetLanguage: fields.targetLanguage,
+          sourceLanguage: getSupportedLanguage(fields.sourceLanguage)?.name ?? currentProfile.sourceLanguage,
+        }),
       };
       dispatch({ type: editor.value ? "updateCollection" : "createCollection", collection });
     } else if (editor.type === "unit") {

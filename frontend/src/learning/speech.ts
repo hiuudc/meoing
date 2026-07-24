@@ -1,3 +1,5 @@
+import { languageLocale } from "./languages";
+
 const LANGUAGE_TAGS: Record<string, string> = {
   arabic: "ar-SA",
   cantonese: "yue-HK",
@@ -62,7 +64,7 @@ export const DEFAULT_SPEECH_PREFERENCE: BrowserSpeechPreference = {
 export function languageTagForSpeech(language: string): string {
   const normalized = language.trim().toLocaleLowerCase();
   if (/^[a-z]{2,3}(?:-[a-z0-9]{2,8})+$/i.test(normalized)) return language;
-  return LANGUAGE_TAGS[normalized] ?? "en-US";
+  return languageLocale(language) ?? LANGUAGE_TAGS[normalized] ?? "en-US";
 }
 
 function configuredLanguageTag(language: string): string | undefined {
@@ -70,7 +72,7 @@ function configuredLanguageTag(language: string): string | undefined {
   if (/^[a-z]{2,3}(?:[-_][a-z0-9]{2,8})+$/i.test(normalized)) {
     return normalized.replace(/_/g, "-");
   }
-  return LANGUAGE_TAGS[normalized]?.toLocaleLowerCase();
+  return (languageLocale(language) ?? LANGUAGE_TAGS[normalized])?.toLocaleLowerCase();
 }
 
 function normalizedVoiceTag(voice: SpeechSynthesisVoice): string {

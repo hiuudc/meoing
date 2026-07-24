@@ -1,7 +1,9 @@
 import { QUESTION_FORMATS, type LearningProfile, type QuestionFormat } from "./types";
+import { canonicalLanguageName, normalizeSourceLanguage } from "./languages";
 
 export const DEFAULT_LEARNING_PROFILE: LearningProfile = {
   targetLanguage: "Japanese",
+  sourceLanguage: "English",
   interfaceLanguage: "en",
   level: "elementary",
   dailyQuestionGoal: 12,
@@ -24,6 +26,8 @@ export function normalizeLearningProfile(value?: Partial<LearningProfile> | null
   return {
     ...DEFAULT_LEARNING_PROFILE,
     ...value,
+    targetLanguage: canonicalLanguageName(value?.targetLanguage, DEFAULT_LEARNING_PROFILE.targetLanguage),
+    sourceLanguage: normalizeSourceLanguage(value?.sourceLanguage),
     interfaceLanguage: "en",
     dailyQuestionGoal: Math.min(100, Math.max(1, dailyGoal)),
     lessonQuestionCount: Math.min(15, Math.max(8, questionCount)),

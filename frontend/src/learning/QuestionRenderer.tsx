@@ -10,6 +10,7 @@ interface QuestionRendererProps {
   language: string;
   disabled?: boolean;
   onChange: (answer: QuestionAnswer) => void;
+  onAnswerActivate?: (text: string) => void;
   onSpeakingChange?: (submission: SpeakingSubmission | null) => void;
   renderText?: (text: string, interactive?: boolean) => ReactNode;
 }
@@ -39,7 +40,21 @@ function TextResponse({ value, onChange, disabled, label, multiline = false }: {
   );
 }
 
-function ReorderResponse({ options, value, onChange, disabled, renderText }: { options: ChoiceOption[]; value: string[]; onChange: (value: string[]) => void; disabled?: boolean; renderText: (text: string, interactive?: boolean) => ReactNode }) {
+function ReorderResponse({
+  options,
+  value,
+  onChange,
+  onAnswerActivate,
+  disabled,
+  renderText,
+}: {
+  options: ChoiceOption[];
+  value: string[];
+  onChange: (value: string[]) => void;
+  onAnswerActivate?: (text: string) => void;
+  disabled?: boolean;
+  renderText: (text: string, interactive?: boolean) => ReactNode;
+}) {
   const labels = new Map(options.map((option) => [option.id, option.label]));
   const available = options.filter((option) => !value.includes(option.id));
 
@@ -69,7 +84,10 @@ function ReorderResponse({ options, value, onChange, disabled, renderText }: { o
       {available.length ? (
         <div className="token-bank" aria-label="Available tokens">
           {available.map((option) => (
-            <button type="button" key={option.id} onClick={() => onChange([...value, option.id])} disabled={disabled}>
+            <button type="button" key={option.id} onClick={() => {
+              onAnswerActivate?.(option.label);
+              onChange([...value, option.id]);
+            }} disabled={disabled}>
               <Plus size={13} /> {renderText(option.label, false)}
             </button>
           ))}
@@ -88,12 +106,14 @@ function FreeWritingResponse({
   question,
   value,
   onChange,
+  onAnswerActivate,
   disabled,
   renderText,
 }: {
   question: Extract<LessonQuestion, { type: "freeWriting" }>;
   value: string;
   onChange: (value: string) => void;
+  onAnswerActivate?: (text: string) => void;
   disabled?: boolean;
   renderText: (text: string, interactive?: boolean) => ReactNode;
 }) {
@@ -134,7 +154,14 @@ function FreeWritingResponse({
       ) : (
         <>
           {bankBase ? <p className="writing-bank-base"><span>Existing draft</span>{bankBase}</p> : null}
-          <ReorderResponse options={options} value={selectedIds} onChange={updateBank} disabled={disabled} renderText={renderText} />
+          <ReorderResponse
+            options={options}
+            value={selectedIds}
+            onChange={updateBank}
+            onAnswerActivate={onAnswerActivate}
+            disabled={disabled}
+            renderText={renderText}
+          />
         </>
       )}
       <p className="rubric-copy">{wordCount}/{question.minWords}-{question.maxWords} words · {question.rubric.join(" · ")}</p>
@@ -142,7 +169,16 @@ function FreeWritingResponse({
   );
 }
 
-export function QuestionRenderer({ question, answer, language, disabled, onChange, onSpeakingChange, renderText }: QuestionRendererProps) {
+export function QuestionRenderer({
+  question,
+  answer,
+  language,
+  disabled,
+  onChange,
+  onAnswerActivate,
+  onSpeakingChange,
+  renderText,
+}: QuestionRendererProps) {
   const render = renderText ?? ((text: string) => text);
   switch (question.type) {
     case "singleChoice":
@@ -151,7 +187,14 @@ export function QuestionRenderer({ question, answer, language, disabled, onChang
           <legend className="sr-only">Choose one answer</legend>
           {question.options.map((option) => (
             <label key={option.id} className={stringAnswer(answer) === option.id ? "is-selected" : ""}>
-              <input type="radio" name={question.id} value={option.id} checked={stringAnswer(answer) === option.id} onChange={() => onChange(option.id)} />
+              <input
+                type="radio"
+                name={question.id}
+                value={option.id}
+                checked={stringAnswer(answer) === option.id}
+                onClick={() => onAnswerActivate?.(option.label)}
+                onChange={() => onChange(option.id)}
+              />
               <span>{render(option.label, false)}</span>
             </label>
           ))}
@@ -168,7 +211,10 @@ export function QuestionRenderer({ question, answer, language, disabled, onChang
                 type="checkbox"
                 value={option.id}
                 checked={selected.includes(option.id)}
-                onChange={(event) => onChange(event.target.checked ? [...selected, option.id] : selected.filter((id) => id !== option.id))}
+                onChange={(event) => {
+                  onAnswerActivate?.(option.label);
+                  onChange(event.target.checked ? [...selected, option.id] : selected.filter((id) => id !== option.id));
+                }}
               />
               <span>{render(option.label, false)}</span>
             </label>
@@ -182,7 +228,13 @@ export function QuestionRenderer({ question, answer, language, disabled, onChang
           <legend>{render(question.statement)}</legend>
           {[{ value: true, label: "True" }, { value: false, label: "False" }].map((option) => (
             <label key={String(option.value)} className={answer === option.value ? "is-selected" : ""}>
-              <input type="radio" name={question.id} checked={answer === option.value} onChange={() => onChange(option.value)} />
+              <input
+                type="radio"
+                name={question.id}
+                checked={answer === option.value}
+                onClick={() => onAnswerActivate?.(option.label)}
+                onChange={() => onChange(option.value)}
+              />
               <span>{option.label}</span>
             </label>
           ))}
@@ -215,7 +267,10 @@ export function QuestionRenderer({ question, answer, language, disabled, onChang
                 type="button"
                 className={selectedId === option.id ? "is-selected" : ""}
                 aria-pressed={selectedId === option.id}
-                onClick={() => onChange(option.id)}
+                onClick={() => {
+                  onAnswerActivate?.(option.label);
+                  onChange(option.id);
+                }}
                 disabled={disabled}
               >
                 {render(option.label, false)}
@@ -245,7 +300,7 @@ export function QuestionRenderer({ question, answer, language, disabled, onChang
       );
     }
     case "wordBank":
-      return <ReorderResponse options={question.tokens} value={stringArrayAnswer(answer)} onChange={onChange} disabled={disabled} renderText={render} />;
+      return <ReorderResponse options={question.tokens} value={stringArrayAnswer(answer)} onChange={onChange} onAnswerActivate={onAnswerActivate} disabled={disabled} renderText={render} />;
     case "matching": {
       const values = mapAnswer(answer);
       return (
@@ -253,7 +308,11 @@ export function QuestionRenderer({ question, answer, language, disabled, onChang
           {question.pairs.map((pair) => (
             <label key={pair.leftId}>
               <span>{render(pair.left)}</span>
-              <select value={values[pair.leftId] ?? ""} onChange={(event) => onChange({ ...values, [pair.leftId]: event.target.value })} disabled={disabled}>
+              <select value={values[pair.leftId] ?? ""} onChange={(event) => {
+                const selected = question.pairs.find((candidate) => candidate.rightId === event.target.value);
+                if (selected) onAnswerActivate?.(selected.right);
+                onChange({ ...values, [pair.leftId]: event.target.value });
+              }} disabled={disabled}>
                 <option value="">Choose a match...</option>
                 {question.pairs.map((candidate) => <option value={candidate.rightId} key={candidate.rightId}>{candidate.right}</option>)}
               </select>
@@ -263,13 +322,14 @@ export function QuestionRenderer({ question, answer, language, disabled, onChang
       );
     }
     case "reorderTokens":
-      return <ReorderResponse options={question.tokens} value={stringArrayAnswer(answer)} onChange={onChange} disabled={disabled} renderText={render} />;
+      return <ReorderResponse options={question.tokens} value={stringArrayAnswer(answer)} onChange={onChange} onAnswerActivate={onAnswerActivate} disabled={disabled} renderText={render} />;
     case "reorderDialogue":
       return (
         <ReorderResponse
           options={question.turns.map((turn) => ({ id: turn.id, label: `${turn.speaker}: ${turn.label}` }))}
           value={stringArrayAnswer(answer)}
           onChange={onChange}
+          onAnswerActivate={onAnswerActivate}
           disabled={disabled}
           renderText={render}
         />
@@ -281,7 +341,11 @@ export function QuestionRenderer({ question, answer, language, disabled, onChang
           {question.items.map((item) => (
             <label key={item.id}>
               <span>{render(item.label)}</span>
-              <select value={values[item.id] ?? ""} onChange={(event) => onChange({ ...values, [item.id]: event.target.value })} disabled={disabled}>
+              <select value={values[item.id] ?? ""} onChange={(event) => {
+                const selected = question.categories.find((category) => category.id === event.target.value);
+                if (selected) onAnswerActivate?.(selected.label);
+                onChange({ ...values, [item.id]: event.target.value });
+              }} disabled={disabled}>
                 <option value="">Choose a category...</option>
                 {question.categories.map((category) => <option value={category.id} key={category.id}>{category.label}</option>)}
               </select>
@@ -329,7 +393,7 @@ export function QuestionRenderer({ question, answer, language, disabled, onChang
       );
     case "freeWriting": {
       const value = stringAnswer(answer);
-      return <FreeWritingResponse question={question} value={value} onChange={onChange} disabled={disabled} renderText={render} />;
+      return <FreeWritingResponse question={question} value={value} onChange={onChange} onAnswerActivate={onAnswerActivate} disabled={disabled} renderText={render} />;
     }
     case "speakingRepeat":
       return (

@@ -144,6 +144,18 @@ describe("persistence", () => {
     expect(loadWorkspace(storage)).toEqual(state);
   });
 
+  it("normalizes a legacy collection profile without changing the workspace storage version", () => {
+    const state = createSeedState();
+    const legacy = JSON.parse(JSON.stringify(state)) as Record<string, unknown>;
+    const collections = legacy.collections as Record<string, { learningProfile?: Record<string, unknown> }>;
+    delete collections.japanese.learningProfile?.sourceLanguage;
+    const storage = { getItem: () => JSON.stringify(legacy) };
+
+    const loaded = loadWorkspace(storage);
+    expect(loaded.version).toBe(state.version);
+    expect(loaded.collections.japanese.learningProfile?.sourceLanguage).toBe("English");
+  });
+
   it("round-trips a persisted custom sidebar width", () => {
     const values = new Map<string, string>();
     const storage = {

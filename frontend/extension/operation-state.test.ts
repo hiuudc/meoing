@@ -26,6 +26,7 @@ function operation(operationId = "op-1", unitId = "unit-1"): QueuedOperation {
     expectation: {
       unitId,
       targetLanguage: "English",
+      sourceLanguage: "Vietnamese",
       level: "elementary",
       questionCount: 10,
       speaking: true,

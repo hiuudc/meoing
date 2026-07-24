@@ -46,6 +46,7 @@ const payload: SendOperationPayload = {
   expectation: {
     unitId: "unit-1",
     targetLanguage: "English",
+    sourceLanguage: "Vietnamese",
     level: "elementary",
     questionCount: 10,
     speaking: false,
@@ -63,7 +64,7 @@ describe("ExtensionBridge operation waiting", () => {
       state("completed", {
         result: {
           type: "meoi.operation.result",
-          protocolVersion: 4,
+          protocolVersion: 5,
           operationId: "op-1",
           kind: "coaching",
           outcome: "completed",
@@ -99,7 +100,7 @@ describe("ExtensionBridge operation waiting", () => {
       state("completed", {
         result: {
           type: "meoi.operation.result",
-          protocolVersion: 4,
+          protocolVersion: 5,
           operationId: "op-1",
           kind: "coaching",
           outcome: "completed",

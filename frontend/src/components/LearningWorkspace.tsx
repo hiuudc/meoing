@@ -177,7 +177,13 @@ function SavedLessonChooser({ entries, onCreateNew, onDelete, onReview }: SavedL
               <h3>{entry.lesson.title}</h3>
               <p>{entry.lesson.summary}</p>
               <dl>
-                <div><dt>Level</dt><dd>{entry.lesson.targetLanguage} · {entry.lesson.level}</dd></div>
+                <div>
+                  <dt>Level</dt>
+                  <dd>
+                    {entry.lesson.sourceLanguage ? `${entry.lesson.sourceLanguage} → ` : ""}
+                    {entry.lesson.targetLanguage} · {entry.lesson.level}
+                  </dd>
+                </div>
                 <div><dt>Questions</dt><dd>{entry.lesson.questions.length}</dd></div>
                 <div><dt>Latest mastery</dt><dd>{entry.progress ? `${Math.round(entry.progress.masteryPercent)}%` : "Not studied"}</dd></div>
               </dl>
@@ -370,6 +376,7 @@ export function LearningWorkspace({
     return {
       unitId: unit.id,
       targetLanguage,
+      sourceLanguage: profile.sourceLanguage,
       level: profile.level,
       questionCount: profile.lessonQuestionCount,
       speaking: profile.speakingEnabled,
@@ -486,7 +493,13 @@ export function LearningWorkspace({
     const result = await sendOperation("evaluate_answer", {
       unit: { id: unit.id, name: unit.name },
       collection: { id: collection.id, name: collection.name, learningProfile: profile },
-      lesson: { id: lesson.id, title: lesson.title, targetLanguage: lesson.targetLanguage, level: lesson.level },
+      lesson: {
+        id: lesson.id,
+        title: lesson.title,
+        targetLanguage: lesson.targetLanguage,
+        sourceLanguage: lesson.sourceLanguage ?? "English",
+        level: lesson.level,
+      },
       question,
       answer,
       speaking: metadata,
@@ -531,7 +544,12 @@ export function LearningWorkspace({
     const result = await sendOperation("coaching", {
       unit: { id: unit.id, name: unit.name },
       collection: { id: collection.id, name: collection.name, learningProfile: profile },
-      lesson: { id: lesson.id, title: lesson.title },
+      lesson: {
+        id: lesson.id,
+        title: lesson.title,
+        targetLanguage: lesson.targetLanguage,
+        sourceLanguage: lesson.sourceLanguage ?? "English",
+      },
       question,
       evaluation,
       message: text,
@@ -729,7 +747,11 @@ function ProfileEditor({ profile, onChange }: { profile: LearningProfile; onChan
   return (
     <section className="control-section profile-editor">
       <h3><FileText size={15} /> Learning profile</h3>
-      <label className="compact-field"><span>Target language</span><input maxLength={100} value={profile.targetLanguage} onChange={(event) => update("targetLanguage", event.target.value)} /></label>
+      <div className="learning-language-pair">
+        <span>Language pair</span>
+        <strong>{profile.sourceLanguage} <span aria-hidden="true">→</span> {profile.targetLanguage}</strong>
+        <small>Edit languages in Collection settings.</small>
+      </div>
       <label className="compact-field"><span>Level</span><select value={profile.level} onChange={(event) => update("level", event.target.value as LearningProfile["level"])}>
         <option value="beginner">Beginner</option><option value="elementary">Elementary</option><option value="intermediate">Intermediate</option><option value="upperIntermediate">Upper intermediate</option><option value="advanced">Advanced</option>
       </select></label>

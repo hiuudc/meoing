@@ -67,6 +67,18 @@ function speechVoice(name: string, lang: string, voiceURI: string, isDefault = f
   return { default: isDefault, lang, localService: true, name, voiceURI };
 }
 
+function memoryLocalStorage(): Storage {
+  const values = new Map<string, string>();
+  return {
+    get length() { return values.size; },
+    clear: () => values.clear(),
+    getItem: (key) => values.get(key) ?? null,
+    key: (index) => [...values.keys()][index] ?? null,
+    removeItem: (key) => { values.delete(key); },
+    setItem: (key, value) => { values.set(key, String(value)); },
+  };
+}
+
 function button(label: string): HTMLButtonElement {
   const match = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
     .find((candidate) => candidate.textContent?.includes(label) || candidate.getAttribute("aria-label") === label);
@@ -111,6 +123,10 @@ function lessonWithQuestions(
 }
 
 beforeEach(() => {
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: memoryLocalStorage(),
+  });
   window.localStorage.clear();
   speechVoices = [];
   spokenUtterances = [];
@@ -343,6 +359,69 @@ describe("fullscreen lesson player", () => {
     expect(spokenUtterances[spokenUtterances.length - 1]?.text).not.toContain("Choose");
     await act(async () => button("Answers").click());
     expect(spokenUtterances[spokenUtterances.length - 1]?.text).toBe("\u6c34. \u304a\u8336");
+  });
+
+  it("auto-reads each new target-language question and interrupts speech for the next selected answer", async () => {
+    speechVoices = [speechVoice("Japanese", "ja-JP", "voice-ja", true)];
+    const question = {
+      ...lesson.questions[0],
+      id: "auto-speech-question",
+      prompt: "Chọn \u6c34",
+      options: [
+        { id: "water", label: "\u6c34" },
+        { id: "tea", label: "\u304a\u8336" },
+      ],
+      correctOptionId: "water",
+      glossaryTargets: ["\u6c34", "\u304a\u8336"],
+      presentation: { readQuestion: true, readAnswers: true, wordTooltips: false },
+    } as LessonQuestion;
+    await renderPlayer({
+      lesson: {
+        ...lessonWithQuestions("auto-speech-test", [question]),
+        targetLanguage: "Japanese",
+        glossary: [
+          { term: "\u6c34", meaning: "nước" },
+          { term: "\u304a\u8336", meaning: "trà" },
+        ],
+      },
+    });
+
+    expect(spokenUtterances.map((utterance) => utterance.text)).toEqual(["\u6c34"]);
+    await selectAnswer("water");
+    await selectAnswer("tea");
+
+    expect(spokenUtterances.map((utterance) => utterance.text)).toEqual(["\u6c34", "\u6c34", "\u304a\u8336"]);
+    expect(window.speechSynthesis.cancel).toHaveBeenCalledTimes(4);
+  });
+
+  it("reads the current target text once when Read question is enabled mid-question", async () => {
+    speechVoices = [speechVoice("Japanese", "ja-JP", "voice-ja", true)];
+    const question = {
+      ...lesson.questions[0],
+      id: "toggle-speech-question",
+      prompt: "Chọn \u6c34",
+      glossaryTargets: ["\u6c34"],
+      presentation: { readQuestion: false, readAnswers: false, wordTooltips: false },
+    } as LessonQuestion;
+    await renderPlayer({
+      lesson: {
+        ...lessonWithQuestions("toggle-speech-test", [question]),
+        targetLanguage: "Japanese",
+        glossary: [{ term: "\u6c34", meaning: "nước" }],
+      },
+    });
+    expect(spokenUtterances).toHaveLength(0);
+
+    await act(async () => button("Lesson settings").click());
+    const readQuestion = Array.from(document.querySelectorAll<HTMLLabelElement>(".lesson-settings-toggle"))
+      .find((label) => label.textContent?.includes("Read question"))
+      ?.querySelector<HTMLInputElement>("input");
+    if (!readQuestion) throw new Error("Read question setting not found.");
+    await act(async () => readQuestion.click());
+    expect(spokenUtterances.map((utterance) => utterance.text)).toEqual(["\u6c34"]);
+
+    await act(async () => button("Romanized").click());
+    expect(spokenUtterances).toHaveLength(1);
   });
 
   it("renders ruby pronunciation and a safe multi-meaning glossary tooltip", async () => {

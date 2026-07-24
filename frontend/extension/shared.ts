@@ -10,11 +10,11 @@ import type {
 
 export const STORAGE_KEYS = {
   unitChats: "meoi.unitChats.v1",
-  queues: "meoi.queues.v4.session",
-  operationStates: "meoi.operationStates.v4.session",
-  provisionalTabs: "meoi.provisionalUnitTabs.v4.session",
-  paused: "meoi.pausedForQuota.v4.session",
-  lastError: "meoi.lastError.v4.session",
+  queues: "meoi.queues.v5.session",
+  operationStates: "meoi.operationStates.v5.session",
+  provisionalTabs: "meoi.provisionalUnitTabs.v5.session",
+  paused: "meoi.pausedForQuota.v5.session",
+  lastError: "meoi.lastError.v5.session",
 } as const;
 
 export interface QueuedOperation {

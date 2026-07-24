@@ -1,3 +1,5 @@
+import type { SupportedLanguage } from "./languages";
+
 export const QUESTION_FORMATS = [
   "singleChoice",
   "multipleChoice",
@@ -47,6 +49,7 @@ export interface UnitQuestionSettings {
 
 export interface LearningProfile {
   targetLanguage: string;
+  sourceLanguage: SupportedLanguage;
   interfaceLanguage: "vi" | "en";
   level: "beginner" | "elementary" | "intermediate" | "upperIntermediate" | "advanced";
   dailyQuestionGoal: number;
@@ -295,12 +298,13 @@ export interface SourceReference {
 }
 
 export interface Lesson {
-  schemaVersion: 1 | 2 | 3;
+  schemaVersion: 1 | 2 | 3 | 4;
   id: string;
   unitId: string;
   title: string;
   summary: string;
   targetLanguage: string;
+  sourceLanguage?: string;
   level: LearningProfile["level"];
   objectives: string[];
   theory: TheoryBlock[];

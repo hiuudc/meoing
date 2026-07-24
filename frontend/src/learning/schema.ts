@@ -128,7 +128,12 @@ export function validateQuestionGlossaryCoverage(
   question: Lesson["questions"][number],
   glossary: Lesson["glossary"],
 ): string[] {
-  if (!question.glossaryTargets?.length) return [`Question ${question.id} needs glossaryTargets.`];
+  if (question.glossaryTargets === undefined) return [`Question ${question.id} needs glossaryTargets.`];
+  if (!question.glossaryTargets.length) {
+    return question.type === "translation"
+      ? []
+      : [`Question ${question.id} needs at least one glossary target.`];
+  }
   const visibleTexts = questionVisibleTexts(question);
   const errors: string[] = [];
   question.glossaryTargets.forEach((target) => {
@@ -143,12 +148,13 @@ export function validateQuestionGlossaryCoverage(
 
 export const lessonSchema = z
   .object({
-    schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+    schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
     id,
     unitId: id,
     title: plainText.max(300),
     summary: plainText.max(2_000),
     targetLanguage: plainText.max(100),
+    sourceLanguage: plainText.max(100).optional(),
     level: z.enum(["beginner", "elementary", "intermediate", "upperIntermediate", "advanced"]),
     objectives: z.array(plainText.max(500)).min(1).max(12),
     theory: z.array(z.object({ id, kind: z.enum(["concept", "grammar", "pronunciation", "culture", "tip"]), title: plainText.max(300), body: plainText }).strict()).min(1).max(20),
@@ -161,6 +167,9 @@ export const lessonSchema = z
   })
   .strict()
   .superRefine((lesson, context) => {
+    if (lesson.schemaVersion === 4 && !lesson.sourceLanguage?.trim()) {
+      context.addIssue({ code: "custom", path: ["sourceLanguage"], message: "Schema-v4 lessons need sourceLanguage." });
+    }
     const formats = new Set(lesson.questions.map((question) => question.type));
     if (formats.size < 5) {
       context.addIssue({ code: "custom", path: ["questions"], message: "A lesson must contain at least five question formats." });
@@ -194,9 +203,9 @@ export const lessonSchema = z
         context.addIssue({ code: "custom", path: ["questionAlternates", index, "question", "type"], message: "Dictation alternates cannot require listening." });
       }
     });
-    if (lesson.schemaVersion === 3) {
+    if (lesson.schemaVersion === 3 || lesson.schemaVersion === 4) {
       if ((lesson.questionAlternates?.length ?? 0) !== lesson.questions.length) {
-        context.addIssue({ code: "custom", path: ["questionAlternates"], message: "Schema-v3 lessons need exactly one alternate per primary question." });
+        context.addIssue({ code: "custom", path: ["questionAlternates"], message: "Schema-v3+ lessons need exactly one alternate per primary question." });
       }
       (lesson.questionAlternates ?? []).forEach((alternate, index) => {
         if (alternate.question.templateId) {
@@ -294,6 +303,7 @@ export function validateLessonForProfile(lesson: Lesson, profile: LearningProfil
 export interface LessonExpectation {
   unitId: string;
   targetLanguage: string;
+  sourceLanguage: string;
   level: LearningProfile["level"];
   questionCount: number;
   speaking: boolean;
@@ -305,7 +315,7 @@ export function validateLessonForExpectation(lesson: Lesson, expectation: Lesson
   const errors: string[] = [];
   const allowedFormats = new Set(expectation.allowedFormats);
   const requiredTemplates = new Map(expectation.requiredTemplates.map((template) => [template.id, template.format]));
-  if (lesson.schemaVersion !== 3) errors.push("Generated lessons must use schemaVersion 3.");
+  if (lesson.schemaVersion !== 4) errors.push("Generated lessons must use schemaVersion 4.");
   if (new Set(lesson.questions.map((question) => question.type)).size < 5) {
     errors.push("Lesson must use at least five formats.");
   }
@@ -366,6 +376,9 @@ export function validateLessonForExpectation(lesson: Lesson, expectation: Lesson
   if (lesson.unitId !== expectation.unitId) errors.push(`lesson.unitId must equal ${expectation.unitId}.`);
   if (lesson.targetLanguage.trim().toLocaleLowerCase() !== expectation.targetLanguage.trim().toLocaleLowerCase()) {
     errors.push(`lesson.targetLanguage must equal ${expectation.targetLanguage}.`);
+  }
+  if (lesson.sourceLanguage?.trim().toLocaleLowerCase() !== expectation.sourceLanguage.trim().toLocaleLowerCase()) {
+    errors.push(`lesson.sourceLanguage must equal ${expectation.sourceLanguage}.`);
   }
   if (lesson.level !== expectation.level) errors.push(`lesson.level must equal ${expectation.level}.`);
   if (lesson.questions.length !== expectation.questionCount) {

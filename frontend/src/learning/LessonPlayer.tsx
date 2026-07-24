@@ -21,7 +21,7 @@ import { createPortal } from "react-dom";
 import { gradeAnswer, isAnswerEmpty } from "./grader";
 import { GlossaryText } from "./GlossaryText";
 import { shouldFlushProgress } from "./progress";
-import { answerSpeechText, questionSpeechText } from "./questionContent";
+import { answerActivationSpeechText, answerSpeechText, questionSpeechText } from "./questionContent";
 import {
   effectivePresentation,
   enableListening,
@@ -175,6 +175,7 @@ export function LessonPlayer({
   const speechButtonRef = useRef<HTMLButtonElement>(null);
   const speechPopoverRef = useRef<HTMLDivElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
+  const autoSpokenQuestionRef = useRef<string | null>(null);
 
   function questionForState(state: RetryState): LessonQuestion | undefined {
     const slotId = state.queue[0];
@@ -566,6 +567,24 @@ export function LessonPlayer({
   const renderGlossaryText = Boolean(presentation?.wordTooltips || playerPreference.showPronunciation);
   const portalTarget = document.querySelector<HTMLElement>(".app-shell") ?? document.body;
 
+  useEffect(() => {
+    if (!presentation?.readQuestion) {
+      autoSpokenQuestionRef.current = null;
+      return;
+    }
+    if (!currentQuestion || !questionSpeech || !targetVoiceAvailable) return;
+    const speechKey = `${currentQuestion.id}\u0000${questionSpeech}`;
+    if (autoSpokenQuestionRef.current === speechKey) return;
+    autoSpokenQuestionRef.current = speechKey;
+    speak(questionSpeech);
+  }, [currentQuestion?.id, presentation?.readQuestion, questionSpeech, targetVoiceAvailable]);
+
+  function speakActivatedAnswer(text: string) {
+    if (!currentQuestion || !presentation?.readAnswers) return;
+    const targetText = answerActivationSpeechText(currentQuestion, text);
+    if (targetText) speak(targetText);
+  }
+
   const player = (
     <div className="lesson-fullscreen" ref={playerRef} data-fullscreen-player>
       <section
@@ -643,6 +662,7 @@ export function LessonPlayer({
                 language={lesson.targetLanguage}
                 disabled={Boolean(evaluation) || submitting}
                 onChange={setAnswer}
+                onAnswerActivate={speakActivatedAnswer}
                 onSpeakingChange={setSpeaking}
                 renderText={renderGlossaryText
                   ? (text, interactive = true) => <GlossaryText
@@ -878,7 +898,7 @@ export function LessonPlayer({
                 />
                 <small><span>0.5x</span><span>1x</span><span>1.5x</span><span>2x</span></small>
               </label>
-              <p>Question, answer, and preview speech use only {lesson.targetLanguage}. Audio never starts automatically.</p>
+              <p>Speech uses only {lesson.targetLanguage}. Read question plays automatically on each new exercise; answer speech starts only when you select an answer.</p>
             </section>
           </div>
         ) : null}

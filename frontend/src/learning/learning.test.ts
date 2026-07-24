@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createLocalPreviewLesson } from "./demoLesson";
+import { detectBrowserLanguage } from "./languages";
 import { gradeAnswer, normalizeAnswer } from "./grader";
 import { segmentGlossaryText } from "./glossary";
 import {
@@ -153,7 +154,8 @@ describe("lesson schema", () => {
     }));
     const expectedLesson: Lesson = {
       ...lesson,
-      schemaVersion: 3,
+      schemaVersion: 4,
+      sourceLanguage: "Vietnamese",
       glossary: [...lesson.glossary, { term: "Lesson", meaning: "a period of learning" }],
       questions: generatedQuestions,
       questionAlternates: generatedQuestions.map((question, index) => ({
@@ -167,6 +169,7 @@ describe("lesson schema", () => {
     const expectation = {
       unitId: "unit-1",
       targetLanguage: "English",
+      sourceLanguage: "Vietnamese",
       level: "elementary" as const,
       questionCount: 10,
       speaking: false,
@@ -175,6 +178,8 @@ describe("lesson schema", () => {
     };
     expect(validateLessonForExpectation(expectedLesson, expectation)).toEqual([]);
     expect(validateLessonForExpectation({ ...expectedLesson, unitId: "wrong" }, expectation)).toContain("lesson.unitId must equal unit-1.");
+    expect(validateLessonForExpectation({ ...expectedLesson, sourceLanguage: "German" }, expectation))
+      .toContain("lesson.sourceLanguage must equal Vietnamese.");
     expect(validateLessonForExpectation({ ...expectedLesson, questions: expectedLesson.questions.slice(0, 9) }, expectation))
       .toContain("lesson.questions must contain exactly 10 items.");
     expect(() => lessonSchema.parse(expectedLesson)).not.toThrow();
@@ -254,11 +259,14 @@ describe("profile and progress normalization", () => {
   it("inherits defaults and clamps unsafe values", () => {
     const profile = resolveLearningProfile({ targetLanguage: "Spanish", dailyQuestionGoal: 999 }, { speakingEnabled: false });
     expect(profile.targetLanguage).toBe("Spanish");
+    expect(profile.sourceLanguage).toBe("English");
     expect(profile.dailyQuestionGoal).toBe(100);
     expect(profile.speakingEnabled).toBe(false);
     expect(profile.interfaceLanguage).toBe("en");
     expect(normalizeLearningProfile({ interfaceLanguage: "vi" }).interfaceLanguage).toBe("en");
     expect(normalizeLearningProfile({ lessonQuestionCount: 2 }).lessonQuestionCount).toBe(8);
+    expect(detectBrowserLanguage(["vi-VN"])).toBe("Vietnamese");
+    expect(detectBrowserLanguage(["pt-BR"])).toBe("English");
   });
 
   it("batches after five, completion, or hidden tab", () => {
@@ -458,13 +466,23 @@ describe("glossary and speech preferences", () => {
     )).toEqual({ readQuestion: true, readAnswers: true, wordTooltips: false });
   });
 
-  it("builds a schema-v3 demo with every format, one alternate per slot, and 19-question progress", () => {
-    const demo = createLocalPreviewLesson("unit-demo", "Demo", { ...DEFAULT_LEARNING_PROFILE, targetLanguage: "Japanese" });
-    expect(demo.schemaVersion).toBe(3);
+  it("builds a schema-v4 language-pair demo with every format, one alternate per slot, and 19-question progress", () => {
+    const demo = createLocalPreviewLesson("unit-demo", "Demo", {
+      ...DEFAULT_LEARNING_PROFILE,
+      sourceLanguage: "Vietnamese",
+      targetLanguage: "Japanese",
+    });
+    expect(demo.schemaVersion).toBe(4);
+    expect(demo.sourceLanguage).toBe("Vietnamese");
+    expect(demo.targetLanguage).toBe("Japanese");
+    expect(demo.title).toContain("Bài học mẫu");
+    expect(demo.questions.some((question) => question.glossaryTargets?.includes("水"))).toBe(true);
     expect(demo.questions).toHaveLength(19);
     expect(new Set(demo.questions.map((question) => question.type))).toEqual(new Set(QUESTION_FORMATS));
     expect(demo.questionAlternates).toHaveLength(19);
     expect(() => lessonSchema.parse(demo)).not.toThrow();
+    const { sourceLanguage: _sourceLanguage, ...legacyDemo } = demo;
+    expect(() => lessonSchema.parse({ ...legacyDemo, schemaVersion: 3 })).not.toThrow();
     expect(parseLessonProgressSnapshot({
       lessonId: demo.id,
       completedQuestionIds: demo.questions.map((question) => question.id),

@@ -1225,7 +1225,8 @@ button:disabled {
 }
 
 .form-field input,
-.form-field textarea {
+.form-field textarea,
+.form-field select {
   width: 100%;
   padding: 10px 11px;
   color: var(--text-primary);
@@ -1235,6 +1236,11 @@ button:disabled {
   border: 1px solid var(--border);
   border-radius: 6px;
   resize: vertical;
+}
+
+.form-field select {
+  appearance: auto;
+  resize: none;
 }
 
 .form-field small {
@@ -2242,6 +2248,11 @@ input[type="range"] {
 .compact-field { display: grid; grid-template-columns: 84px 1fr; align-items: center; gap: 8px; margin: 8px 0; color: var(--text-muted); font-size: 11px; }
 .compact-field input,
 .compact-field select { min-width: 0; width: 100%; padding: 7px 8px; color: var(--text-primary); background: var(--bg-main); border: 1px solid var(--border); border-radius: 7px; }
+.learning-language-pair { display: grid; gap: 4px; margin: 8px 0 12px; padding: 9px; background: var(--bg-main); border: 1px solid var(--border); border-radius: 7px; }
+.learning-language-pair > span,
+.learning-language-pair small { color: var(--text-muted); font-size: 10px; }
+.learning-language-pair strong { color: var(--text-primary); font-size: 12px; line-height: 1.4; }
+.learning-language-pair strong span { color: var(--accent-readable); }
 .toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; color: var(--text-secondary); font-size: 11px; }
 .toggle-row input { accent-color: var(--accent-readable); }
 .coaching-panel .form-field span { font-size: 10px; }
