@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LessonPlayer } from "./LessonPlayer";
 import { LESSON_PLAYER_PREFERENCE_KEY } from "./playerPreferences";
+import { SPEECH_PREFERENCE_KEY } from "./speech";
 import type { Lesson, LessonQuestion } from "./types";
 
 const lesson: Lesson = {
@@ -46,6 +47,25 @@ const lesson: Lesson = {
 };
 
 let root: Root | null = null;
+let speechVoices: SpeechSynthesisVoice[] = [];
+let spokenUtterances: TestSpeechUtterance[] = [];
+
+class TestSpeechUtterance {
+  lang = "";
+  pitch = 1;
+  rate = 1;
+  text: string;
+  voice: SpeechSynthesisVoice | null = null;
+  volume = 1;
+
+  constructor(text: string) {
+    this.text = text;
+  }
+}
+
+function speechVoice(name: string, lang: string, voiceURI: string, isDefault = false): SpeechSynthesisVoice {
+  return { default: isDefault, lang, localService: true, name, voiceURI };
+}
 
 function button(label: string): HTMLButtonElement {
   const match = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
@@ -92,12 +112,18 @@ function lessonWithQuestions(
 
 beforeEach(() => {
   window.localStorage.clear();
+  speechVoices = [];
+  spokenUtterances = [];
+  Object.defineProperty(globalThis, "SpeechSynthesisUtterance", {
+    configurable: true,
+    value: TestSpeechUtterance,
+  });
   Object.defineProperty(window, "speechSynthesis", {
     configurable: true,
     value: {
       cancel: vi.fn(),
-      speak: vi.fn(),
-      getVoices: () => [],
+      speak: vi.fn((utterance: TestSpeechUtterance) => spokenUtterances.push(utterance)),
+      getVoices: () => speechVoices,
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
     },
@@ -237,6 +263,86 @@ describe("fullscreen lesson player", () => {
     stored = JSON.parse(window.localStorage.getItem(LESSON_PLAYER_PREFERENCE_KEY) ?? "{}") as Record<string, unknown>;
     expect(stored).not.toHaveProperty("readQuestion");
     expect(stored).toMatchObject({ showPronunciation: true, pronunciationMode: "romanized" });
+  });
+
+  it("previews pronunciation, filters target voices, and speaks only target-language text", async () => {
+    speechVoices = [
+      speechVoice("English", "en-US", "voice-en", true),
+      speechVoice("Japanese One", "ja-JP", "voice-ja-1"),
+      speechVoice("Japanese Two", "ja_JP", "voice-ja-2"),
+    ];
+    const question = {
+      ...lesson.questions[0],
+      id: "speech-question",
+      prompt: "Choose \u6c34",
+      options: [
+        { id: "water", label: "\u6c34" },
+        { id: "tea", label: "\u304a\u8336" },
+      ],
+      correctOptionId: "water",
+      glossaryTargets: ["\u6c34", "\u304a\u8336"],
+      presentation: { readQuestion: true, readAnswers: true, wordTooltips: true },
+    } as LessonQuestion;
+    await renderPlayer({
+      lesson: {
+        ...lessonWithQuestions("speech-test", [question], undefined, [
+          {
+            term: "\u6c34",
+            meaning: "water",
+            pronunciation: { native: "\u307f\u305a", romanized: "mizu" },
+          },
+          { term: "\u304a\u8336", meaning: "tea", pronunciation: { native: "\u304a\u3061\u3083", romanized: "ocha" } },
+        ]),
+        targetLanguage: "Japanese",
+      },
+    });
+
+    await act(async () => button("Lesson settings").click());
+    const pronunciationCards = Array.from(document.querySelectorAll<HTMLButtonElement>(".pronunciation-mode button"));
+    expect(pronunciationCards[0].textContent).toContain("mizu");
+    expect(pronunciationCards[0].textContent).toContain("\u6c34");
+    expect(pronunciationCards[1].textContent).toContain("\u307f\u305a");
+
+    const voiceSelect = document.querySelector<HTMLSelectElement>(".lesson-voice-field select")!;
+    expect(Array.from(voiceSelect.options).map((option) => option.textContent)).toEqual([
+      "Automatic Japanese voice",
+      "Japanese One \u00b7 ja-JP",
+      "Japanese Two \u00b7 ja_JP",
+    ]);
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
+      setter?.call(voiceSelect, "voice-ja-2");
+      voiceSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    const speed = document.querySelector<HTMLInputElement>("#lesson-voice-speed")!;
+    expect(speed.type).toBe("range");
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      setter?.call(speed, "1.5");
+      speed.dispatchEvent(new Event("input", { bubbles: true }));
+      speed.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(document.querySelector(".lesson-speed-control output")?.textContent).toBe("1.5x");
+
+    await act(async () => button("Preview voice").click());
+    expect(spokenUtterances[spokenUtterances.length - 1]).toMatchObject({
+      text: "\u6c34",
+      rate: 1.5,
+      lang: "ja_JP",
+      voice: expect.objectContaining({ voiceURI: "voice-ja-2" }),
+    });
+    expect(JSON.parse(window.localStorage.getItem(SPEECH_PREFERENCE_KEY) ?? "{}")).toMatchObject({
+      voiceURI: "voice-ja-2",
+      rate: 1.5,
+    });
+
+    await act(async () => button("Close lesson settings").click());
+    await act(async () => button("Question").click());
+    expect(spokenUtterances[spokenUtterances.length - 1]?.text).toBe("\u6c34");
+    expect(spokenUtterances[spokenUtterances.length - 1]?.text).not.toContain("Choose");
+    await act(async () => button("Answers").click());
+    expect(spokenUtterances[spokenUtterances.length - 1]?.text).toBe("\u6c34. \u304a\u8336");
   });
 
   it("renders ruby pronunciation and a safe multi-meaning glossary tooltip", async () => {

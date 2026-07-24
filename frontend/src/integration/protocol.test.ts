@@ -53,6 +53,7 @@ describe("extension protocol v4 prompts", () => {
     expect(prompt).toContain("supportBank[{id,label}] (8-30)");
     expect(prompt).toContain("otherMeanings?,forms?,aliases?,pronunciation?:{native?,romanized?}");
     expect(prompt).toContain("Glossary must cover every letter/number-bearing part");
+    expect(prompt).toContain("glossaryTargets must list every exact visible target-language string");
     expect(prompt).toContain("A dictation alternate must not be dictation");
     expect(prompt).toContain("Never return presentation settings, HTML, scripts");
   });

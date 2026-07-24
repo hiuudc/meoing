@@ -12,6 +12,7 @@ import {
 } from "./playerPreferences";
 import { firstTryAccuracy, shouldFlushProgress } from "./progress";
 import { DEFAULT_LEARNING_PROFILE, normalizeLearningProfile, resolveLearningProfile } from "./profile";
+import { answerSpeechText, questionSpeechText } from "./questionContent";
 import {
   decorateLessonPresentation,
   getEffectiveUnitQuestionSettings,
@@ -27,7 +28,12 @@ import {
   validateLessonForExpectation,
   validateLessonForProfile,
 } from "./schema";
-import { normalizeSpeechPreference } from "./speech";
+import {
+  filterSpeechVoices,
+  normalizeSpeechPreference,
+  resolveSpeechVoice,
+  voicePreviewSample,
+} from "./speech";
 import { QUESTION_FORMATS, type AttemptRecord, type Lesson, type LessonQuestion, type QuestionAnswer } from "./types";
 
 const common = {
@@ -349,6 +355,56 @@ describe("glossary and speech preferences", () => {
       voiceURI: "voice-1",
       rate: 2,
     });
+  });
+
+  it("filters and resolves browser voices only within the target language", () => {
+    const voices = [
+      {
+        default: true,
+        lang: "en-US",
+        localService: true,
+        name: "English default",
+        voiceURI: "voice-en",
+      },
+      {
+        default: false,
+        lang: "ja-JP",
+        localService: true,
+        name: "Japanese",
+        voiceURI: "voice-ja",
+      },
+      {
+        default: false,
+        lang: "ja_JP",
+        localService: true,
+        name: "Japanese local",
+        voiceURI: "voice-ja-local",
+      },
+    ] satisfies SpeechSynthesisVoice[];
+    const matching = filterSpeechVoices(voices, "Japanese");
+    expect(matching.map((voice) => voice.voiceURI)).toEqual(["voice-ja", "voice-ja-local"]);
+    expect(resolveSpeechVoice(voices, { version: 1, voiceURI: "voice-en", rate: 1 }, "Japanese")?.voiceURI).toBe("voice-ja");
+    expect(filterSpeechVoices(voices, "Unknown language")).toEqual([]);
+    expect(voicePreviewSample("Japanese")).toBe("\u3053\u3093\u306b\u3061\u306f");
+  });
+
+  it("speaks only target-language spans identified by lesson metadata", () => {
+    const question: LessonQuestion = {
+      ...common,
+      id: "speech-target",
+      type: "singleChoice",
+      prompt: "Choose \u6c34",
+      options: [
+        { id: "water", label: "\u6c34" },
+        { id: "tea", label: "\u304a\u8336" },
+      ],
+      correctOptionId: "water",
+      glossaryTargets: ["\u6c34", "\u304a\u8336"],
+    };
+    expect(questionSpeechText(question)).toBe("\u6c34");
+    expect(answerSpeechText(question)).toBe("\u6c34. \u304a\u8336");
+    expect(questionSpeechText(question)).not.toContain("Choose");
+    expect(answerSpeechText(question)).not.toContain("Correction");
   });
 
   it("matches inflected aliases and retains multiple meanings and pronunciation", () => {

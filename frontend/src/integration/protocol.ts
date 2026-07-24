@@ -169,7 +169,7 @@ const QUESTION_CONTRACT = `Question format appendix (use these exact field names
 - freeWriting: minWords, maxWords, rubric[], supportBank[{id,label}] (8-30), supportBankSeparator (space or none)
 - speakingRepeat: modelText, rubric[]
 - speakingRoleplay: role, scenario, goal, rubric[]
-Every question also has id, type, prompt, explanation, evaluationMode (local or ai), glossaryTargets[], and optional hint, supplementalHint, sourceReferenceIds, templateId. glossaryTargets must list the exact visible target-language strings whose words and phrases need glossary help. Use templateId only for a required custom blueprint. Never return presentation settings, HTML, scripts, or arbitrary renderer/grader fields. A match object may contain caseSensitive, ignoreDiacritics, and ignorePunctuation.`;
+Every question also has id, type, prompt, explanation, evaluationMode (local or ai), glossaryTargets[], and optional hint, supplementalHint, sourceReferenceIds, templateId. glossaryTargets must list every exact visible target-language string in the prompt, source text, choices, labels, and support bank; never include interface-language instructions. Use templateId only for a required custom blueprint. Never return presentation settings, HTML, scripts, or arbitrary renderer/grader fields. A match object may contain caseSensitive, ignoreDiacritics, and ignorePunctuation.`;
 
 function completedEnvelope(operation: OperationPromptInput): string {
   const result = operation.kind === "create_lesson"

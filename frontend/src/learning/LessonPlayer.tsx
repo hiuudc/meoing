@@ -35,10 +35,13 @@ import { getQuestionFormatDefinition } from "./questionRegistry";
 import { defaultPresentationForFormat } from "./questionSettings";
 import { applyAttempt, createRetryState, masteryPercent, skipQuestion, useListeningAlternate, type RetryState } from "./retry";
 import {
+  filterSpeechVoices,
+  languageTagForSpeech,
   loadSpeechPreference,
   resolveSpeechVoice,
   saveSpeechPreference,
   type BrowserSpeechPreference,
+  voicePreviewSample,
 } from "./speech";
 import type {
   AttemptRecord,
@@ -80,8 +83,6 @@ const FOCUSABLE_SELECTOR = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(", ");
 
-const SPEECH_RATES = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
-
 function initialAnswer(question: LessonQuestion): QuestionAnswer {
   if (["multipleChoice", "wordBank", "reorderTokens", "reorderDialogue"].includes(question.type)) return [];
   if (["multiCloze", "matching", "categorize"].includes(question.type)) return {};
@@ -116,6 +117,16 @@ function getFocusableElements(container: HTMLElement): HTMLElement[] {
   return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
     (element) => !element.hidden && element.getAttribute("aria-hidden") !== "true",
   );
+}
+
+function glossaryEntryMatchesTargets(entry: Lesson["glossary"][number], targets: string[]): boolean {
+  const forms = [entry.term, ...(entry.forms ?? []), ...(entry.aliases ?? [])]
+    .map((value) => value.trim().toLocaleLowerCase())
+    .filter(Boolean);
+  return targets.some((target) => {
+    const normalizedTarget = target.toLocaleLowerCase();
+    return forms.some((form) => normalizedTarget.includes(form));
+  });
 }
 
 export function LessonPlayer({
@@ -314,7 +325,7 @@ export function LessonPlayer({
     const speechAnchor = anchor;
     const position = () => {
       const rect = speechAnchor.getBoundingClientRect();
-      const width = Math.min(380, window.innerWidth - 16);
+      const width = Math.min(430, window.innerWidth - 16);
       const height = speechPopoverRef.current?.offsetHeight ?? 560;
       setSpeechPosition({
         top: Math.max(8, Math.min(rect.bottom + 8, window.innerHeight - height - 8)),
@@ -392,14 +403,13 @@ export function LessonPlayer({
 
   function speak(text: string) {
     if (!("speechSynthesis" in window) || !text.trim()) return;
+    const voice = resolveSpeechVoice(voices, speechPreference, lesson.targetLanguage);
+    if (!voice) return;
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = speechPreference.rate;
-    const voice = resolveSpeechVoice(voices, speechPreference, lesson.targetLanguage);
-    if (voice) {
-      utterance.voice = voice;
-      utterance.lang = voice.lang;
-    }
+    utterance.voice = voice;
+    utterance.lang = voice.lang || languageTagForSpeech(lesson.targetLanguage);
     window.speechSynthesis.speak(utterance);
   }
 
@@ -520,7 +530,38 @@ export function LessonPlayer({
   const presentation = presentationDefaults ? effectivePresentation(presentationDefaults, playerPreference) : null;
   const currentMessages = currentSlotId ? chatByQuestion[currentSlotId] ?? [] : [];
   const speechSupported = "speechSynthesis" in window;
-  const selectedVoice = voices.some((voice) => voice.voiceURI === speechPreference.voiceURI) ? speechPreference.voiceURI : "";
+  const targetVoices = useMemo(
+    () => filterSpeechVoices(voices, lesson.targetLanguage),
+    [lesson.targetLanguage, voices],
+  );
+  const selectedVoice = targetVoices.some((voice) => voice.voiceURI === speechPreference.voiceURI)
+    ? speechPreference.voiceURI
+    : "";
+  const targetVoiceAvailable = speechSupported && targetVoices.length > 0;
+  const questionSpeech = currentQuestion ? questionSpeechText(currentQuestion) : "";
+  const answerSpeech = currentQuestion ? answerSpeechText(currentQuestion, evaluation) : "";
+  const lessonTargetStrings = useMemo(
+    () => [
+      ...lesson.questions.flatMap((question) => question.glossaryTargets ?? []),
+      ...(lesson.questionAlternates ?? []).flatMap((alternate) => alternate.question.glossaryTargets ?? []),
+    ],
+    [lesson.questionAlternates, lesson.questions],
+  );
+  const targetGlossarySample = useMemo(
+    () => lesson.glossary.find((entry) => glossaryEntryMatchesTargets(entry, lessonTargetStrings)),
+    [lesson.glossary, lessonTargetStrings],
+  );
+  const pronunciationSample = useMemo(
+    () => lesson.glossary.find((entry) => (
+      Boolean(entry.pronunciation?.native || entry.pronunciation?.romanized)
+      && glossaryEntryMatchesTargets(entry, lessonTargetStrings)
+    )),
+    [lesson.glossary, lessonTargetStrings],
+  );
+  const voicePreviewText = pronunciationSample?.term
+    ?? targetGlossarySample?.term
+    ?? voicePreviewSample(lesson.targetLanguage);
+  const speechRateLabel = `${Number(speechPreference.rate.toFixed(2))}x`;
   const listeningPaused = playerPreference.listeningDisabledUntil > now;
   const renderGlossaryText = Boolean(presentation?.wordTooltips || playerPreference.showPronunciation);
   const portalTarget = document.querySelector<HTMLElement>(".app-shell") ?? document.body;
@@ -583,13 +624,13 @@ export function LessonPlayer({
                     : currentQuestion.prompt}
                 </h1>
                 <div className="lesson-question-speakers">
-                  {presentation?.readQuestion ? (
-                    <button type="button" onClick={() => speak(questionSpeechText(currentQuestion))} disabled={!speechSupported} aria-label="Read question aloud">
+                  {presentation?.readQuestion && questionSpeech ? (
+                    <button type="button" onClick={() => speak(questionSpeech)} disabled={!targetVoiceAvailable} aria-label={`Read ${lesson.targetLanguage} question text aloud`}>
                       <Volume2 size={18} /> <span>Question</span>
                     </button>
                   ) : null}
-                  {presentation?.readAnswers && answerSpeechText(currentQuestion, evaluation) ? (
-                    <button type="button" onClick={() => speak(answerSpeechText(currentQuestion, evaluation))} disabled={!speechSupported} aria-label="Read answers aloud">
+                  {presentation?.readAnswers && answerSpeech ? (
+                    <button type="button" onClick={() => speak(answerSpeech)} disabled={!targetVoiceAvailable} aria-label={`Read ${lesson.targetLanguage} answer text aloud`}>
                       <Volume2 size={18} /> <span>Answers</span>
                     </button>
                   ) : null}
@@ -735,7 +776,13 @@ export function LessonPlayer({
                 ["wordTooltips", "Word tooltips"],
               ] as const).map(([key, label]) => (
                 <label className="lesson-settings-toggle" key={key}>
-                  <span>{label}{playerPreference[key] === undefined ? <small>Lesson default</small> : <small>Browser override</small>}</span>
+                  <span>
+                    {label}
+                    <small>
+                      {key === "wordTooltips" ? "" : `${lesson.targetLanguage} only · `}
+                      {playerPreference[key] === undefined ? "Lesson default" : "Browser override"}
+                    </small>
+                  </span>
                   <input
                     type="checkbox"
                     checked={Boolean(presentation?.[key])}
@@ -743,13 +790,35 @@ export function LessonPlayer({
                   />
                 </label>
               ))}
-              <label className="lesson-settings-toggle">
-                <span>Show pronunciation<small>When lesson data provides a reading</small></span>
+              <label className="lesson-settings-toggle lesson-pronunciation-toggle">
+                <span>Show pronunciation<small>Display readings above {lesson.targetLanguage} text</small></span>
                 <input type="checkbox" checked={playerPreference.showPronunciation} onChange={(event) => setPlayerPreference((current) => ({ ...current, showPronunciation: event.target.checked }))} />
               </label>
-              <div className="pronunciation-mode" role="group" aria-label="Pronunciation style">
-                <button type="button" className={playerPreference.pronunciationMode === "romanized" ? "is-active" : ""} aria-pressed={playerPreference.pronunciationMode === "romanized"} onClick={() => setPlayerPreference((current) => ({ ...current, pronunciationMode: "romanized" }))}>Romanized</button>
-                <button type="button" className={playerPreference.pronunciationMode === "native" ? "is-active" : ""} aria-pressed={playerPreference.pronunciationMode === "native"} onClick={() => setPlayerPreference((current) => ({ ...current, pronunciationMode: "native" }))}>Native reading</button>
+              <div className="pronunciation-mode" role="group" aria-label="Pronunciation preview and style">
+                <button
+                  type="button"
+                  className={playerPreference.pronunciationMode === "romanized" ? "is-active" : ""}
+                  aria-pressed={playerPreference.pronunciationMode === "romanized"}
+                  onClick={() => setPlayerPreference((current) => ({ ...current, pronunciationMode: "romanized" }))}
+                >
+                  <ruby lang={languageTagForSpeech(lesson.targetLanguage)}>
+                    {pronunciationSample?.term ?? lesson.targetLanguage}
+                    <rt>{pronunciationSample?.pronunciation?.romanized ?? "Preview unavailable"}</rt>
+                  </ruby>
+                  <span>Romanized</span>
+                </button>
+                <button
+                  type="button"
+                  className={playerPreference.pronunciationMode === "native" ? "is-active" : ""}
+                  aria-pressed={playerPreference.pronunciationMode === "native"}
+                  onClick={() => setPlayerPreference((current) => ({ ...current, pronunciationMode: "native" }))}
+                >
+                  <ruby lang={languageTagForSpeech(lesson.targetLanguage)}>
+                    {pronunciationSample?.term ?? lesson.targetLanguage}
+                    <rt>{pronunciationSample?.pronunciation?.native ?? "Preview unavailable"}</rt>
+                  </ruby>
+                  <span>Native reading</span>
+                </button>
               </div>
             </section>
             <section className="lesson-settings-section">
@@ -758,21 +827,58 @@ export function LessonPlayer({
               {listeningPaused ? <button className="secondary-button" type="button" onClick={() => setPlayerPreference((current) => enableListening(current))}>Enable listening now</button> : null}
             </section>
             <section className="lesson-settings-section">
-              <strong>Browser speech</strong>
-              <label>
-                <span>Browser voice</span>
-                <select disabled={!speechSupported} value={selectedVoice} onChange={(event) => setSpeechPreference((current) => ({ ...current, voiceURI: event.target.value }))}>
-                  <option value="">Automatic language match</option>
-                  {voices.map((voice) => <option value={voice.voiceURI} key={voice.voiceURI}>{voice.name} · {voice.lang}</option>)}
-                </select>
+              <div className="lesson-settings-section-title">
+                <strong>Browser speech</strong>
+                <span>{lesson.targetLanguage}</span>
+              </div>
+              <div className="lesson-voice-field">
+                <label>
+                  <span>Browser voice</span>
+                  <select
+                    disabled={!targetVoiceAvailable}
+                    value={selectedVoice}
+                    onChange={(event) => setSpeechPreference((current) => ({ ...current, voiceURI: event.target.value }))}
+                  >
+                    <option value="">
+                      {targetVoices.length
+                        ? `Automatic ${lesson.targetLanguage} voice`
+                        : `No ${lesson.targetLanguage} voice available`}
+                    </option>
+                    {targetVoices.map((voice) => <option value={voice.voiceURI} key={voice.voiceURI}>{voice.name} · {voice.lang}</option>)}
+                  </select>
+                </label>
+                <div className="lesson-voice-preview-row">
+                  <button
+                    className="lesson-voice-preview"
+                    type="button"
+                    onClick={() => speak(voicePreviewText)}
+                    disabled={!targetVoiceAvailable || !voicePreviewText}
+                  >
+                    <Volume2 size={15} /> Preview voice
+                  </button>
+                  <span>
+                    {targetVoices.length
+                      ? `${targetVoices.length} matching ${targetVoices.length === 1 ? "voice" : "voices"}`
+                      : `Install a ${lesson.targetLanguage} system voice to use speech.`}
+                  </span>
+                </div>
+              </div>
+              <label className="lesson-speed-control" htmlFor="lesson-voice-speed">
+                <span><b>Voice speed</b><output>{speechRateLabel}</output></span>
+                <input
+                  id="lesson-voice-speed"
+                  type="range"
+                  min="0.5"
+                  max="2"
+                  step="0.05"
+                  value={speechPreference.rate}
+                  disabled={!speechSupported}
+                  aria-valuetext={speechRateLabel}
+                  onChange={(event) => setSpeechPreference((current) => ({ ...current, rate: Number(event.target.value) }))}
+                />
+                <small><span>0.5x</span><span>1x</span><span>1.5x</span><span>2x</span></small>
               </label>
-              <label>
-                <span>Speed</span>
-                <select disabled={!speechSupported} value={speechPreference.rate} onChange={(event) => setSpeechPreference((current) => ({ ...current, rate: Number(event.target.value) }))}>
-                  {SPEECH_RATES.map((rate) => <option value={rate} key={rate}>{rate}x</option>)}
-                </select>
-              </label>
-              <p>Speech plays only when you press a speaker button.</p>
+              <p>Question, answer, and preview speech use only {lesson.targetLanguage}. Audio never starts automatically.</p>
             </section>
           </div>
         ) : null}
