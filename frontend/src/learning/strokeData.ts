@@ -5,6 +5,7 @@ type StrokeDataLanguage = "zh" | "ja" | "ko";
 type Point = [number, number];
 
 const shardCache = new Map<string, Promise<Record<string, CharacterJson>>>();
+let catalogPromise: Promise<{ zh: string[]; ja: string[] }> | null = null;
 
 function shardKey(character: string): string {
   const codePoint = character.codePointAt(0);
@@ -69,6 +70,11 @@ const VOWELS: JamoTemplate[] = [
   { width: .65, strokes: [[[500, 850], [500, 150]]] }, // ㅣ
 ];
 
+export const BASIC_HANGUL_JAMO = [
+  "ㄱ", "ㄴ", "ㄷ", "ㄹ", "ㅁ", "ㅂ", "ㅅ", "ㅇ", "ㅈ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ",
+  "ㅏ", "ㅓ", "ㅑ", "ㅕ", "ㅗ", "ㅛ", "ㅜ", "ㅠ", "ㅡ", "ㅣ",
+] as const;
+
 const LEAD_TO_TEMPLATE = [0, 0, 1, 2, 2, 3, 4, 4, 5, 5, 6, 6, 7, 8, 8, 9, 10, 11, 13];
 const VOWEL_TO_TEMPLATE = [0, 1, 2, 3, 0, 0, 1, 1, 4, 4, 4, 5, 6, 6, 6, 7, 8, 8, 8, 9, 9];
 const TRAIL_TO_TEMPLATE = [-1, 0, 0, 0, 1, 1, 1, 2, 3, 3, 3, 3, 3, 4, 5, 5, 6, 6, 7, 7, 7, 8, 10, 11, 12, 13, 13, 13];
@@ -112,6 +118,35 @@ function hangulData(character: string): CharacterJson | null {
   };
 }
 
+function jamoData(character: string): CharacterJson | null {
+  const index = BASIC_HANGUL_JAMO.indexOf(character as (typeof BASIC_HANGUL_JAMO)[number]);
+  if (index < 0) return null;
+  const template = index < CONSONANTS.length ? CONSONANTS[index] : VOWELS[index - CONSONANTS.length];
+  return {
+    strokes: template.strokes.map((stroke) => linePath(stroke[0], stroke[stroke.length - 1])),
+    medians: template.strokes,
+  };
+}
+
+function modernHangulSyllables(): string[] {
+  return Array.from({ length: 0xd7a3 - 0xac00 + 1 }, (_, index) => String.fromCodePoint(0xac00 + index));
+}
+
+export async function loadStrokeCatalog(language: string): Promise<string[]> {
+  const family = strokeLanguage(language);
+  if (!family) return [];
+  if (family === "ko") return [...BASIC_HANGUL_JAMO, ...modernHangulSyllables()];
+  if (!catalogPromise) {
+    catalogPromise = fetch("/stroke-data/catalog.json", { credentials: "same-origin" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Stroke catalog is unavailable (${response.status}).`);
+        return response.json() as Promise<{ zh: string[]; ja: string[] }>;
+      });
+  }
+  const catalog = await catalogPromise;
+  return [...catalog[family]];
+}
+
 async function loadShard(language: "zh" | "ja", character: string): Promise<Record<string, CharacterJson>> {
   const key = `${language}:${shardKey(character)}`;
   const cached = shardCache.get(key);
@@ -134,7 +169,7 @@ export async function loadStrokeCharacterData(language: string, character: strin
   const family = strokeLanguage(language);
   if (!family) throw new Error(`Character tracing is not available for ${language}.`);
   if (family === "ko") {
-    const generated = hangulData(character);
+    const generated = jamoData(character) ?? hangulData(character);
     if (!generated) throw new Error("Only modern Hangul syllables are supported.");
     return generated;
   }
@@ -146,4 +181,5 @@ export async function loadStrokeCharacterData(language: string, character: strin
 
 export function clearStrokeDataCache(): void {
   shardCache.clear();
+  catalogPromise = null;
 }

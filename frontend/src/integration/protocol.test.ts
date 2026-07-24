@@ -6,7 +6,7 @@ import {
   buildResultRepairPrompt,
   type OperationExpectation,
 } from "./protocol";
-import { QUESTION_FORMATS } from "../learning/types";
+import { LESSON_QUESTION_FORMATS } from "../learning/types";
 
 const expectation: OperationExpectation = {
   unitId: "unit-1",
@@ -15,7 +15,7 @@ const expectation: OperationExpectation = {
   level: "elementary",
   questionCount: 10,
   speaking: true,
-  allowedFormats: [...QUESTION_FORMATS],
+  allowedFormats: [...LESSON_QUESTION_FORMATS],
   requiredTemplates: [{ id: "daily-greeting", format: "selectBlank" }],
 };
 
@@ -40,13 +40,10 @@ describe("extension protocol v6 prompts", () => {
     expect(prompt).toContain('"message": "Explain this mistake"');
   });
 
-  it("keeps all 24 question formats, enabled formats, and required blueprints", () => {
+  it("keeps all 23 active lesson formats, enabled formats, and required blueprints", () => {
     const prompt = buildOperationPrompt({ operationId: "operation-2", kind: "create_lesson", expectation, input: {} });
-    for (const format of [
-      "singleChoice", "multipleChoice", "trueFalse", "fillBlank", "selectBlank", "multiCloze", "wordBank", "matching",
-      "reorderTokens", "reorderDialogue", "categorize", "translation", "shortAnswer", "errorCorrection",
-      "sentenceTransformation", "dictation", "freeWriting", "speakingRepeat", "speakingRoleplay",
-    ]) expect(prompt).toContain(`- ${format}:`);
+    for (const format of LESSON_QUESTION_FORMATS) expect(prompt).toContain(`- ${format}:`);
+    expect(prompt).not.toContain("- characterTracing:");
     expect(prompt).toContain("Create exactly 10 questions");
     expect(prompt).toContain("at least one locally graded question and at least one AI-graded question");
     expect(prompt).toContain("at least one speakingRepeat or speakingRoleplay question");

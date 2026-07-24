@@ -36,7 +36,14 @@ import {
   resolveSpeechVoice,
   voicePreviewSample,
 } from "./speech";
-import { QUESTION_FORMATS, type AttemptRecord, type Lesson, type LessonQuestion, type QuestionAnswer } from "./types";
+import {
+  LESSON_QUESTION_FORMATS,
+  QUESTION_FORMATS,
+  type AttemptRecord,
+  type Lesson,
+  type LessonQuestion,
+  type QuestionAnswer,
+} from "./types";
 
 const common = {
   explanation: "Giải thích ngắn.",
@@ -201,7 +208,7 @@ describe("lesson schema", () => {
       level: "elementary" as const,
       questionCount: 10,
       speaking: false,
-      allowedFormats: [...QUESTION_FORMATS],
+      allowedFormats: [...LESSON_QUESTION_FORMATS],
       requiredTemplates: [],
     };
     expect(validateLessonForExpectation(expectedLesson, expectation)).toEqual([]);
@@ -309,6 +316,8 @@ describe("profile and progress normalization", () => {
     expect(profile.interfaceLanguage).toBe("en");
     expect(normalizeLearningProfile({ interfaceLanguage: "vi" }).interfaceLanguage).toBe("en");
     expect(normalizeLearningProfile({ lessonQuestionCount: 2 }).lessonQuestionCount).toBe(8);
+    expect(normalizeLearningProfile({ preferredFormats: ["characterTracing", "singleChoice"] }).preferredFormats)
+      .toEqual(["singleChoice"]);
     expect(detectBrowserLanguage(["vi-VN"])).toBe("Vietnamese");
     expect(detectBrowserLanguage(["pt-BR"])).toBe("English");
   });
@@ -334,6 +343,7 @@ describe("unit question settings", () => {
     const profile = normalizeLearningProfile({ preferredFormats: QUESTION_FORMATS.filter((format) => format !== "selectBlank") });
     const effective = getEffectiveUnitQuestionSettings(undefined, profile);
     expect(effective.enabledFormats).toContain("selectBlank");
+    expect(effective.enabledFormats).not.toContain("characterTracing");
 
     const normalized = normalizeUnitQuestionSettings({
       enabledFormats: ["singleChoice", "translation", "unknown", "singleChoice"],
@@ -341,6 +351,13 @@ describe("unit question settings", () => {
     });
     expect(normalized.enabledFormats).toEqual(["singleChoice", "translation"]);
     expect(normalized.customTemplates[0]).toMatchObject({ name: "My prompt", guidance: "Keep it short.", enabled: true });
+    expect(normalizeUnitQuestionSettings({
+      enabledFormats: ["characterTracing", "singleChoice"],
+      customTemplates: [{ id: "legacy-tracing", name: "Legacy", baseFormat: "characterTracing", guidance: "Trace." }],
+    })).toMatchObject({
+      enabledFormats: ["singleChoice"],
+      customTemplates: [{ id: "legacy-tracing", baseFormat: "singleChoice" }],
+    });
   });
 
   it("rejects blueprint combinations that cannot leave five distinct lesson formats", () => {
@@ -511,7 +528,7 @@ describe("glossary and speech preferences", () => {
     )).toEqual({ readQuestion: true, readAnswers: true, wordTooltips: false });
   });
 
-  it("builds a schema-v5 language-pair demo with every format, one alternate per slot, and 24-question progress", () => {
+  it("builds a schema-v5 language-pair demo with every active format and one alternate per slot", () => {
     const demo = createLocalPreviewLesson("unit-demo", "Demo", {
       ...DEFAULT_LEARNING_PROFILE,
       sourceLanguage: "Vietnamese",
@@ -522,9 +539,11 @@ describe("glossary and speech preferences", () => {
     expect(demo.targetLanguage).toBe("Japanese");
     expect(demo.title).toContain("Bài học mẫu");
     expect(demo.questions.some((question) => question.glossaryTargets?.includes("水"))).toBe(true);
-    expect(demo.questions).toHaveLength(24);
-    expect(new Set(demo.questions.map((question) => question.type))).toEqual(new Set(QUESTION_FORMATS));
-    expect(demo.questionAlternates).toHaveLength(24);
+    expect(demo.glossary.find((entry) => entry.term === "水")?.meaning).toBe("nước");
+    expect(demo.glossary.find((entry) => entry.term === "飲みます")?.meaning).toBe("uống");
+    expect(demo.questions).toHaveLength(23);
+    expect(new Set(demo.questions.map((question) => question.type))).toEqual(new Set(LESSON_QUESTION_FORMATS));
+    expect(demo.questionAlternates).toHaveLength(23);
     expect(() => lessonSchema.parse(demo)).not.toThrow();
     const { sourceLanguage: _sourceLanguage, ...legacyDemo } = demo;
     expect(() => lessonSchema.parse({ ...legacyDemo, schemaVersion: 3 })).not.toThrow();
@@ -532,6 +551,15 @@ describe("glossary and speech preferences", () => {
       lessonId: demo.id,
       completedQuestionIds: demo.questions.map((question) => question.id),
       attemptsByQuestion: Object.fromEntries(demo.questions.map((question) => [question.id, 1])),
+      firstTryCorrect: 23,
+      totalQuestions: 23,
+      masteryPercent: 100,
+      updatedAt: "2026-07-22T00:00:00.000Z",
+    }).totalQuestions).toBe(23);
+    expect(parseLessonProgressSnapshot({
+      lessonId: "legacy-24",
+      completedQuestionIds: Array.from({ length: 24 }, (_, index) => `legacy-${index}`),
+      attemptsByQuestion: Object.fromEntries(Array.from({ length: 24 }, (_, index) => [`legacy-${index}`, 1])),
       firstTryCorrect: 24,
       totalQuestions: 24,
       masteryPercent: 100,

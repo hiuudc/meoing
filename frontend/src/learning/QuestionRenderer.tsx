@@ -1,12 +1,9 @@
 import {
-  GripVertical,
   Headphones,
   Keyboard,
   Mic,
-  Plus,
   RotateCcw,
   Volume2,
-  X,
 } from "lucide-react";
 import {
   useEffect,
@@ -17,6 +14,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import { CharacterTracingResponse } from "./CharacterTracingResponse";
 import { SpeakingRecorder, supportsSpeechRecognition } from "./SpeakingRecorder";
 import { languageTagForSpeech } from "./speech";
@@ -40,9 +38,21 @@ interface QuestionRendererProps {
   onSpeakingChange?: (submission: SpeakingSubmission | null) => void;
   onRequireAlternate?: () => void;
   renderText?: (text: string, interactive?: boolean) => ReactNode;
+  answerInputMode?: AnswerInputMode;
 }
 
 type TextRenderer = (text: string, interactive?: boolean) => ReactNode;
+export type AnswerInputMode = "keyboard" | "bank";
+
+export function answerBankForQuestion(question: LessonQuestion): AnswerBank | undefined {
+  if (question.answerBank) return question.answerBank;
+  if (question.type !== "freeWriting" || !question.supportBank?.length) return undefined;
+  return {
+    tokens: question.supportBank,
+    separator: question.supportBankSeparator ?? "space",
+    defaultMode: "keyboard",
+  };
+}
 
 function stringAnswer(answer: QuestionAnswer): string {
   return typeof answer === "string" ? answer : "";
@@ -81,14 +91,33 @@ function TextResponse({
   );
 }
 
-function moveItem(values: string[], sourceId: string, targetId: string): string[] {
+function moveItem(values: string[], sourceId: string, targetIndex: number): string[] {
   const sourceIndex = values.indexOf(sourceId);
-  const targetIndex = values.indexOf(targetId);
-  if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return values;
+  if (sourceIndex < 0) return values;
   const next = [...values];
   next.splice(sourceIndex, 1);
-  next.splice(targetIndex, 0, sourceId);
+  next.splice(Math.max(0, Math.min(targetIndex, next.length)), 0, sourceId);
   return next;
+}
+
+interface PointerDrag {
+  id: string;
+  label: string;
+  origin: "tray" | "bank";
+  x: number;
+  y: number;
+  offsetX: number;
+  offsetY: number;
+  moved: boolean;
+}
+
+interface DragPreview {
+  id: string;
+  label: string;
+  width: number;
+  height: number;
+  x: number;
+  y: number;
 }
 
 export function OrderedAnswerComposer({
@@ -111,10 +140,18 @@ export function OrderedAnswerComposer({
   maxSelections?: number;
 }) {
   const labels = useMemo(() => new Map(options.map((option) => [option.id, option.label])), [options]);
-  const available = options.filter((option) => !value.includes(option.id));
   const trayRef = useRef<HTMLDivElement>(null);
-  const dragRef = useRef<{ id: string; x: number; y: number; moved: boolean } | null>(null);
+  const bankRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<PointerDrag | null>(null);
+  const dragPreviewRef = useRef<HTMLDivElement>(null);
   const suppressClickRef = useRef("");
+  const [dragPreview, setDragPreview] = useState<DragPreview | null>(null);
+  const [announcement, setAnnouncement] = useState("");
+
+  function announce(message: string) {
+    setAnnouncement("");
+    window.requestAnimationFrame(() => setAnnouncement(message));
+  }
 
   function moveBy(id: string, direction: -1 | 1) {
     const index = value.indexOf(id);
@@ -123,94 +160,172 @@ export function OrderedAnswerComposer({
     const next = [...value];
     [next[index], next[target]] = [next[target], next[index]];
     onChange(next);
+    announce(`${labels.get(id) ?? id} moved to position ${target + 1}.`);
+  }
+
+  function insertionIndex(clientX: number, clientY: number, excludedId?: string): number {
+    const elements = Array.from(
+      trayRef.current?.querySelectorAll<HTMLElement>("[data-answer-token-id]") ?? [],
+    ).filter((element) => element.dataset.answerTokenId !== excludedId);
+    const target = elements.find((element) => {
+      const rect = element.getBoundingClientRect();
+      return clientY < rect.top + rect.height / 2
+        || (clientY <= rect.bottom && clientX < rect.left + rect.width / 2);
+    });
+    if (!target) return elements.length;
+    return elements.indexOf(target);
+  }
+
+  function startPointerDrag(
+    event: ReactPointerEvent<HTMLButtonElement>,
+    id: string,
+    label: string,
+    origin: PointerDrag["origin"],
+  ) {
+    if (disabled) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    dragRef.current = {
+      id,
+      label,
+      origin,
+      x: event.clientX,
+      y: event.clientY,
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top,
+      moved: false,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setDragPreview({
+      id,
+      label,
+      width: rect.width,
+      height: rect.height,
+      x: rect.left,
+      y: rect.top,
+    });
+  }
+
+  function movePointerDrag(event: ReactPointerEvent<HTMLButtonElement>) {
+    const drag = dragRef.current;
+    if (!drag) return;
+    if (!drag.moved && Math.hypot(event.clientX - drag.x, event.clientY - drag.y) > 7) {
+      drag.moved = true;
+      dragPreviewRef.current?.removeAttribute("hidden");
+    }
+    if (!drag.moved || !dragPreviewRef.current) return;
+    dragPreviewRef.current.style.transform = `translate3d(${event.clientX - drag.offsetX}px, ${event.clientY - drag.offsetY}px, 0)`;
   }
 
   function finishPointerDrag(event: ReactPointerEvent<HTMLButtonElement>) {
     const drag = dragRef.current;
     dragRef.current = null;
+    setDragPreview(null);
     if (!drag?.moved) return;
-    const candidates = Array.from(
-      trayRef.current?.querySelectorAll<HTMLElement>("[data-answer-token-id]") ?? [],
-    ).filter((element) => element.dataset.answerTokenId !== drag.id);
-    const nearest = candidates.reduce<{ element: HTMLElement; distance: number } | null>((best, element) => {
-      const rect = element.getBoundingClientRect();
-      const distance = Math.hypot(event.clientX - (rect.left + rect.width / 2), event.clientY - (rect.top + rect.height / 2));
-      return !best || distance < best.distance ? { element, distance } : best;
-    }, null);
-    const targetId = nearest?.element.dataset.answerTokenId;
-    if (targetId) onChange(moveItem(value, drag.id, targetId));
+    const trayRect = trayRef.current?.getBoundingClientRect();
+    const bankRect = bankRef.current?.getBoundingClientRect();
+    const overTray = Boolean(trayRect
+      && event.clientX >= trayRect.left && event.clientX <= trayRect.right
+      && event.clientY >= trayRect.top && event.clientY <= trayRect.bottom);
+    const overBank = Boolean(bankRect
+      && event.clientX >= bankRect.left && event.clientX <= bankRect.right
+      && event.clientY >= bankRect.top && event.clientY <= bankRect.bottom);
+
+    if (drag.origin === "bank" && overTray) {
+      if (maxSelections === undefined || value.length < maxSelections) {
+        const next = [...value];
+        const targetIndex = insertionIndex(event.clientX, event.clientY);
+        next.splice(targetIndex, 0, drag.id);
+        onAnswerActivate?.(drag.label);
+        onChange(next);
+        announce(`${drag.label} added at position ${targetIndex + 1}.`);
+      }
+    } else if (drag.origin === "tray" && overBank) {
+      onChange(value.filter((valueId) => valueId !== drag.id));
+      announce(`${drag.label} returned to the word bank.`);
+    } else if (drag.origin === "tray" && overTray) {
+      const targetIndex = insertionIndex(event.clientX, event.clientY, drag.id);
+      const next = moveItem(value, drag.id, targetIndex);
+      onChange(next);
+      announce(`${drag.label} moved to position ${next.indexOf(drag.id) + 1}.`);
+    }
     suppressClickRef.current = drag.id;
   }
 
+  function cancelPointerDrag() {
+    dragRef.current = null;
+    setDragPreview(null);
+  }
+
   function handleSelectedKey(event: ReactKeyboardEvent<HTMLButtonElement>, id: string) {
-    if (!["ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown", "Home", "End", "Delete", "Backspace"].includes(event.key)) return;
-    event.preventDefault();
     if (event.key === "Delete" || event.key === "Backspace") {
+      event.preventDefault();
       onChange(value.filter((valueId) => valueId !== id));
+      announce(`${labels.get(id) ?? id} returned to the word bank.`);
       return;
     }
-    if (event.key === "Home") {
-      onChange([id, ...value.filter((valueId) => valueId !== id)]);
-      return;
-    }
-    if (event.key === "End") {
-      onChange([...value.filter((valueId) => valueId !== id), id]);
-      return;
-    }
+    if (!event.altKey || !["ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown"].includes(event.key)) return;
+    event.preventDefault();
     moveBy(id, event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1);
   }
 
+  const portalTarget = document.querySelector<HTMLElement>(".app-shell") ?? document.body;
   return (
     <div className="answer-composer">
-      <p className="question-control-label">Selected order</p>
+      <p className="sr-only">Selected order</p>
       <div className={value.length ? "answer-tray" : "answer-tray is-empty"} ref={trayRef} aria-label="Selected answer">
-        {value.length ? value.map((id, index) => (
+        {value.map((id, index) => (
           <button
             type="button"
             key={id}
             className="answer-token"
             data-answer-token-id={id}
-            aria-label={`${labels.get(id) ?? id}, position ${index + 1}. Use arrow keys to reorder; Delete removes.`}
-            onPointerDown={(event) => {
-              dragRef.current = { id, x: event.clientX, y: event.clientY, moved: false };
-              event.currentTarget.setPointerCapture(event.pointerId);
-            }}
-            onPointerMove={(event) => {
-              const drag = dragRef.current;
-              if (!drag || drag.id !== id || drag.moved) return;
-              if (Math.hypot(event.clientX - drag.x, event.clientY - drag.y) > 8) drag.moved = true;
-            }}
+            aria-label={`${labels.get(id) ?? id}, position ${index + 1}. Alt plus arrow keys reorders; Delete returns it to the bank.`}
+            onPointerDown={(event) => startPointerDrag(event, id, labels.get(id) ?? id, "tray")}
+            onPointerMove={movePointerDrag}
             onPointerUp={finishPointerDrag}
-            onPointerCancel={() => { dragRef.current = null; }}
+            onPointerCancel={cancelPointerDrag}
             onKeyDown={(event) => handleSelectedKey(event, id)}
             onClick={() => {
               if (suppressClickRef.current === id) {
                 suppressClickRef.current = "";
                 return;
               }
+              onAnswerActivate?.(labels.get(id) ?? id);
               onChange(value.filter((valueId) => valueId !== id));
+              announce(`${labels.get(id) ?? id} returned to the word bank.`);
             }}
             disabled={disabled}
           >
-            <GripVertical size={14} aria-hidden="true" />
             {renderText(labels.get(id) ?? id, Boolean(evaluated))}
-            <X size={13} aria-hidden="true" />
           </button>
-        )) : <span>Choose words below to build the answer.</span>}
+        ))}
       </div>
-      <div className="token-bank" aria-label="Available words">
-        {available.map((option) => (
+      <div className="token-bank" ref={bankRef} aria-label="Available words">
+        {options.map((option) => value.includes(option.id) ? (
+          <span className="token-bank-placeholder" key={option.id} aria-hidden="true">
+            {renderText(option.label, false)}
+          </span>
+        ) : (
           <button
             type="button"
             key={option.id}
+            onPointerDown={(event) => startPointerDrag(event, option.id, option.label, "bank")}
+            onPointerMove={movePointerDrag}
+            onPointerUp={finishPointerDrag}
+            onPointerCancel={cancelPointerDrag}
             onClick={() => {
+              if (suppressClickRef.current === option.id) {
+                suppressClickRef.current = "";
+                return;
+              }
               onAnswerActivate?.(option.label);
               if (maxSelections !== undefined && value.length >= maxSelections) return;
               onChange([...value, option.id]);
+              announce(`${option.label} added at position ${value.length + 1}.`);
             }}
             disabled={disabled || (maxSelections !== undefined && value.length >= maxSelections)}
           >
-            <Plus size={13} aria-hidden="true" /> {renderText(option.label, Boolean(evaluated))}
+            {renderText(option.label, Boolean(evaluated))}
           </button>
         ))}
       </div>
@@ -218,6 +333,23 @@ export function OrderedAnswerComposer({
         <button className="question-reset-button" type="button" onClick={() => onChange([])} disabled={disabled}>
           <RotateCcw size={14} /> Reset answer
         </button>
+      ) : null}
+      <p className="sr-only" aria-live="polite">{announcement}</p>
+      {dragPreview ? createPortal(
+        <div
+          ref={dragPreviewRef}
+          className="answer-token-drag-preview"
+          hidden
+          aria-hidden="true"
+          style={{
+            width: dragPreview.width,
+            height: dragPreview.height,
+            transform: `translate3d(${dragPreview.x}px, ${dragPreview.y}px, 0)`,
+          }}
+        >
+          {renderText(dragPreview.label, false)}
+        </div>,
+        portalTarget,
       ) : null}
     </div>
   );
@@ -238,6 +370,7 @@ function AnswerBankResponse({
   bank,
   value,
   onChange,
+  inputMode,
   label,
   multiline,
   disabled,
@@ -248,6 +381,7 @@ function AnswerBankResponse({
   bank?: AnswerBank;
   value: string;
   onChange: (value: string) => void;
+  inputMode?: AnswerInputMode;
   label: string;
   multiline?: boolean;
   disabled?: boolean;
@@ -255,53 +389,48 @@ function AnswerBankResponse({
   onAnswerActivate?: (text: string) => void;
   renderText: TextRenderer;
 }) {
-  const [mode, setMode] = useState<"keyboard" | "bank">(() => bank?.defaultMode ?? "keyboard");
+  const mode = inputMode ?? bank?.defaultMode ?? "keyboard";
+  const [keyboardDraft, setKeyboardDraft] = useState(value);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [baseText, setBaseText] = useState("");
+  const previousModeRef = useRef(mode);
+  const bankDraft = bank ? composedBankText(bank, "", selectedIds) : "";
+
+  useEffect(() => {
+    if (!bank || previousModeRef.current === mode) return;
+    previousModeRef.current = mode;
+    onChange(mode === "keyboard" ? keyboardDraft : bankDraft);
+  }, [bank, bankDraft, keyboardDraft, mode, onChange]);
 
   if (!bank) return <TextResponse value={value} onChange={onChange} label={label} multiline={multiline} disabled={disabled} />;
 
-  function switchToBank() {
-    if (mode === "bank") return;
-    if (selectedIds.length && value === composedBankText(bank!, baseText, selectedIds)) {
-      setMode("bank");
-      return;
-    }
-    setBaseText(value);
-    setSelectedIds([]);
-    setMode("bank");
-  }
-
   function updateBank(ids: string[]) {
     setSelectedIds(ids);
-    onChange(composedBankText(bank!, baseText, ids));
+    onChange(composedBankText(bank!, "", ids));
   }
 
   return (
     <div className="answer-bank-response">
-      <div className="writing-mode-switch" role="group" aria-label={`${label} input mode`}>
-        <button type="button" className={mode === "keyboard" ? "is-active" : ""} aria-pressed={mode === "keyboard"} onClick={() => setMode("keyboard")} disabled={disabled}>
-          <Keyboard size={14} /> Keyboard
-        </button>
-        <button type="button" className={mode === "bank" ? "is-active" : ""} aria-pressed={mode === "bank"} onClick={switchToBank} disabled={disabled}>
-          <GripVertical size={14} /> Word bank
-        </button>
-      </div>
       {mode === "keyboard" ? (
-        <TextResponse value={value} onChange={onChange} label={label} multiline={multiline} disabled={disabled} />
+        <TextResponse
+          value={keyboardDraft}
+          onChange={(next) => {
+            setKeyboardDraft(next);
+            onChange(next);
+          }}
+          label={label}
+          multiline={multiline}
+          disabled={disabled}
+        />
       ) : (
-        <>
-          {baseText ? <p className="writing-bank-base"><span>Keyboard draft</span>{baseText}</p> : null}
-          <OrderedAnswerComposer
-            options={bank.tokens}
-            value={selectedIds}
-            onChange={updateBank}
-            onAnswerActivate={onAnswerActivate}
-            disabled={disabled}
-            evaluated={evaluated}
-            renderText={renderText}
-          />
-        </>
+        <OrderedAnswerComposer
+          options={bank.tokens}
+          value={selectedIds}
+          onChange={updateBank}
+          onAnswerActivate={onAnswerActivate}
+          disabled={disabled}
+          evaluated={evaluated}
+          renderText={renderText}
+        />
       )}
     </div>
   );
@@ -311,6 +440,7 @@ function MultiClozeResponse({
   question,
   answer,
   onChange,
+  inputMode,
   disabled,
   evaluated,
   onAnswerActivate,
@@ -319,6 +449,7 @@ function MultiClozeResponse({
   question: Extract<LessonQuestion, { type: "multiCloze" }>;
   answer: QuestionAnswer;
   onChange: (answer: QuestionAnswer) => void;
+  inputMode?: AnswerInputMode;
   disabled?: boolean;
   evaluated?: boolean;
   onAnswerActivate?: (text: string) => void;
@@ -326,8 +457,21 @@ function MultiClozeResponse({
 }) {
   const values = mapAnswer(answer);
   const bank = question.answerBank;
-  const [mode, setMode] = useState<"keyboard" | "bank">(() => bank?.defaultMode ?? "keyboard");
+  const mode = inputMode ?? bank?.defaultMode ?? "keyboard";
+  const [keyboardValues, setKeyboardValues] = useState(values);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const previousModeRef = useRef(mode);
+
+  useEffect(() => {
+    if (!bank || previousModeRef.current === mode) return;
+    previousModeRef.current = mode;
+    if (mode === "keyboard") {
+      onChange(keyboardValues);
+      return;
+    }
+    const labels = new Map(bank.tokens.map((token) => [token.id, token.label]));
+    onChange(Object.fromEntries(question.blanks.map((blank, index) => [blank.id, labels.get(selectedIds[index]) ?? ""])));
+  }, [bank, keyboardValues, mode, onChange, question.blanks, selectedIds]);
 
   function updateBank(ids: string[]) {
     if (!bank) return;
@@ -339,20 +483,18 @@ function MultiClozeResponse({
   return (
     <div className="multi-cloze-response">
       <p>{renderText(question.template)}</p>
-      {bank ? (
-        <div className="writing-mode-switch" role="group" aria-label="Blank input mode">
-          <button type="button" className={mode === "keyboard" ? "is-active" : ""} aria-pressed={mode === "keyboard"} onClick={() => setMode("keyboard")} disabled={disabled}><Keyboard size={14} /> Keyboard</button>
-          <button type="button" className={mode === "bank" ? "is-active" : ""} aria-pressed={mode === "bank"} onClick={() => setMode("bank")} disabled={disabled}><GripVertical size={14} /> Word bank</button>
-        </div>
-      ) : null}
       {mode === "keyboard" || !bank ? (
         <div className="cloze-input-grid">
           {question.blanks.map((blank, index) => (
             <TextResponse
               key={blank.id}
               label={`Blank ${index + 1}`}
-              value={values[blank.id] ?? ""}
-              onChange={(value) => onChange({ ...values, [blank.id]: value })}
+              value={keyboardValues[blank.id] ?? ""}
+              onChange={(value) => {
+                const next = { ...keyboardValues, [blank.id]: value };
+                setKeyboardValues(next);
+                onChange(next);
+              }}
               disabled={disabled}
             />
           ))}
@@ -465,7 +607,12 @@ export function PairMatchingResponse({
               disabled={disabled || locked}
             >
               <span className="pair-index">{index + 1}</span>
-              {audioLeft ? <><Volume2 size={19} /><span className="audio-waveform" aria-hidden="true" /></> : renderText(pair.leftText, Boolean(evaluated))}
+              {audioLeft ? (
+                <span className="pair-audio-content">
+                  <Volume2 size={19} />
+                  <AudioWaveform text={pair.leftText} />
+                </span>
+              ) : renderText(pair.leftText, Boolean(evaluated))}
             </button>
           );
         })}
@@ -497,6 +644,7 @@ function FreeWritingResponse({
   question,
   value,
   onChange,
+  inputMode,
   onAnswerActivate,
   disabled,
   evaluated,
@@ -505,23 +653,20 @@ function FreeWritingResponse({
   question: Extract<LessonQuestion, { type: "freeWriting" }>;
   value: string;
   onChange: (value: string) => void;
+  inputMode?: AnswerInputMode;
   onAnswerActivate?: (text: string) => void;
   disabled?: boolean;
   evaluated?: boolean;
   renderText: TextRenderer;
 }) {
-  const legacyBank = question.supportBank?.length ? {
-    tokens: question.supportBank,
-    separator: question.supportBankSeparator ?? "space",
-    defaultMode: "keyboard" as const,
-  } : undefined;
   const wordCount = value.trim() ? value.trim().split(/\s+/).length : 0;
   return (
     <div className="open-response free-writing-response">
       <AnswerBankResponse
-        bank={question.answerBank ?? legacyBank}
+        bank={answerBankForQuestion(question)}
         value={value}
         onChange={onChange}
+        inputMode={inputMode}
         label="Writing response"
         multiline
         disabled={disabled}
@@ -534,11 +679,33 @@ function FreeWritingResponse({
   );
 }
 
+function waveformBars(text: string, count = 18): number[] {
+  let hash = 2166136261;
+  for (const character of text) {
+    hash ^= character.codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 16777619);
+  }
+  return Array.from({ length: count }, (_, index) => {
+    hash ^= index + 1;
+    hash = Math.imul(hash, 16777619);
+    return 26 + (Math.abs(hash) % 75);
+  });
+}
+
+export function AudioWaveform({ text }: { text: string }) {
+  const bars = useMemo(() => waveformBars(text), [text]);
+  return (
+    <span className="audio-waveform" aria-hidden="true">
+      {bars.map((height, index) => <span style={{ height: `${height}%` }} key={`${index}-${height}`} />)}
+    </span>
+  );
+}
+
 function AudioPrompt({ text, onSpeak, label = "Play audio" }: { text: string; onSpeak?: (text: string) => void; label?: string }) {
   return (
     <button className="question-audio-prompt" type="button" onClick={() => onSpeak?.(text)} disabled={!onSpeak} aria-label={label}>
       <Headphones size={22} />
-      <span className="audio-waveform" aria-hidden="true" />
+      <AudioWaveform text={text} />
     </button>
   );
 }
@@ -564,6 +731,7 @@ export function QuestionRenderer({
   onSpeakingChange,
   onRequireAlternate,
   renderText,
+  answerInputMode,
 }: QuestionRendererProps) {
   const render = renderText ?? ((text: string) => text);
   const answerInteractive = Boolean(evaluated);
@@ -632,7 +800,7 @@ export function QuestionRenderer({
       return (
         <div className="blank-response">
           <p>{render(question.template)}</p>
-          <AnswerBankResponse bank={question.answerBank} value={stringAnswer(answer)} onChange={onChange} label="Missing word or phrase" disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} renderText={render} />
+          <AnswerBankResponse bank={question.answerBank} value={stringAnswer(answer)} onChange={onChange} inputMode={answerInputMode} label="Missing word or phrase" disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} renderText={render} />
         </div>
       );
     case "selectBlank": {
@@ -643,18 +811,28 @@ export function QuestionRenderer({
         <div className="select-blank-response">
           <p className="select-blank-sentence">
             <span>{render(before)}</span>
-            <span className={selectedOption ? "select-blank-slot is-filled" : "select-blank-slot"}>
-              {selectedOption ? render(selectedOption.label, answerInteractive) : "Choose"}
-            </span>
+            {selectedOption ? (
+              <button
+                type="button"
+                className="select-blank-slot is-filled"
+                aria-label={`Remove ${selectedOption.label} from the blank`}
+                onClick={() => onChange("")}
+                disabled={disabled}
+              >
+                {render(selectedOption.label, answerInteractive)}
+              </button>
+            ) : <span className="select-blank-slot" aria-label="Empty answer" />}
             <span>{render(after)}</span>
           </p>
           <div className="select-blank-options" role="group" aria-label="Blank choices">
-            {question.options.map((option) => (
+            {question.options.map((option) => selectedId === option.id ? (
+              <span className="select-blank-option-placeholder" key={option.id} aria-hidden="true">
+                {render(option.label, false)}
+              </span>
+            ) : (
               <button
                 key={option.id}
                 type="button"
-                className={selectedId === option.id ? "is-selected" : ""}
-                aria-pressed={selectedId === option.id}
                 onClick={() => {
                   onAnswerActivate?.(option.label);
                   onChange(option.id);
@@ -669,7 +847,7 @@ export function QuestionRenderer({
       );
     }
     case "multiCloze":
-      return <MultiClozeResponse question={question} answer={answer} onChange={onChange} disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} renderText={render} />;
+      return <MultiClozeResponse question={question} answer={answer} onChange={onChange} inputMode={answerInputMode} disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} renderText={render} />;
     case "wordBank":
     case "reorderTokens":
       return <OrderedAnswerComposer options={question.tokens} value={stringArrayAnswer(answer)} onChange={onChange} onAnswerActivate={onAnswerActivate} disabled={disabled} evaluated={evaluated} renderText={render} />;
@@ -723,14 +901,14 @@ export function QuestionRenderer({
       return (
         <div className="open-response">
           <blockquote>{render(question.sourceText)}</blockquote>
-          <AnswerBankResponse bank={question.answerBank} value={stringAnswer(answer)} onChange={onChange} label={`${question.targetLanguage} translation`} multiline disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} renderText={render} />
+          <AnswerBankResponse bank={question.answerBank} value={stringAnswer(answer)} onChange={onChange} inputMode={answerInputMode} label={`${question.targetLanguage} translation`} multiline disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} renderText={render} />
           <p className="rubric-copy">ChatGPT rubric: {question.rubric.join(" · ")}</p>
         </div>
       );
     case "shortAnswer":
       return (
         <div className="open-response">
-          <AnswerBankResponse bank={question.answerBank} value={stringAnswer(answer)} onChange={onChange} label="Answer" multiline disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} renderText={render} />
+          <AnswerBankResponse bank={question.answerBank} value={stringAnswer(answer)} onChange={onChange} inputMode={answerInputMode} label="Answer" multiline disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} renderText={render} />
           <p className="rubric-copy">Required ideas: {question.requiredIdeas.join(" · ")}</p>
         </div>
       );
@@ -738,7 +916,7 @@ export function QuestionRenderer({
       return (
         <div className="open-response">
           <blockquote className="incorrect-source">{render(question.incorrectText)}</blockquote>
-          <AnswerBankResponse bank={question.answerBank} value={stringAnswer(answer)} onChange={onChange} label="Corrected sentence" disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} renderText={render} />
+          <AnswerBankResponse bank={question.answerBank} value={stringAnswer(answer)} onChange={onChange} inputMode={answerInputMode} label="Corrected sentence" disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} renderText={render} />
         </div>
       );
     case "sentenceTransformation":
@@ -746,19 +924,19 @@ export function QuestionRenderer({
         <div className="open-response">
           <blockquote>{render(question.sourceText)}</blockquote>
           <p className="constraint-copy">Constraint: {render(question.constraint)}</p>
-          <AnswerBankResponse bank={question.answerBank} value={stringAnswer(answer)} onChange={onChange} label="New sentence" disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} renderText={render} />
+          <AnswerBankResponse bank={question.answerBank} value={stringAnswer(answer)} onChange={onChange} inputMode={answerInputMode} label="New sentence" disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} renderText={render} />
         </div>
       );
     case "dictation":
       return (
         <div className="open-response">
           <AudioPrompt text={question.transcript} onSpeak={onSpeakTarget} label="Play dictation audio" />
-          <AnswerBankResponse bank={question.answerBank} value={stringAnswer(answer)} onChange={onChange} label="What you heard" disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} renderText={render} />
+          <AnswerBankResponse bank={question.answerBank} value={stringAnswer(answer)} onChange={onChange} inputMode={answerInputMode} label="What you heard" disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} renderText={render} />
           <details className="transcript-fallback"><summary>Cannot hear it? Show the fallback transcript</summary><p>{render(question.transcript)}</p></details>
         </div>
       );
     case "freeWriting":
-      return <FreeWritingResponse question={question} value={stringAnswer(answer)} onChange={onChange} onAnswerActivate={onAnswerActivate} disabled={disabled} evaluated={evaluated} renderText={render} />;
+      return <FreeWritingResponse question={question} value={stringAnswer(answer)} onChange={onChange} inputMode={answerInputMode} onAnswerActivate={onAnswerActivate} disabled={disabled} evaluated={evaluated} renderText={render} />;
     case "speakingRepeat":
       return (
         <div className="speaking-response">

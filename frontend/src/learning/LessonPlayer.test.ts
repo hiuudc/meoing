@@ -356,9 +356,15 @@ describe("fullscreen lesson player", () => {
       setter?.call(voiceSelect, "voice-ja-2");
       voiceSelect.dispatchEvent(new Event("change", { bubbles: true }));
     });
+    expect(document.querySelector(".lesson-voice-status")?.textContent).toContain("Japanese Two");
 
     const speed = document.querySelector<HTMLInputElement>("#lesson-voice-speed")!;
     expect(speed.type).toBe("range");
+    expect(speed.min).toBe("0.25");
+    expect(speed.max).toBe("2");
+    expect(speed.step).toBe("0.05");
+    expect(Array.from(document.querySelectorAll<HTMLElement>(".lesson-speed-ticks > span")).map((tick) => tick.style.left))
+      .toEqual(["0%", "42.857%", "71.429%", "100%"]);
     await act(async () => {
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
       setter?.call(speed, "1.5");
@@ -367,10 +373,9 @@ describe("fullscreen lesson player", () => {
     });
     expect(document.querySelector(".lesson-speed-control output")?.textContent).toBe("1.5x");
 
-    await act(async () => button("Preview voice").click());
     expect(spokenUtterances[spokenUtterances.length - 1]).toMatchObject({
       text: "\u6c34",
-      rate: 1.5,
+      rate: 1,
       lang: "ja_JP",
       voice: expect.objectContaining({ voiceURI: "voice-ja-2" }),
     });
@@ -380,11 +385,14 @@ describe("fullscreen lesson player", () => {
     });
 
     await act(async () => button("Close lesson settings").click());
-    await act(async () => button("Question").click());
-    expect(spokenUtterances[spokenUtterances.length - 1]?.text).toBe("\u6c34");
-    expect(spokenUtterances[spokenUtterances.length - 1]?.text).not.toContain("Choose");
-    await act(async () => button("Answers").click());
-    expect(spokenUtterances[spokenUtterances.length - 1]?.text).toBe("\u6c34. \u304a\u8336");
+    expect(document.querySelector(".lesson-question-speakers")).toBeNull();
+    expect(document.querySelector('.lesson-target-text[lang="ja-JP"] ruby')?.childNodes[0]?.textContent).toBe("\u6c34");
+    await selectAnswer("water");
+    expect(spokenUtterances[spokenUtterances.length - 1]).toMatchObject({
+      text: "\u6c34",
+      rate: 1.5,
+      voice: expect.objectContaining({ voiceURI: "voice-ja-2" }),
+    });
   });
 
   it("auto-reads each new target-language question and interrupts speech for the next selected answer", async () => {
@@ -496,16 +504,24 @@ describe("fullscreen lesson player", () => {
       ],
       supportBankSeparator: "space",
     };
-    await renderPlayer({ lesson: lessonWithQuestions("writing-test", [writing]) });
+    await renderPlayer({ lesson: lessonWithQuestions("writing-test", [writing, { ...writing, id: "writing-two" }]) });
     await setTextValue(document.querySelector<HTMLTextAreaElement>(".free-writing-response textarea")!, "I");
-    await act(async () => button("Word bank").click());
+    await act(async () => button("Use word bank").click());
     await act(async () => button("usually").click());
     await act(async () => button("then").click());
     const thenChip = document.querySelector<HTMLButtonElement>('[data-answer-token-id="then"]')!;
-    await act(async () => thenChip.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })));
+    await act(async () => thenChip.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", altKey: true, bubbles: true })));
     await act(async () => document.querySelector<HTMLButtonElement>('[data-answer-token-id="usually"]')!.click());
-    await act(async () => button("Keyboard").click());
+    await act(async () => button("Use keyboard").click());
 
-    expect(document.querySelector<HTMLTextAreaElement>(".free-writing-response textarea")?.value).toBe("I then");
+    expect(document.querySelector<HTMLTextAreaElement>(".free-writing-response textarea")?.value).toBe("I");
+    await act(async () => button("Use word bank").click());
+    await act(async () => button("Skip").click());
+    expect(button("Use keyboard")).not.toBeNull();
+
+    await act(async () => root?.unmount());
+    root = null;
+    await renderPlayer({ lesson: lessonWithQuestions("writing-test-fresh", [writing]) });
+    expect(button("Use word bank")).not.toBeNull();
   });
 });

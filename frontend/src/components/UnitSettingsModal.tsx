@@ -1,6 +1,6 @@
 import { Eye, Plus, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import { QUESTION_FORMAT_DEFINITIONS, QUESTION_FORMAT_REGISTRY } from "../learning/questionRegistry";
+import { LESSON_QUESTION_FORMAT_DEFINITIONS, QUESTION_FORMAT_REGISTRY } from "../learning/questionRegistry";
 import {
   MAX_CUSTOM_QUESTION_TEMPLATES,
   defaultPresentationForFormat,
@@ -141,7 +141,7 @@ function BlueprintEditor({
               onChange({ ...template, baseFormat, presentation: defaultPresentationForFormat(baseFormat) });
             }}
           >
-            {QUESTION_FORMAT_DEFINITIONS.map((definition) => (
+            {LESSON_QUESTION_FORMAT_DEFINITIONS.map((definition) => (
               <option
                 key={definition.id}
                 value={definition.id}
@@ -319,7 +319,7 @@ export function UnitSettingsModal({ request, profile, onClose, onSave }: UnitSet
             <section id="unit-settings-questions-panel" role="tabpanel" aria-labelledby="unit-settings-questions-tab" className="unit-question-settings">
               <div className="question-settings-summary">
                 <div><span>Lesson size</span><strong>{profile.lessonQuestionCount} questions</strong></div>
-                <div><span>Enabled formats</span><strong>{getEffectiveUnitQuestionSettings(questionSettings, profile).enabledFormats.length}/{QUESTION_FORMAT_DEFINITIONS.length}</strong></div>
+                <div><span>Enabled formats</span><strong>{getEffectiveUnitQuestionSettings(questionSettings, profile).enabledFormats.length}/{LESSON_QUESTION_FORMAT_DEFINITIONS.length}</strong></div>
                 <div><span>Enabled blueprints</span><strong>{questionSettings.customTemplates.filter((template) => template.enabled).length}/{profile.lessonQuestionCount}</strong></div>
               </div>
 
@@ -330,7 +330,7 @@ export function UnitSettingsModal({ request, profile, onClose, onSave }: UnitSet
                 </div>
               </div>
               <div className="question-format-grid">
-                {QUESTION_FORMAT_DEFINITIONS.map((definition) => {
+                {LESSON_QUESTION_FORMAT_DEFINITIONS.map((definition) => {
                   const speakingUnavailable = !profile.speakingEnabled && definition.badge === "speaking";
                   const languageUnavailable = !supportsQuestionFormatForLanguage(definition.id, profile.targetLanguage);
                   const enabled = questionSettings.enabledFormats.includes(definition.id)
@@ -355,23 +355,6 @@ export function UnitSettingsModal({ request, profile, onClose, onSave }: UnitSet
                       <p>{definition.description}</p>
                       {speakingUnavailable ? <small>Collection speaking is disabled.</small> : null}
                       {languageUnavailable ? <small>Available only when learning Chinese, Japanese, or Korean.</small> : null}
-                      {definition.id === "characterTracing" ? (
-                        <label className="character-tracing-order-toggle">
-                          <input
-                            type="checkbox"
-                            checked={questionSettings.characterTracing.requireStrokeOrder}
-                            disabled={!enabled}
-                            onChange={(event) => {
-                              setQuestionsDirty(true);
-                              setQuestionSettings((current) => ({
-                                ...current,
-                                characterTracing: { requireStrokeOrder: event.target.checked },
-                              }));
-                            }}
-                          />
-                          <span>Require stroke order</span>
-                        </label>
-                      ) : null}
                       <PresentationToggles
                         value={formatPresentation}
                         disabled={!enabled}

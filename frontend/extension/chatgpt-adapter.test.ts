@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createLocalPreviewLesson } from "../src/learning/demoLesson";
 import { DEFAULT_LEARNING_PROFILE } from "../src/learning/profile";
-import { QUESTION_FORMATS, type LessonQuestion } from "../src/learning/types";
+import { LESSON_QUESTION_FORMATS, type LessonQuestion } from "../src/learning/types";
 import type { ChatOperationKind, OperationExpectation } from "../src/integration/protocol";
 import {
   CHAT_RESULT_MAX_BYTES,
@@ -27,7 +27,7 @@ const expectation: OperationExpectation = {
   level: "elementary",
   questionCount: 15,
   speaking: true,
-  allowedFormats: [...QUESTION_FORMATS],
+  allowedFormats: [...LESSON_QUESTION_FORMATS],
   requiredTemplates: [],
 };
 
@@ -195,7 +195,7 @@ describe("strict ChatGPT result parsing", () => {
 
     const disabledFormatExpectation = {
       ...expectation,
-      allowedFormats: QUESTION_FORMATS.filter((format) => format !== "singleChoice"),
+      allowedFormats: LESSON_QUESTION_FORMATS.filter((format) => format !== "singleChoice"),
     };
     expect(parse(valid, "op-1", "create_lesson", disabledFormatExpectation)).toMatchObject({ ok: false, code: "INVALID_RESULT_SCHEMA" });
 
@@ -251,7 +251,7 @@ describe("strict ChatGPT result parsing", () => {
     });
     const disabledAlternateExpectation: OperationExpectation = {
       ...expectation,
-      allowedFormats: QUESTION_FORMATS.filter((format) => format !== "fillBlank"),
+      allowedFormats: LESSON_QUESTION_FORMATS.filter((format) => format !== "fillBlank"),
     };
     expect(parse(envelope(lesson), "op-1", "create_lesson", disabledAlternateExpectation))
       .toMatchObject({ ok: false, code: "INVALID_RESULT_SCHEMA" });

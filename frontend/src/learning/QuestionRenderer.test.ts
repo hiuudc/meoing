@@ -3,7 +3,7 @@ import { act, createElement, useState, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GlossaryText } from "./GlossaryText";
-import { QuestionRenderer } from "./QuestionRenderer";
+import { AudioWaveform, QuestionRenderer, type AnswerInputMode } from "./QuestionRenderer";
 import type { LessonQuestion, QuestionAnswer } from "./types";
 
 let root: Root | null = null;
@@ -15,7 +15,15 @@ function button(label: string): HTMLButtonElement {
   return match;
 }
 
-function Harness({ question, evaluated = false }: { question: LessonQuestion; evaluated?: boolean }) {
+function Harness({
+  question,
+  evaluated = false,
+  inputMode,
+}: {
+  question: LessonQuestion;
+  evaluated?: boolean;
+  inputMode?: AnswerInputMode;
+}) {
   const [answer, setAnswer] = useState<QuestionAnswer>("");
   return createElement(
     "div",
@@ -25,6 +33,7 @@ function Harness({ question, evaluated = false }: { question: LessonQuestion; ev
       answer,
       language: "English",
       evaluated,
+      answerInputMode: inputMode,
       onChange: setAnswer,
       renderText: (text, interactive) => createElement("span", { "data-answer-interactive": String(Boolean(interactive)) }, text),
     }),
@@ -97,8 +106,7 @@ describe("QuestionRenderer interactions", () => {
         defaultMode: "keyboard",
       },
     };
-    await render(createElement(Harness, { question }));
-    await act(async () => button("Word bank").click());
+    await render(createElement(Harness, { question, inputMode: "bank" }));
     const bankButtons = document.querySelectorAll<HTMLButtonElement>(".token-bank button");
     await act(async () => bankButtons[0].click());
     await act(async () => bankButtons[1].click());
@@ -106,16 +114,13 @@ describe("QuestionRenderer interactions", () => {
     expect(document.querySelector("#answer-value")?.textContent).toBe('"same same"');
 
     const second = document.querySelector<HTMLButtonElement>('[data-answer-token-id="same-two"]')!;
-    await act(async () => second.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })));
+    await act(async () => second.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", altKey: true, bubbles: true })));
     expect(Array.from(document.querySelectorAll<HTMLElement>("[data-answer-token-id]")).map((element) => element.dataset.answerTokenId))
       .toEqual(["same-two", "same-one"]);
 
-    await act(async () => button("Keyboard").click());
-    await act(async () => button("Word bank").click());
-    expect(Array.from(document.querySelectorAll<HTMLElement>("[data-answer-token-id]")).map((element) => element.dataset.answerTokenId))
-      .toEqual(["same-two", "same-one"]);
     await act(async () => button("end").click());
     expect(document.querySelector("#answer-value")?.textContent).toBe('"same same end"');
+    expect(document.querySelectorAll(".token-bank-placeholder")).toHaveLength(3);
   });
 
   it("marks answer text interactive only after evaluation", async () => {
@@ -132,6 +137,47 @@ describe("QuestionRenderer interactions", () => {
     expect(Array.from(document.querySelectorAll("[data-answer-interactive]")).every((node) => node.getAttribute("data-answer-interactive") === "false")).toBe(true);
     await act(async () => root!.render(createElement(Harness, { question, evaluated: true })));
     expect(Array.from(document.querySelectorAll("[data-answer-interactive]")).every((node) => node.getAttribute("data-answer-interactive") === "true")).toBe(true);
+  });
+
+  it("moves a Select Blank option into an inline slot and leaves a bank placeholder", async () => {
+    const question: LessonQuestion = {
+      id: "select-blank",
+      type: "selectBlank",
+      prompt: "Choose the missing word",
+      explanation: "Water is the object.",
+      evaluationMode: "local",
+      template: "私は{{blank}}を飲みます。",
+      options: [
+        { id: "water", label: "水" },
+        { id: "tea", label: "お茶" },
+      ],
+      correctOptionId: "water",
+    };
+    await render(createElement(Harness, { question }));
+    expect(document.querySelector(".select-blank-response")?.textContent).not.toContain("Choose");
+
+    await act(async () => button("水").click());
+    expect(document.querySelector(".select-blank-slot.is-filled")?.textContent).toContain("水");
+    expect(document.querySelectorAll(".select-blank-option-placeholder")).toHaveLength(1);
+    expect(document.querySelector("#answer-value")?.textContent).toBe('"water"');
+
+    await act(async () => document.querySelector<HTMLButtonElement>(".select-blank-slot.is-filled")!.click());
+    expect(document.querySelector(".select-blank-slot.is-filled")).toBeNull();
+    expect(document.querySelectorAll(".select-blank-options button")).toHaveLength(2);
+    expect(document.querySelector("#answer-value")?.textContent).toBe('""');
+  });
+
+  it("renders stable but content-specific audio waveforms", async () => {
+    await render(createElement("div", null,
+      createElement(AudioWaveform, { text: "水" }),
+      createElement(AudioWaveform, { text: "お茶" }),
+      createElement(AudioWaveform, { text: "水" }),
+    ));
+    const waves = Array.from(document.querySelectorAll(".audio-waveform")).map((wave) => (
+      Array.from(wave.children).map((bar) => (bar as HTMLElement).style.height)
+    ));
+    expect(waves[0]).toEqual(waves[2]);
+    expect(waves[0]).not.toEqual(waves[1]);
   });
 
   it("does not open a glossary tooltip for a locked answer", async () => {

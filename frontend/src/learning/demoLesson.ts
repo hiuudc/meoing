@@ -21,6 +21,7 @@ interface DemoLanguageContent {
   drinkTea: string;
   askWater: string;
   tokens: [string, string, string];
+  tokenConcepts: ["subject" | "drink" | "water", "subject" | "drink" | "water", "subject" | "drink" | "water"];
   separator: "space" | "none";
   pronunciation?: Partial<Record<keyof DemoLanguageContent, { native?: string; romanized?: string }>>;
 }
@@ -53,6 +54,7 @@ const TARGET_CONTENT: Record<SupportedLanguage, DemoLanguageContent> = {
     drinkTea: "I drink tea.",
     askWater: "Do you drink water?",
     tokens: ["I", "drink", "water"],
+    tokenConcepts: ["subject", "drink", "water"],
     separator: "space",
   },
   Vietnamese: {
@@ -68,6 +70,7 @@ const TARGET_CONTENT: Record<SupportedLanguage, DemoLanguageContent> = {
     drinkTea: "Tôi uống trà.",
     askWater: "Bạn có uống nước không?",
     tokens: ["Tôi", "uống", "nước"],
+    tokenConcepts: ["subject", "drink", "water"],
     separator: "space",
   },
   Japanese: {
@@ -83,6 +86,7 @@ const TARGET_CONTENT: Record<SupportedLanguage, DemoLanguageContent> = {
     drinkTea: "私はお茶を飲みます。",
     askWater: "水を飲みますか。",
     tokens: ["私は", "水を", "飲みます"],
+    tokenConcepts: ["subject", "water", "drink"],
     separator: "none",
     pronunciation: {
       nativeName: { native: "にほんご", romanized: "nihongo" },
@@ -111,6 +115,7 @@ const TARGET_CONTENT: Record<SupportedLanguage, DemoLanguageContent> = {
     drinkTea: "Yo bebo té.",
     askWater: "¿Bebes agua?",
     tokens: ["Yo", "bebo", "agua"],
+    tokenConcepts: ["subject", "drink", "water"],
     separator: "space",
   },
   Chinese: {
@@ -126,6 +131,7 @@ const TARGET_CONTENT: Record<SupportedLanguage, DemoLanguageContent> = {
     drinkTea: "我喝茶。",
     askWater: "你喝水吗？",
     tokens: ["我", "喝", "水"],
+    tokenConcepts: ["subject", "drink", "water"],
     separator: "none",
     pronunciation: {
       nativeName: { native: "zhōng wén", romanized: "zhong wen" },
@@ -154,6 +160,7 @@ const TARGET_CONTENT: Record<SupportedLanguage, DemoLanguageContent> = {
     drinkTea: "저는 차를 마셔요.",
     askWater: "물을 마셔요?",
     tokens: ["저는", "물을", "마셔요"],
+    tokenConcepts: ["subject", "water", "drink"],
     separator: "space",
     pronunciation: {
       nativeName: { native: "한국어", romanized: "hangugeo" },
@@ -182,6 +189,7 @@ const TARGET_CONTENT: Record<SupportedLanguage, DemoLanguageContent> = {
     drinkTea: "Je bois du thé.",
     askWater: "Tu bois de l'eau ?",
     tokens: ["Je", "bois", "de l'eau"],
+    tokenConcepts: ["subject", "drink", "water"],
     separator: "space",
   },
   German: {
@@ -197,6 +205,7 @@ const TARGET_CONTENT: Record<SupportedLanguage, DemoLanguageContent> = {
     drinkTea: "Ich trinke Tee.",
     askWater: "Trinkst du Wasser?",
     tokens: ["Ich", "trinke", "Wasser"],
+    tokenConcepts: ["subject", "drink", "water"],
     separator: "space",
   },
 };
@@ -224,7 +233,7 @@ function prompts(values: string[]): Record<QuestionFormat, string> {
 const SOURCE_COPY: Record<SupportedLanguage, DemoSourceCopy> = {
   English: {
     title: "Language-pair player demo",
-    summary: "A complete 24-format lesson preview using the selected spoken and learning languages.",
+    summary: "A complete 23-format lesson preview using the selected spoken and learning languages.",
     objective: "Recognize and produce a short everyday exchange.",
     theoryTitle: "Everyday communication",
     theoryBody: "Notice the target-language phrase, its meaning, and its natural word order.",
@@ -247,7 +256,7 @@ const SOURCE_COPY: Record<SupportedLanguage, DemoSourceCopy> = {
   },
   Vietnamese: {
     title: "Bài học mẫu theo cặp ngôn ngữ",
-    summary: "Bài học xem trước đủ 24 dạng câu hỏi bằng ngôn ngữ bạn nói và ngôn ngữ đang học.",
+    summary: "Bài học xem trước đủ 23 dạng câu hỏi bằng ngôn ngữ bạn nói và ngôn ngữ đang học.",
     objective: "Nhận biết và sử dụng một đoạn giao tiếp ngắn hằng ngày.",
     theoryTitle: "Giao tiếp hằng ngày",
     theoryBody: "Quan sát câu ở ngôn ngữ đích, ý nghĩa và trật tự từ tự nhiên của câu.",
@@ -270,7 +279,7 @@ const SOURCE_COPY: Record<SupportedLanguage, DemoSourceCopy> = {
   },
   Japanese: {
     title: "言語ペアのレッスンデモ",
-    summary: "話す言語と学習言語を使った24形式のプレビューレッスンです。",
+    summary: "話す言語と学習言語を使った23形式のプレビューレッスンです。",
     objective: "短い日常会話を理解して使います。",
     theoryTitle: "日常会話",
     theoryBody: "学習言語の表現、意味、自然な語順を確認しましょう。",
@@ -293,7 +302,7 @@ const SOURCE_COPY: Record<SupportedLanguage, DemoSourceCopy> = {
   },
   Spanish: {
     title: "Demostración de la pareja de idiomas",
-    summary: "Una lección de prueba con los 24 formatos y los idiomas seleccionados.",
+    summary: "Una lección de prueba con los 23 formatos y los idiomas seleccionados.",
     objective: "Reconocer y producir un intercambio cotidiano breve.",
     theoryTitle: "Comunicación cotidiana",
     theoryBody: "Observa la frase del idioma meta, su significado y su orden natural.",
@@ -315,7 +324,7 @@ const SOURCE_COPY: Record<SupportedLanguage, DemoSourceCopy> = {
   },
   Chinese: {
     title: "语言组合课程预览",
-    summary: "使用所选母语和学习语言的二十四种题型预览。",
+    summary: "使用所选母语和学习语言的二十三种题型预览。",
     objective: "理解并使用简短的日常交流。",
     theoryTitle: "日常交流",
     theoryBody: "观察目标语言句子的含义和自然语序。",
@@ -336,7 +345,7 @@ const SOURCE_COPY: Record<SupportedLanguage, DemoSourceCopy> = {
   },
   Korean: {
     title: "언어 쌍 수업 미리보기",
-    summary: "선택한 모국어와 학습 언어를 사용하는 24개 문제 형식의 수업입니다.",
+    summary: "선택한 모국어와 학습 언어를 사용하는 23개 문제 형식의 수업입니다.",
     objective: "짧은 일상 대화를 이해하고 사용합니다.",
     theoryTitle: "일상 의사소통",
     theoryBody: "학습 언어 문장의 뜻과 자연스러운 어순을 확인하세요.",
@@ -358,7 +367,7 @@ const SOURCE_COPY: Record<SupportedLanguage, DemoSourceCopy> = {
   },
   French: {
     title: "Démo de la paire de langues",
-    summary: "Une leçon complète de 24 formats avec les langues sélectionnées.",
+    summary: "Une leçon complète de 23 formats avec les langues sélectionnées.",
     objective: "Reconnaître et produire un bref échange quotidien.",
     theoryTitle: "Communication quotidienne",
     theoryBody: "Observez la phrase cible, son sens et l'ordre naturel des mots.",
@@ -381,7 +390,7 @@ const SOURCE_COPY: Record<SupportedLanguage, DemoSourceCopy> = {
   },
   German: {
     title: "Vorschau für das Sprachenpaar",
-    summary: "Eine vollständige Vorschau mit 24 Aufgabenformaten und den gewählten Sprachen.",
+    summary: "Eine vollständige Vorschau mit 23 Aufgabenformaten und den gewählten Sprachen.",
     objective: "Einen kurzen Alltagsdialog verstehen und verwenden.",
     theoryTitle: "Alltagskommunikation",
     theoryBody: "Beachte den Zielsatz, seine Bedeutung und die natürliche Wortstellung.",
@@ -420,6 +429,9 @@ function uniqueGlossary(target: DemoLanguageContent, source: DemoLanguageContent
     "teacher", "drinkWater", "drinkTea", "askWater",
   ];
   const seen = new Set<string>();
+  const sourceTokensByConcept = new Map(
+    source.tokenConcepts.map((concept, index) => [concept, source.tokens[index]]),
+  );
   const entries = keys.flatMap((key): GlossaryEntry[] => {
     const term = target[key];
     if (typeof term !== "string" || seen.has(term)) return [];
@@ -435,7 +447,10 @@ function uniqueGlossary(target: DemoLanguageContent, source: DemoLanguageContent
   target.tokens.forEach((term, index) => {
     if (seen.has(term)) return;
     seen.add(term);
-    entries.push({ term, meaning: source.tokens[index] ?? term });
+    entries.push({
+      term,
+      meaning: sourceTokensByConcept.get(target.tokenConcepts[index]) ?? term,
+    });
   });
   return entries;
 }
@@ -741,19 +756,6 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
       match: { ignorePunctuation: true },
       glossaryTargets: [],
     }, 23),
-    question({
-      type: "characterTracing",
-      evaluationMode: "local",
-      prompt: copy.prompts.characterTracing,
-      character: target.water,
-      meaning: source.water,
-      reading: target.pronunciation?.water?.romanized ?? target.pronunciation?.water?.native,
-      requireStrokeOrder: true,
-      unavailableReason: ["Chinese", "Japanese", "Korean"].includes(profile.targetLanguage)
-        ? undefined
-        : `Character tracing is not available for ${profile.targetLanguage}.`,
-      glossaryTargets: [target.water],
-    }, 24),
   ];
 
   const questionAlternates = questions.map((primary, index) => {

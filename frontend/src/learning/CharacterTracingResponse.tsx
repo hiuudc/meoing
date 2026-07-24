@@ -11,6 +11,7 @@ interface CharacterTracingResponseProps {
   disabled?: boolean;
   onChange: (answer: QuestionAnswer) => void;
   onUnavailable?: () => void;
+  onStart?: () => void;
 }
 
 interface DrawnStroke {
@@ -43,10 +44,12 @@ function FreeShapeCanvas({
   data,
   disabled,
   onComplete,
+  onStart,
 }: {
   data: CharacterJson;
   disabled?: boolean;
   onComplete: () => void;
+  onStart?: () => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [strokes, setStrokes] = useState<DrawnStroke[]>([]);
@@ -114,6 +117,7 @@ function FreeShapeCanvas({
           aria-label="Trace the character"
           onPointerDown={(event) => {
             if (disabled) return;
+            onStart?.();
             event.currentTarget.setPointerCapture(event.pointerId);
             const next = { points: [canvasPoint(event)] };
             setDrawing(next);
@@ -151,6 +155,7 @@ export function CharacterTracingResponse({
   disabled,
   onChange,
   onUnavailable,
+  onStart,
 }: CharacterTracingResponseProps) {
   const targetRef = useRef<HTMLDivElement>(null);
   const writerRef = useRef<import("hanzi-writer").default | null>(null);
@@ -235,12 +240,36 @@ export function CharacterTracingResponse({
       ) : null}
       {status === "ready" && data && question.requireStrokeOrder ? (
         <>
-          <div className="hanzi-writer-target" ref={targetRef} />
-          <p className="tracing-instruction">{completed ? "Tracing complete." : "Follow the stroke order. A hint appears after two misses."}</p>
+          <div className="hanzi-writer-target" ref={targetRef} onPointerDown={onStart} />
+          <div className="tracing-instruction">
+            <p>{completed ? "Tracing complete." : "Follow the stroke order. A hint appears after two misses."}</p>
+            <button
+              type="button"
+              className="icon-text-button"
+              onClick={() => {
+                const writer = writerRef.current;
+                if (!writer) return;
+                writer.cancelQuiz();
+                void writer.animateCharacter({
+                  onComplete: () => {
+                    if (disabled || completed) return;
+                    void writer.quiz({
+                      showHintAfterMisses: 2,
+                      highlightOnComplete: true,
+                      onComplete: () => onChange("passed"),
+                    });
+                  },
+                });
+              }}
+              disabled={disabled}
+            >
+              <Play size={15} /> Animate strokes
+            </button>
+          </div>
         </>
       ) : null}
       {status === "ready" && data && !question.requireStrokeOrder ? (
-        <FreeShapeCanvas data={data} disabled={disabled || completed} onComplete={() => onChange("passed")} />
+        <FreeShapeCanvas data={data} disabled={disabled || completed} onStart={onStart} onComplete={() => onChange("passed")} />
       ) : null}
     </section>
   );

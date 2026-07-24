@@ -1,3 +1,4 @@
+import { LESSON_QUESTION_FORMATS } from "./types";
 import type { AnswerBank, LessonQuestion, QuestionFormat, QuestionPresentationSettings } from "./types";
 
 export type QuestionFormatBadge = "local" | "ai" | "speaking";
@@ -462,6 +463,9 @@ export const QUESTION_FORMAT_REGISTRY = {
 } satisfies Record<QuestionFormat, QuestionFormatDefinition>;
 
 export const QUESTION_FORMAT_DEFINITIONS = Object.values(QUESTION_FORMAT_REGISTRY);
+export const LESSON_QUESTION_FORMAT_DEFINITIONS = LESSON_QUESTION_FORMATS.map(
+  (format) => QUESTION_FORMAT_REGISTRY[format],
+);
 
 export function getQuestionFormatDefinition(format: QuestionFormat): QuestionFormatDefinition {
   return QUESTION_FORMAT_REGISTRY[format];

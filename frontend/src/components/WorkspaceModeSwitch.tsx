@@ -1,6 +1,6 @@
-import { BookOpenText, GraduationCap } from "lucide-react";
+import { BookOpenText, GraduationCap, Languages } from "lucide-react";
 
-export type WorkspaceMode = "library" | "learn";
+export type WorkspaceMode = "library" | "learn" | "letters";
 
 interface WorkspaceModeSwitchProps {
   mode: WorkspaceMode;
@@ -15,6 +15,9 @@ export function WorkspaceModeSwitch({ mode, onChange }: WorkspaceModeSwitchProps
       </button>
       <button type="button" role="tab" aria-selected={mode === "learn"} className={mode === "learn" ? "is-active" : ""} onClick={() => onChange("learn")}>
         <GraduationCap size={15} /> Learn
+      </button>
+      <button type="button" role="tab" aria-selected={mode === "letters"} className={mode === "letters" ? "is-active" : ""} onClick={() => onChange("letters")}>
+        <Languages size={15} /> Letters
       </button>
     </div>
   );

@@ -28,6 +28,10 @@ export const QUESTION_FORMATS = [
 ] as const;
 
 export type QuestionFormat = (typeof QUESTION_FORMATS)[number];
+export type LessonQuestionFormat = Exclude<QuestionFormat, "characterTracing">;
+export const LESSON_QUESTION_FORMATS = QUESTION_FORMATS.filter(
+  (format): format is LessonQuestionFormat => format !== "characterTracing",
+);
 export type EvaluationStatus = "correct" | "partial" | "incorrect";
 export type EvaluationMode = "local" | "ai";
 

@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { ExtensionBridge } from "./extensionBridge";
 import type { ChatOperationState, ExtensionCommand, SendOperationPayload } from "./protocol";
-import { QUESTION_FORMATS } from "../learning/types";
+import { LESSON_QUESTION_FORMATS } from "../learning/types";
 
 function state(phase: ChatOperationState["phase"], patch: Partial<ChatOperationState> = {}): ChatOperationState {
   return {
@@ -50,7 +50,7 @@ const payload: SendOperationPayload = {
     level: "elementary",
     questionCount: 10,
     speaking: false,
-    allowedFormats: QUESTION_FORMATS.filter((format) => format !== "speakingRepeat" && format !== "speakingRoleplay"),
+    allowedFormats: LESSON_QUESTION_FORMATS.filter((format) => format !== "speakingRepeat" && format !== "speakingRoleplay"),
     requiredTemplates: [],
   },
 };

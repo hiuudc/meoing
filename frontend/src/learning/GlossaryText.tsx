@@ -10,6 +10,8 @@ interface GlossaryTextProps {
   showPronunciation?: boolean;
   pronunciationMode?: "romanized" | "native";
   interactive?: boolean;
+  termClassName?: string;
+  termLang?: string;
 }
 
 interface OpenGlossary {
@@ -27,6 +29,8 @@ export function GlossaryText({
   showPronunciation = false,
   pronunciationMode = "romanized",
   interactive = true,
+  termClassName,
+  termLang,
 }: GlossaryTextProps) {
   const segments = segmentGlossaryText(text, glossary);
   const [openGlossary, setOpenGlossary] = useState<OpenGlossary | null>(null);
@@ -99,7 +103,11 @@ export function GlossaryText({
       {segments.map((segment, index) => segment.entry ? (
         <span
           key={`${index}-${segment.text}`}
-          className={tooltipsEnabled && interactive ? "glossary-term" : "glossary-pronunciation"}
+          className={[
+            tooltipsEnabled && interactive ? "glossary-term" : "glossary-pronunciation",
+            termClassName,
+          ].filter(Boolean).join(" ")}
+          lang={termLang}
           role={tooltipsEnabled && interactive ? "button" : undefined}
           tabIndex={tooltipsEnabled && interactive ? 0 : undefined}
           aria-describedby={tooltipsEnabled && interactive && openGlossary?.index === index ? tooltipId : undefined}

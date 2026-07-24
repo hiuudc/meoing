@@ -1,5 +1,6 @@
 import { QUESTION_FORMAT_REGISTRY } from "./questionRegistry";
 import {
+  LESSON_QUESTION_FORMATS,
   QUESTION_FORMATS,
   type CustomQuestionTemplate,
   type LearningProfile,
@@ -30,6 +31,7 @@ export const WRITTEN_ANSWER_FORMATS = [
 ] as const satisfies readonly QuestionFormat[];
 
 const formatSet = new Set<string>(QUESTION_FORMATS);
+const lessonFormatSet = new Set<string>(LESSON_QUESTION_FORMATS);
 const listeningFormatSet = new Set<QuestionFormat>(LISTENING_QUESTION_FORMATS);
 const writtenAnswerFormatSet = new Set<QuestionFormat>(WRITTEN_ANSWER_FORMATS);
 
@@ -39,6 +41,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function isQuestionFormat(value: unknown): value is QuestionFormat {
   return typeof value === "string" && formatSet.has(value);
+}
+
+export function isLessonQuestionFormat(value: unknown): value is Exclude<QuestionFormat, "characterTracing"> {
+  return typeof value === "string" && lessonFormatSet.has(value);
 }
 
 export function isSpeakingQuestionFormat(format: QuestionFormat): boolean {
@@ -93,7 +99,7 @@ function normalizeTemplate(value: unknown, index: number, usedIds: Set<string>):
   }
   usedIds.add(id);
 
-  const baseFormat = isQuestionFormat(value.baseFormat) ? value.baseFormat : "singleChoice";
+  const baseFormat = isLessonQuestionFormat(value.baseFormat) ? value.baseFormat : "singleChoice";
   const name = typeof value.name === "string" ? value.name.trim().slice(0, MAX_CUSTOM_TEMPLATE_NAME_LENGTH) : "";
   const guidance = typeof value.guidance === "string"
     ? value.guidance.trim().slice(0, MAX_CUSTOM_TEMPLATE_GUIDANCE_LENGTH)
@@ -112,7 +118,7 @@ function normalizeTemplate(value: unknown, index: number, usedIds: Set<string>):
 export function normalizeUnitQuestionSettings(value: unknown): UnitQuestionSettings {
   const source = isRecord(value) ? value : {};
   const rawFormats = Array.isArray(source.enabledFormats) ? source.enabledFormats : [];
-  const enabledFormats = [...new Set(rawFormats.filter(isQuestionFormat))];
+  const enabledFormats = [...new Set(rawFormats.filter(isLessonQuestionFormat))];
   const formatPresentationSource = isRecord(source.formatPresentation) ? source.formatPresentation : {};
   const formatPresentation: UnitQuestionSettings["formatPresentation"] = {};
 
@@ -130,7 +136,7 @@ export function normalizeUnitQuestionSettings(value: unknown): UnitQuestionSetti
     .filter((template): template is CustomQuestionTemplate => template !== null);
 
   return {
-    enabledFormats: enabledFormats.length ? enabledFormats : [...QUESTION_FORMATS],
+    enabledFormats: enabledFormats.length ? enabledFormats : [...LESSON_QUESTION_FORMATS],
     formatPresentation,
     customTemplates,
     characterTracing: {
@@ -154,12 +160,13 @@ export function getEffectiveUnitQuestionSettings(
       "audioMatching" as const,
       "soundDiscrimination" as const,
       "flashcardRecall" as const,
-      "characterTracing" as const,
     ])],
   });
   const speakingAllowed = profile.speakingEnabled;
   return {
     enabledFormats: normalized.enabledFormats.filter((format) => (
+      isLessonQuestionFormat(format)
+      &&
       (speakingAllowed || !isSpeakingQuestionFormat(format))
       && supportsQuestionFormatForLanguage(format, profile.targetLanguage)
     )),
@@ -168,6 +175,7 @@ export function getEffectiveUnitQuestionSettings(
       ...template,
       presentation: { ...template.presentation },
       enabled: template.enabled
+        && isLessonQuestionFormat(template.baseFormat)
         && (speakingAllowed || !isSpeakingQuestionFormat(template.baseFormat))
         && supportsQuestionFormatForLanguage(template.baseFormat, profile.targetLanguage),
     })),

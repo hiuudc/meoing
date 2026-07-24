@@ -7,7 +7,7 @@ function shardKey(character) {
   return codePoint === undefined ? "0" : Math.floor(codePoint / 256).toString(16);
 }
 
-async function buildLanguageShards(source) {
+async function buildLanguageData(source) {
   const files = (await readdir(source.directory, { withFileTypes: true }))
     .filter((entry) => {
       if (!entry.isFile() || !entry.name.endsWith(".json")) return false;
@@ -26,9 +26,12 @@ async function buildLanguageShards(source) {
     entriesByShard.set(key, entries);
   }
 
-  return new Map(
-    [...entriesByShard.entries()].map(([key, entries]) => [key, `{${entries.join(",")}}`]),
-  );
+  return {
+    characters: files.map((file) => basename(file, ".json")),
+    shards: new Map(
+      [...entriesByShard.entries()].map(([key, entries]) => [key, `{${entries.join(",")}}`]),
+    ),
+  };
 }
 
 async function filesIn(directory, prefix = "") {
@@ -54,13 +57,13 @@ export function strokeDataPlugin() {
       directory: resolve(projectRoot, "node_modules", "@k1low", "hanzi-writer-data-jp"),
     },
   ];
-  const shardPromises = new Map();
+  const dataPromises = new Map();
 
-  function shardsFor(source) {
-    const existing = shardPromises.get(source.language);
+  function dataFor(source) {
+    const existing = dataPromises.get(source.language);
     if (existing) return existing;
-    const next = buildLanguageShards(source);
-    shardPromises.set(source.language, next);
+    const next = buildLanguageData(source);
+    dataPromises.set(source.language, next);
     return next;
   }
 
@@ -68,13 +71,22 @@ export function strokeDataPlugin() {
     name: "meoi-local-stroke-data",
     configureServer(server) {
       server.middlewares.use(async (request, response, next) => {
+        if (request.url?.match(/^\/stroke-data\/catalog\.json(?:\?.*)?$/i)) {
+          const catalog = Object.fromEntries(await Promise.all(
+            sources.map(async (source) => [source.language, (await dataFor(source)).characters]),
+          ));
+          response.setHeader("Content-Type", "application/json; charset=utf-8");
+          response.setHeader("Cache-Control", "no-cache");
+          response.end(JSON.stringify(catalog));
+          return;
+        }
         const match = request.url?.match(/^\/stroke-data\/(zh|ja)\/([0-9a-f]+)\.json(?:\?.*)?$/i);
         if (!match) {
           next();
           return;
         }
         const source = sources.find((candidate) => candidate.language === match[1]);
-        const shard = source ? (await shardsFor(source)).get(match[2].toLocaleLowerCase()) : undefined;
+        const shard = source ? (await dataFor(source)).shards.get(match[2].toLocaleLowerCase()) : undefined;
         if (!shard) {
           response.statusCode = 404;
           response.end("Stroke data not found.");
@@ -83,11 +95,17 @@ export function strokeDataPlugin() {
         response.setHeader("Content-Type", "application/json; charset=utf-8");
         response.setHeader("Cache-Control", "public, max-age=31536000, immutable");
         response.end(shard);
-      });
+    })
+    .sort((left, right) => (
+      (basename(left.name, ".json").codePointAt(0) ?? 0)
+      - (basename(right.name, ".json").codePointAt(0) ?? 0)
+    ));
     },
     async generateBundle() {
+      const catalog = {};
       for (const source of sources) {
-        const shards = await shardsFor(source);
+        const { characters, shards } = await dataFor(source);
+        catalog[source.language] = characters;
         for (const [key, contents] of shards) {
           this.emitFile({
             type: "asset",
@@ -96,6 +114,11 @@ export function strokeDataPlugin() {
           });
         }
       }
+      this.emitFile({
+        type: "asset",
+        fileName: "stroke-data/catalog.json",
+        source: JSON.stringify(catalog),
+      });
 
       const licenses = [
         ["third-party-licenses/hanzi-writer-LICENSE.txt", resolve(projectRoot, "node_modules", "hanzi-writer", "LICENSE")],

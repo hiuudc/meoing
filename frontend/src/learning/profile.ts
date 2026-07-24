@@ -1,4 +1,4 @@
-import { QUESTION_FORMATS, type LearningProfile, type QuestionFormat } from "./types";
+import { LESSON_QUESTION_FORMATS, type LearningProfile, type QuestionFormat } from "./types";
 import { canonicalLanguageName, normalizeSourceLanguage } from "./languages";
 
 export const DEFAULT_LEARNING_PROFILE: LearningProfile = {
@@ -9,13 +9,13 @@ export const DEFAULT_LEARNING_PROFILE: LearningProfile = {
   dailyQuestionGoal: 12,
   lessonQuestionCount: 10,
   speakingEnabled: true,
-  preferredFormats: [...QUESTION_FORMATS],
+  preferredFormats: [...LESSON_QUESTION_FORMATS],
   coachingStyle: "gentle",
 };
 
 function validFormats(value: unknown): QuestionFormat[] {
   if (!Array.isArray(value)) return [...DEFAULT_LEARNING_PROFILE.preferredFormats];
-  const allowed = new Set<QuestionFormat>(QUESTION_FORMATS);
+  const allowed = new Set<QuestionFormat>(LESSON_QUESTION_FORMATS);
   const unique = [...new Set(value.filter((format): format is QuestionFormat => typeof format === "string" && allowed.has(format as QuestionFormat)))];
   return unique.length ? unique : [...DEFAULT_LEARNING_PROFILE.preferredFormats];
 }

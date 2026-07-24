@@ -10,7 +10,7 @@ import {
   type OperationExpectation,
   type SendOperationPayload,
 } from "../src/integration/protocol";
-import { QUESTION_FORMATS, type QuestionFormat } from "../src/learning/types";
+import { LESSON_QUESTION_FORMATS, type QuestionFormat } from "../src/learning/types";
 import { isAllowedMeoiOrigin } from "./integration-policy";
 import {
   canonicalConversationUrl,
@@ -109,7 +109,7 @@ function validOperationId(value: unknown): value is string {
 function validExpectation(value: unknown, unitId: string): value is OperationExpectation {
   if (!isRecord(value) || !exactKeys(value, ["unitId", "targetLanguage", "sourceLanguage", "level", "questionCount", "speaking", "allowedFormats", "requiredTemplates"])) return false;
   if (!Array.isArray(value.allowedFormats) || !Array.isArray(value.requiredTemplates)) return false;
-  const formatSet = new Set<string>(QUESTION_FORMATS);
+  const formatSet = new Set<string>(LESSON_QUESTION_FORMATS);
   const allowedFormats = value.allowedFormats.filter((format): format is QuestionFormat => typeof format === "string" && formatSet.has(format));
   if (allowedFormats.length !== value.allowedFormats.length || new Set(allowedFormats).size !== allowedFormats.length || allowedFormats.length < 5) return false;
   const aiFormats = new Set<QuestionFormat>(["translation", "shortAnswer", "freeWriting", "speakingRepeat", "speakingRoleplay"]);

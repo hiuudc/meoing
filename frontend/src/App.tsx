@@ -5,6 +5,7 @@ import { ContentWorkspace } from "./components/ContentWorkspace";
 import { EntityEditorModal, type EditorState } from "./components/EntityEditorModal";
 import { OverviewPanel } from "./components/OverviewPanel";
 import { LearningWorkspace } from "./components/LearningWorkspace";
+import { LettersWorkspace } from "./components/LettersWorkspace";
 import { pruneStoredLessonsFromStorage } from "./integration/learningStorage";
 import { ThemeCustomizerDrawer } from "./components/ThemeCustomizerDrawer";
 import { WorkspaceSidebar } from "./components/WorkspaceSidebar";
@@ -64,6 +65,13 @@ export function App() {
   const unitStudyItems = useMemo(
     () => state.studyItemOrder.map((id) => state.studyItems[id]).filter((item) => item?.unitId === activeUnit?.id),
     [activeUnit?.id, state.studyItemOrder, state.studyItems],
+  );
+  const collectionUnitIds = useMemo(() => new Set(units.map((unit) => unit.id)), [units]);
+  const collectionStudyItems = useMemo(
+    () => state.studyItemOrder
+      .map((id) => state.studyItems[id])
+      .filter((item) => item && collectionUnitIds.has(item.unitId)),
+    [collectionUnitIds, state.studyItemOrder, state.studyItems],
   );
   const visibleStudyItems = useMemo(
     () => unitStudyItems.filter((item) => item.kind === state.activeKind),
@@ -273,7 +281,7 @@ export function App() {
         onModeChange={setWorkspaceMode}
       />
       <OverviewPanel unit={activeUnit} recentWords={recentWords} />
-      </> : (
+      </> : workspaceMode === "learn" ? (
         <LearningWorkspace
           collection={activeCollection}
           unit={activeUnit}
@@ -286,6 +294,15 @@ export function App() {
             type: "updateCollection",
             collection: { ...activeCollection, learningProfile },
           })}
+        />
+      ) : (
+        <LettersWorkspace
+          collection={activeCollection}
+          units={units}
+          studyItems={collectionStudyItems}
+          mode={workspaceMode}
+          onModeChange={setWorkspaceMode}
+          onOpenMobileNavigation={() => setMobileNavigationOpen(true)}
         />
       )}
       <EntityEditorModal

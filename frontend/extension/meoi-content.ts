@@ -6,7 +6,7 @@ import {
   type ExtensionRequest,
   type ExtensionResponse,
 } from "../src/integration/protocol";
-import { QUESTION_FORMATS } from "../src/learning/types";
+import { LESSON_QUESTION_FORMATS } from "../src/learning/types";
 import { isAllowedMeoiOrigin } from "./integration-policy";
 
 const commands = new Set([
@@ -46,7 +46,7 @@ function validRequest(value: unknown): value is ExtensionRequest<Record<string, 
       || !Number.isInteger(expectation.questionCount)
       || typeof expectation.speaking !== "boolean"
       || allowedFormats.length < 5
-      || allowedFormats.some((format) => !QUESTION_FORMATS.includes(format as (typeof QUESTION_FORMATS)[number]))
+      || allowedFormats.some((format) => !LESSON_QUESTION_FORMATS.includes(format as (typeof LESSON_QUESTION_FORMATS)[number]))
       || requiredTemplates.length > 20
       || requiredTemplates.some((template) => !isRecord(template) || typeof template.id !== "string" || !allowedFormats.includes(template.format))
       || !["create_lesson", "evaluate_answer", "coaching"].includes(String(payload.kind))

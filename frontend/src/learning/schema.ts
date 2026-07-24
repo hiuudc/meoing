@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  LESSON_QUESTION_FORMATS,
   QUESTION_FORMATS,
   type Evaluation,
   type LearningProfile,
@@ -380,7 +381,9 @@ export function validateLessonForProfile(lesson: Lesson, profile: LearningProfil
   if (profile.speakingEnabled && !lesson.questions.some((question) => question.type === "speakingRepeat" || question.type === "speakingRoleplay")) {
     errors.push("Speaking is enabled, so the lesson needs at least one speaking question.");
   }
-  if (lesson.questions.some((question) => !QUESTION_FORMATS.includes(question.type))) errors.push("Lesson contains an unsupported question format.");
+  if (lesson.questions.some((question) => !LESSON_QUESTION_FORMATS.includes(question.type as (typeof LESSON_QUESTION_FORMATS)[number]))) {
+    errors.push("Lesson contains a format that is no longer generated.");
+  }
   return errors;
 }
 
@@ -409,6 +412,9 @@ export function validateLessonForExpectation(lesson: Lesson, expectation: Lesson
   }
   if (lesson.questions.some((question) => !QUESTION_FORMATS.includes(question.type))) {
     errors.push("Lesson contains an unsupported question format.");
+  }
+  if (lesson.questions.some((question) => !LESSON_QUESTION_FORMATS.includes(question.type as (typeof LESSON_QUESTION_FORMATS)[number]))) {
+    errors.push("Generated lessons cannot contain character tracing.");
   }
   if (lesson.questions.some((question) => !allowedFormats.has(question.type))) {
     errors.push("Lesson contains a disabled question format.");
@@ -443,6 +449,9 @@ export function validateLessonForExpectation(lesson: Lesson, expectation: Lesson
     if (!primary) errors.push(`Alternate ${question.id} references unknown question ${questionId}.`);
     if (primary?.type === question.type) errors.push(`Alternate ${question.id} must use a different format from ${questionId}.`);
     if (!allowedFormats.has(question.type)) errors.push(`Alternate ${question.id} uses a disabled question format.`);
+    if (!LESSON_QUESTION_FORMATS.includes(question.type as (typeof LESSON_QUESTION_FORMATS)[number])) {
+      errors.push(`Alternate ${question.id} cannot use character tracing.`);
+    }
     if (question.templateId) errors.push(`Alternate ${question.id} cannot use templateId.`);
     if (question.presentation !== undefined) errors.push(`Alternate ${question.id} must not provide presentation settings.`);
     if (question.evaluationMode !== QUESTION_FORMAT_REGISTRY[question.type].evaluationMode) {

@@ -13,7 +13,6 @@ import {
   Settings2,
   SkipForward,
   Sparkles,
-  Volume2,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -21,7 +20,7 @@ import { createPortal } from "react-dom";
 import { gradeAnswer, isAnswerComplete } from "./grader";
 import { GlossaryText } from "./GlossaryText";
 import { shouldFlushProgress } from "./progress";
-import { answerActivationSpeechText, answerSpeechText, questionSpeechText } from "./questionContent";
+import { answerActivationSpeechText, questionSpeechText } from "./questionContent";
 import {
   effectivePresentation,
   enableListening,
@@ -52,7 +51,11 @@ import type {
   QuestionAnswer,
   SpeakingSubmission,
 } from "./types";
-import { QuestionRenderer } from "./QuestionRenderer";
+import {
+  answerBankForQuestion,
+  QuestionRenderer,
+  type AnswerInputMode,
+} from "./QuestionRenderer";
 import "./lesson.css";
 
 export interface CoachChatMessage {
@@ -158,6 +161,8 @@ export function LessonPlayer({
   const [speechPosition, setSpeechPosition] = useState({ top: 0, left: 0 });
   const [speechPreference, setSpeechPreference] = useState<BrowserSpeechPreference>(() => loadSpeechPreference(window.localStorage));
   const [playerPreference, setPlayerPreference] = useState<LessonPlayerPreference>(() => loadLessonPlayerPreference(window.localStorage));
+  const [answerInputModeOverride, setAnswerInputModeOverride] = useState<AnswerInputMode | null>(null);
+  const [voicePreviewStatus, setVoicePreviewStatus] = useState("");
   const [now, setNow] = useState(() => Date.now());
   const [notice, setNotice] = useState("");
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
@@ -215,6 +220,8 @@ export function LessonPlayer({
     setError("");
     setTheoryOpen(false);
     setSpeechOpen(false);
+    setAnswerInputModeOverride(null);
+    setVoicePreviewStatus("");
     setChatByQuestion({});
     setCoachDraft("");
     setCoachError("");
@@ -403,16 +410,17 @@ export function LessonPlayer({
     }
   }
 
-  function speak(text: string) {
-    if (!("speechSynthesis" in window) || !text.trim()) return;
-    const voice = resolveSpeechVoice(voices, speechPreference, lesson.targetLanguage);
-    if (!voice) return;
+  function speak(text: string, preference = speechPreference): boolean {
+    if (!("speechSynthesis" in window) || !text.trim()) return false;
+    const voice = resolveSpeechVoice(voices, preference, lesson.targetLanguage);
+    if (!voice) return false;
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = speechPreference.rate;
+    utterance.rate = preference.rate;
     utterance.voice = voice;
     utterance.lang = voice.lang || languageTagForSpeech(lesson.targetLanguage);
     window.speechSynthesis.speak(utterance);
+    return true;
   }
 
   async function submitAnswer() {
@@ -560,7 +568,10 @@ export function LessonPlayer({
     : "";
   const targetVoiceAvailable = speechSupported && targetVoices.length > 0;
   const questionSpeech = currentQuestion ? questionSpeechText(currentQuestion) : "";
-  const answerSpeech = currentQuestion ? answerSpeechText(currentQuestion, evaluation) : "";
+  const currentAnswerBank = currentQuestion ? answerBankForQuestion(currentQuestion) : undefined;
+  const answerInputMode = currentAnswerBank
+    ? answerInputModeOverride ?? currentAnswerBank.defaultMode
+    : undefined;
   const lessonTargetStrings = useMemo(
     () => [
       ...lesson.questions.flatMap((question) => question.glossaryTargets ?? []),
@@ -579,9 +590,10 @@ export function LessonPlayer({
     )),
     [lesson.glossary, lessonTargetStrings],
   );
-  const voicePreviewText = pronunciationSample?.term
-    ?? targetGlossarySample?.term
-    ?? voicePreviewSample(lesson.targetLanguage);
+  const voicePreviewText = questionSpeech
+    || pronunciationSample?.term
+    || targetGlossarySample?.term
+    || voicePreviewSample(lesson.targetLanguage);
   const speechRateLabel = `${Number(speechPreference.rate.toFixed(2))}x`;
   const listeningPaused = playerPreference.listeningDisabledUntil > now;
   const renderGlossaryText = Boolean(presentation?.wordTooltips || playerPreference.showPronunciation);
@@ -603,6 +615,44 @@ export function LessonPlayer({
     if (!currentQuestion || !presentation?.readAnswers) return;
     const targetText = answerActivationSpeechText(currentQuestion, text);
     if (targetText) speak(targetText);
+  }
+
+  function renderLessonText(text: string, interactive = true) {
+    const normalizedText = text.trim();
+    const targetLanguageTag = languageTagForSpeech(lesson.targetLanguage);
+    const isExactTargetText = Boolean(normalizedText && currentQuestion?.glossaryTargets?.some(
+      (target) => target.trim() === normalizedText,
+    ));
+    const containsTargetText = Boolean(normalizedText && currentQuestion?.glossaryTargets?.some(
+      (target) => target.trim() && text.includes(target),
+    ));
+    const content = renderGlossaryText || containsTargetText ? (
+      <GlossaryText
+        text={text}
+        glossary={lesson.glossary}
+        tooltipsEnabled={presentation?.wordTooltips}
+        showPronunciation={playerPreference.showPronunciation}
+        pronunciationMode={playerPreference.pronunciationMode}
+        interactive={interactive}
+        termClassName={isExactTargetText ? undefined : "lesson-target-text"}
+        termLang={isExactTargetText ? undefined : targetLanguageTag}
+      />
+    ) : text;
+    return isExactTargetText ? (
+      <span className="lesson-target-text" lang={targetLanguageTag}>{content}</span>
+    ) : content;
+  }
+
+  function selectVoice(voiceURI: string) {
+    const nextPreference = { ...speechPreference, voiceURI };
+    setSpeechPreference(nextPreference);
+    const voice = resolveSpeechVoice(voices, nextPreference, lesson.targetLanguage);
+    if (!voice || !voicePreviewText) {
+      setVoicePreviewStatus(`No ${lesson.targetLanguage} voice is available for preview.`);
+      return;
+    }
+    setVoicePreviewStatus(`Previewing ${voice.name}.`);
+    speak(voicePreviewText, nextPreference);
   }
 
   const player = (
@@ -652,28 +702,8 @@ export function LessonPlayer({
               </div>
               <div className="lesson-question-title-row">
                 <h1 id="lesson-player-title">
-                  {renderGlossaryText
-                    ? <GlossaryText
-                        text={currentQuestion.prompt}
-                        glossary={lesson.glossary}
-                        tooltipsEnabled={presentation?.wordTooltips}
-                        showPronunciation={playerPreference.showPronunciation}
-                        pronunciationMode={playerPreference.pronunciationMode}
-                      />
-                    : currentQuestion.prompt}
+                  {renderLessonText(currentQuestion.prompt)}
                 </h1>
-                <div className="lesson-question-speakers">
-                  {presentation?.readQuestion && questionSpeech ? (
-                    <button type="button" onClick={() => speak(questionSpeech)} disabled={!targetVoiceAvailable} aria-label={`Read ${lesson.targetLanguage} question text aloud`}>
-                      <Volume2 size={18} /> <span>Question</span>
-                    </button>
-                  ) : null}
-                  {presentation?.readAnswers && answerSpeech ? (
-                    <button type="button" onClick={() => speak(answerSpeech)} disabled={!targetVoiceAvailable} aria-label={`Read ${lesson.targetLanguage} answer text aloud`}>
-                      <Volume2 size={18} /> <span>Answers</span>
-                    </button>
-                  ) : null}
-                </div>
               </div>
               <QuestionRenderer
                 key={`${currentQuestion.id}-${displayedAttempt}`}
@@ -683,20 +713,12 @@ export function LessonPlayer({
                 disabled={Boolean(evaluation) || submitting}
                 evaluated={Boolean(evaluation)}
                 onChange={setAnswer}
+                answerInputMode={answerInputMode}
                 onAnswerActivate={speakActivatedAnswer}
                 onSpeakTarget={speak}
                 onSpeakingChange={setSpeaking}
                 onRequireAlternate={() => useCurrentAlternate("This exercise is not supported on this device.")}
-                renderText={renderGlossaryText
-                  ? (text, interactive = true) => <GlossaryText
-                      text={text}
-                      glossary={lesson.glossary}
-                      tooltipsEnabled={presentation?.wordTooltips}
-                      showPronunciation={playerPreference.showPronunciation}
-                      pronunciationMode={playerPreference.pronunciationMode}
-                      interactive={interactive}
-                    />
-                  : undefined}
+                renderText={renderLessonText}
               />
               {error ? <p className="inline-error" role="alert">{error}</p> : null}
             </article>
@@ -728,7 +750,18 @@ export function LessonPlayer({
                 </button>
               ) : null}
             </div>
-            <p>{currentQuestion.hint ? `Hint: ${currentQuestion.hint}` : "Answer the question, then check your response."}</p>
+            {currentAnswerBank && answerInputMode ? (
+              <button
+                className="lesson-input-mode-toggle"
+                type="button"
+                onClick={() => setAnswerInputModeOverride(answerInputMode === "keyboard" ? "bank" : "keyboard")}
+                disabled={submitting}
+              >
+                {answerInputMode === "keyboard" ? "Use word bank" : "Use keyboard"}
+              </button>
+            ) : (
+              <p>{currentQuestion.hint ? `Hint: ${currentQuestion.hint}` : "Answer the question, then check your response."}</p>
+            )}
             <button className="primary-button" type="button" onClick={() => void submitAnswer()} disabled={submitting}>
               {submitting ? <LoaderCircle className="spin" size={17} /> : null}
               {submitting ? "Checking..." : "Check answer"}
@@ -880,7 +913,7 @@ export function LessonPlayer({
                   <select
                     disabled={!targetVoiceAvailable}
                     value={selectedVoice}
-                    onChange={(event) => setSpeechPreference((current) => ({ ...current, voiceURI: event.target.value }))}
+                    onChange={(event) => selectVoice(event.target.value)}
                   >
                     <option value="">
                       {targetVoices.length
@@ -890,21 +923,11 @@ export function LessonPlayer({
                     {targetVoices.map((voice) => <option value={voice.voiceURI} key={voice.voiceURI}>{voice.name} · {voice.lang}</option>)}
                   </select>
                 </label>
-                <div className="lesson-voice-preview-row">
-                  <button
-                    className="lesson-voice-preview"
-                    type="button"
-                    onClick={() => speak(voicePreviewText)}
-                    disabled={!targetVoiceAvailable || !voicePreviewText}
-                  >
-                    <Volume2 size={15} /> Preview voice
-                  </button>
-                  <span>
-                    {targetVoices.length
-                      ? `${targetVoices.length} matching ${targetVoices.length === 1 ? "voice" : "voices"}`
-                      : `Install a ${lesson.targetLanguage} system voice to use speech.`}
-                  </span>
-                </div>
+                <p className="lesson-voice-status" role="status">
+                  {voicePreviewStatus || (targetVoices.length
+                    ? `${targetVoices.length} matching ${targetVoices.length === 1 ? "voice" : "voices"} · selecting one previews it automatically`
+                    : `Install a ${lesson.targetLanguage} system voice to use speech.`)}
+                </p>
               </div>
               <label className="lesson-speed-control" htmlFor="lesson-voice-speed">
                 <span><b>Voice speed</b><output>{speechRateLabel}</output></span>
@@ -919,7 +942,12 @@ export function LessonPlayer({
                   aria-valuetext={speechRateLabel}
                   onChange={(event) => setSpeechPreference((current) => ({ ...current, rate: Number(event.target.value) }))}
                 />
-                <small><span>0.25x</span><span>1x</span><span>1.5x</span><span>2x</span></small>
+                <small className="lesson-speed-ticks" aria-hidden="true">
+                  <span style={{ left: "0%" }}>0.25x</span>
+                  <span style={{ left: "42.857%" }}>1x</span>
+                  <span style={{ left: "71.429%" }}>1.5x</span>
+                  <span style={{ left: "100%" }}>2x</span>
+                </small>
               </label>
               <p>Speech uses only {lesson.targetLanguage}. Read question plays automatically on each new exercise; answer speech starts only when you select an answer.</p>
             </section>
