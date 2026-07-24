@@ -3,6 +3,7 @@ import { createLocalPreviewLesson } from "./demoLesson";
 import { detectBrowserLanguage } from "./languages";
 import { gradeAnswer, normalizeAnswer } from "./grader";
 import { segmentGlossaryText } from "./glossary";
+import { loadStrokeCharacterData } from "./strokeData";
 import {
   LISTENING_PAUSE_DURATION_MS,
   effectivePresentation,
@@ -63,6 +64,11 @@ const questions: LessonQuestion[] = [
   { ...common, id: "writing", type: "freeWriting", prompt: "Viết đoạn", minWords: 20, maxWords: 80, rubric: ["Clarity"], evaluationMode: "ai" },
   { ...common, id: "repeat", type: "speakingRepeat", prompt: "Lặp lại", modelText: "Good morning", rubric: ["Fluency"], evaluationMode: "ai" },
   { ...common, id: "roleplay", type: "speakingRoleplay", prompt: "Đóng vai", role: "Customer", scenario: "At a cafe", goal: "Order coffee", rubric: ["Task completion"], evaluationMode: "ai" },
+  { ...common, id: "listen-select", type: "listenSelect", prompt: "Listen and choose", audioText: "water", options: [{ id: "listen-correct", label: "water" }, { id: "listen-wrong", label: "tea" }], correctOptionId: "listen-correct" },
+  { ...common, id: "audio-match", type: "audioMatching", prompt: "Match the audio", pairs: [{ audioId: "audioOne", audioText: "water", matchId: "meaningOne", label: "nước" }, { audioId: "audioTwo", audioText: "tea", matchId: "meaningTwo", label: "trà" }] },
+  { ...common, id: "sound", type: "soundDiscrimination", prompt: "Choose the sound", audioText: "ship", options: [{ id: "sound-correct", label: "ship" }, { id: "sound-wrong", label: "sheep" }], correctOptionId: "sound-correct" },
+  { ...common, id: "flashcard", type: "flashcardRecall", prompt: "Recall water", cue: "nước", acceptedAnswers: ["water"], match: { ignorePunctuation: true } },
+  { ...common, id: "tracing", type: "characterTracing", prompt: "Trace water", character: "水", requireStrokeOrder: true },
 ];
 
 const correctAnswers: Record<LessonQuestion["type"], QuestionAnswer> = {
@@ -85,9 +91,14 @@ const correctAnswers: Record<LessonQuestion["type"], QuestionAnswer> = {
   freeWriting: "A longer paragraph",
   speakingRepeat: "Good morning",
   speakingRoleplay: "One coffee, please",
+  listenSelect: "listen-correct",
+  audioMatching: { audioOne: "meaningOne", audioTwo: "meaningTwo" },
+  soundDiscrimination: "sound-correct",
+  flashcardRecall: "water",
+  characterTracing: "passed",
 };
 
-describe("the 19 question graders", () => {
+describe("the question graders", () => {
   it.each(questions.map((question) => [question.type, question] as const))("handles %s", (_type, question) => {
     const result = gradeAnswer(question, correctAnswers[question.type]);
     if (["translation", "shortAnswer", "freeWriting", "speakingRepeat", "speakingRoleplay"].includes(question.type)) {
@@ -110,6 +121,12 @@ describe("the 19 question graders", () => {
 
   it("normalizes Unicode, whitespace, punctuation, and diacritics", () => {
     expect(normalizeAnswer("  HÉLLO,   bạn!  ", { ignorePunctuation: true, ignoreDiacritics: true })).toBe("hello ban");
+  });
+
+  it("generates local Hangul tracing data without a network request", async () => {
+    const data = await loadStrokeCharacterData("Korean", "물");
+    expect(data.strokes.length).toBeGreaterThan(2);
+    expect(data.medians).toHaveLength(data.strokes.length);
   });
 });
 
@@ -147,14 +164,25 @@ describe("lesson schema", () => {
 
   it("matches the unit, language, level, exact count, and both grading modes", () => {
     const translationQuestion = questions.find((question) => question.type === "translation")!;
+    const writtenFormats = new Set([
+      "fillBlank", "multiCloze", "translation", "shortAnswer",
+      "errorCorrection", "sentenceTransformation", "dictation", "freeWriting",
+    ]);
     const generatedQuestions: LessonQuestion[] = [...lesson.questions.slice(0, 9), translationQuestion].map((question) => ({
       ...question,
       prompt: `Lesson: ${question.prompt}`,
       glossaryTargets: ["Lesson"],
+      ...(writtenFormats.has(question.type) ? {
+        answerBank: {
+          tokens: [{ id: `${question.id}-one`, label: "Lesson" }, { id: `${question.id}-two`, label: "answer" }],
+          separator: "space" as const,
+          defaultMode: "bank" as const,
+        },
+      } : {}),
     }));
     const expectedLesson: Lesson = {
       ...lesson,
-      schemaVersion: 4,
+      schemaVersion: 5,
       sourceLanguage: "Vietnamese",
       glossary: [...lesson.glossary, { term: "Lesson", meaning: "a period of learning" }],
       questions: generatedQuestions,
@@ -182,6 +210,22 @@ describe("lesson schema", () => {
       .toContain("lesson.sourceLanguage must equal Vietnamese.");
     expect(validateLessonForExpectation({ ...expectedLesson, questions: expectedLesson.questions.slice(0, 9) }, expectation))
       .toContain("lesson.questions must contain exactly 10 items.");
+    const unavailableTracing = {
+      ...expectedLesson.questions[0],
+      type: "characterTracing" as const,
+      character: "水",
+      requireStrokeOrder: true,
+      unavailableReason: "Unavailable",
+      evaluationMode: "local" as const,
+    };
+    expect(validateLessonForExpectation({
+      ...expectedLesson,
+      targetLanguage: "Japanese",
+      questions: [unavailableTracing, ...expectedLesson.questions.slice(1)],
+    }, {
+      ...expectation,
+      targetLanguage: "Japanese",
+    })).toContain(`Generated character tracing question ${unavailableTracing.id} cannot be unavailable.`);
     expect(() => lessonSchema.parse(expectedLesson)).not.toThrow();
   });
 
@@ -363,6 +407,7 @@ describe("glossary and speech preferences", () => {
       voiceURI: "voice-1",
       rate: 2,
     });
+    expect(normalizeSpeechPreference({ rate: 0.1 }).rate).toBe(0.25);
   });
 
   it("filters and resolves browser voices only within the target language", () => {
@@ -466,20 +511,20 @@ describe("glossary and speech preferences", () => {
     )).toEqual({ readQuestion: true, readAnswers: true, wordTooltips: false });
   });
 
-  it("builds a schema-v4 language-pair demo with every format, one alternate per slot, and 19-question progress", () => {
+  it("builds a schema-v5 language-pair demo with every format, one alternate per slot, and 24-question progress", () => {
     const demo = createLocalPreviewLesson("unit-demo", "Demo", {
       ...DEFAULT_LEARNING_PROFILE,
       sourceLanguage: "Vietnamese",
       targetLanguage: "Japanese",
     });
-    expect(demo.schemaVersion).toBe(4);
+    expect(demo.schemaVersion).toBe(5);
     expect(demo.sourceLanguage).toBe("Vietnamese");
     expect(demo.targetLanguage).toBe("Japanese");
     expect(demo.title).toContain("Bài học mẫu");
     expect(demo.questions.some((question) => question.glossaryTargets?.includes("水"))).toBe(true);
-    expect(demo.questions).toHaveLength(19);
+    expect(demo.questions).toHaveLength(24);
     expect(new Set(demo.questions.map((question) => question.type))).toEqual(new Set(QUESTION_FORMATS));
-    expect(demo.questionAlternates).toHaveLength(19);
+    expect(demo.questionAlternates).toHaveLength(24);
     expect(() => lessonSchema.parse(demo)).not.toThrow();
     const { sourceLanguage: _sourceLanguage, ...legacyDemo } = demo;
     expect(() => lessonSchema.parse({ ...legacyDemo, schemaVersion: 3 })).not.toThrow();
@@ -487,10 +532,10 @@ describe("glossary and speech preferences", () => {
       lessonId: demo.id,
       completedQuestionIds: demo.questions.map((question) => question.id),
       attemptsByQuestion: Object.fromEntries(demo.questions.map((question) => [question.id, 1])),
-      firstTryCorrect: 19,
-      totalQuestions: 19,
+      firstTryCorrect: 24,
+      totalQuestions: 24,
       masteryPercent: 100,
       updatedAt: "2026-07-22T00:00:00.000Z",
-    }).totalQuestions).toBe(19);
+    }).totalQuestions).toBe(24);
   });
 });

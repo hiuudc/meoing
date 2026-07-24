@@ -20,6 +20,11 @@ export const QUESTION_FORMATS = [
   "freeWriting",
   "speakingRepeat",
   "speakingRoleplay",
+  "listenSelect",
+  "audioMatching",
+  "soundDiscrimination",
+  "flashcardRecall",
+  "characterTracing",
 ] as const;
 
 export type QuestionFormat = (typeof QUESTION_FORMATS)[number];
@@ -45,6 +50,7 @@ export interface UnitQuestionSettings {
   enabledFormats: QuestionFormat[];
   formatPresentation: Partial<Record<QuestionFormat, QuestionPresentationSettings>>;
   customTemplates: CustomQuestionTemplate[];
+  characterTracing: CharacterTracingSettings;
 }
 
 export interface LearningProfile {
@@ -70,6 +76,16 @@ export interface ChoiceOption {
   label: string;
 }
 
+export interface AnswerBank {
+  tokens: ChoiceOption[];
+  separator: "space" | "none";
+  defaultMode: "keyboard" | "bank";
+}
+
+export interface CharacterTracingSettings {
+  requireStrokeOrder: boolean;
+}
+
 export interface BaseQuestion {
   id: string;
   type: QuestionFormat;
@@ -82,6 +98,7 @@ export interface BaseQuestion {
   templateId?: string;
   presentation?: QuestionPresentationSettings;
   glossaryTargets?: string[];
+  answerBank?: AnswerBank;
 }
 
 export interface SingleChoiceQuestion extends BaseQuestion {
@@ -234,6 +251,48 @@ export interface SpeakingRoleplayQuestion extends BaseQuestion {
   rubric: string[];
 }
 
+export interface ListenSelectQuestion extends BaseQuestion {
+  type: "listenSelect";
+  audioText: string;
+  options: ChoiceOption[];
+  correctOptionId: string;
+}
+
+export interface AudioMatchingPair {
+  audioId: string;
+  audioText: string;
+  matchId: string;
+  label: string;
+}
+
+export interface AudioMatchingQuestion extends BaseQuestion {
+  type: "audioMatching";
+  pairs: AudioMatchingPair[];
+}
+
+export interface SoundDiscriminationQuestion extends BaseQuestion {
+  type: "soundDiscrimination";
+  audioText: string;
+  options: ChoiceOption[];
+  correctOptionId: string;
+}
+
+export interface FlashcardRecallQuestion extends BaseQuestion {
+  type: "flashcardRecall";
+  cue: string;
+  acceptedAnswers: string[];
+  match?: TextMatchOptions;
+}
+
+export interface CharacterTracingQuestion extends BaseQuestion {
+  type: "characterTracing";
+  character: string;
+  meaning?: string;
+  reading?: string;
+  requireStrokeOrder: boolean;
+  unavailableReason?: string;
+}
+
 export type LessonQuestion =
   | SingleChoiceQuestion
   | MultipleChoiceQuestion
@@ -253,7 +312,12 @@ export type LessonQuestion =
   | DictationQuestion
   | FreeWritingQuestion
   | SpeakingRepeatQuestion
-  | SpeakingRoleplayQuestion;
+  | SpeakingRoleplayQuestion
+  | ListenSelectQuestion
+  | AudioMatchingQuestion
+  | SoundDiscriminationQuestion
+  | FlashcardRecallQuestion
+  | CharacterTracingQuestion;
 
 export type QuestionAnswer = string | boolean | string[] | Record<string, string>;
 
@@ -298,7 +362,7 @@ export interface SourceReference {
 }
 
 export interface Lesson {
-  schemaVersion: 1 | 2 | 3 | 4;
+  schemaVersion: 1 | 2 | 3 | 4 | 5;
   id: string;
   unitId: string;
   title: string;

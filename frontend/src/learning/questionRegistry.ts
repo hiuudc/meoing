@@ -1,4 +1,4 @@
-import type { LessonQuestion, QuestionFormat, QuestionPresentationSettings } from "./types";
+import type { AnswerBank, LessonQuestion, QuestionFormat, QuestionPresentationSettings } from "./types";
 
 export type QuestionFormatBadge = "local" | "ai" | "speaking";
 
@@ -29,6 +29,14 @@ const presentation = {
   readAnswers: true,
   wordTooltips: true,
 };
+
+function sampleAnswerBank(labels: string[], defaultMode: AnswerBank["defaultMode"]): AnswerBank {
+  return {
+    tokens: labels.map((label, index) => ({ id: `sample-token-${index}`, label })),
+    separator: "space",
+    defaultMode,
+  };
+}
 
 export const QUESTION_FORMAT_REGISTRY = {
   singleChoice: {
@@ -94,6 +102,7 @@ export const QUESTION_FORMAT_REGISTRY = {
       template: "Good ___.",
       acceptedAnswers: ["morning"],
       match: { ignorePunctuation: true },
+      answerBank: sampleAnswerBank(["morning", "night", "afternoon"], "bank"),
     },
   },
   selectBlank: {
@@ -127,6 +136,7 @@ export const QUESTION_FORMAT_REGISTRY = {
       prompt: "Complete both blanks.",
       template: "___ morning. How ___ you?",
       blanks: [{ id: "one", acceptedAnswers: ["Good"] }, { id: "two", acceptedAnswers: ["are"] }],
+      answerBank: sampleAnswerBank(["Good", "are", "is", "morning"], "bank"),
     },
   },
   wordBank: {
@@ -227,6 +237,7 @@ export const QUESTION_FORMAT_REGISTRY = {
       targetLanguage: "English",
       referenceAnswer: "Good morning.",
       rubric: ["Preserve the greeting and time of day."],
+      answerBank: sampleAnswerBank(["Good", "morning", "night", "Hello"], "bank"),
     },
   },
   shortAnswer: {
@@ -244,6 +255,7 @@ export const QUESTION_FORMAT_REGISTRY = {
       referenceAnswer: "You say it when greeting someone in the morning.",
       requiredIdeas: ["greeting", "morning"],
       rubric: ["Answer the question directly."],
+      answerBank: sampleAnswerBank(["You", "say", "it", "in", "the", "morning"], "keyboard"),
     },
   },
   errorCorrection: {
@@ -261,6 +273,7 @@ export const QUESTION_FORMAT_REGISTRY = {
       incorrectText: "She study every day.",
       acceptedAnswers: ["She studies every day."],
       match: { ignorePunctuation: true },
+      answerBank: sampleAnswerBank(["She", "studies", "every", "day"], "bank"),
     },
   },
   sentenceTransformation: {
@@ -279,6 +292,7 @@ export const QUESTION_FORMAT_REGISTRY = {
       constraint: "Use the simple past.",
       acceptedAnswers: ["I studied every day."],
       match: { ignorePunctuation: true },
+      answerBank: sampleAnswerBank(["I", "studied", "every", "day"], "bank"),
     },
   },
   dictation: {
@@ -296,6 +310,7 @@ export const QUESTION_FORMAT_REGISTRY = {
       transcript: "Good morning. How are you?",
       acceptedAnswers: ["Good morning. How are you?"],
       match: { ignorePunctuation: true },
+      answerBank: sampleAnswerBank(["Good", "morning", "How", "are", "you"], "bank"),
     },
   },
   freeWriting: {
@@ -313,6 +328,7 @@ export const QUESTION_FORMAT_REGISTRY = {
       minWords: 20,
       maxWords: 80,
       rubric: ["Use clear sequence words.", "Use the target vocabulary."],
+      answerBank: sampleAnswerBank(["First", "then", "usually", "morning", "study", "eat", "walk", "finally"], "keyboard"),
     },
   },
   speakingRepeat: {
@@ -347,6 +363,100 @@ export const QUESTION_FORMAT_REGISTRY = {
       scenario: "You enter a cafe in the morning.",
       goal: "Greet the server and order tea.",
       rubric: ["Complete the greeting and order."],
+    },
+  },
+  listenSelect: {
+    id: "listenSelect",
+    label: "Listen and select",
+    description: "Listen to target-language audio and choose the matching text.",
+    badge: "local",
+    evaluationMode: "local",
+    presentation,
+    sample: {
+      ...localBase,
+      id: "preview-listen-select",
+      type: "listenSelect",
+      prompt: "Listen and choose what you hear.",
+      audioText: "Good morning",
+      options: [
+        { id: "morning", label: "Good morning" },
+        { id: "night", label: "Good night" },
+        { id: "thanks", label: "Thank you" },
+      ],
+      correctOptionId: "morning",
+    },
+  },
+  audioMatching: {
+    id: "audioMatching",
+    label: "Audio matching",
+    description: "Match target-language audio with the correct meaning.",
+    badge: "local",
+    evaluationMode: "local",
+    presentation,
+    sample: {
+      ...localBase,
+      id: "preview-audio-matching",
+      type: "audioMatching",
+      prompt: "Match each recording with its meaning.",
+      pairs: [
+        { audioId: "audio-water", audioText: "water", matchId: "meaning-water", label: "water" },
+        { audioId: "audio-tea", audioText: "tea", matchId: "meaning-tea", label: "tea" },
+      ],
+    },
+  },
+  soundDiscrimination: {
+    id: "soundDiscrimination",
+    label: "Sound discrimination",
+    description: "Distinguish a target sound from similar alternatives.",
+    badge: "local",
+    evaluationMode: "local",
+    presentation,
+    sample: {
+      ...localBase,
+      id: "preview-sound-discrimination",
+      type: "soundDiscrimination",
+      prompt: "Choose the word you hear.",
+      audioText: "ship",
+      options: [
+        { id: "ship", label: "ship" },
+        { id: "sheep", label: "sheep" },
+      ],
+      correctOptionId: "ship",
+    },
+  },
+  flashcardRecall: {
+    id: "flashcardRecall",
+    label: "Flashcard recall",
+    description: "Recall a target-language answer by voice or keyboard.",
+    badge: "local",
+    evaluationMode: "local",
+    presentation,
+    sample: {
+      ...localBase,
+      id: "preview-flashcard-recall",
+      type: "flashcardRecall",
+      prompt: "Recall the target-language word.",
+      cue: "water",
+      acceptedAnswers: ["water"],
+      match: { ignorePunctuation: true },
+    },
+  },
+  characterTracing: {
+    id: "characterTracing",
+    label: "Character tracing",
+    description: "Trace a Chinese, Japanese, or Hangul character locally.",
+    badge: "local",
+    evaluationMode: "local",
+    presentation,
+    sample: {
+      ...localBase,
+      id: "preview-character-tracing",
+      type: "characterTracing",
+      prompt: "Trace the character for water.",
+      character: "水",
+      meaning: "water",
+      reading: "mizu",
+      requireStrokeOrder: true,
     },
   },
 } satisfies Record<QuestionFormat, QuestionFormatDefinition>;

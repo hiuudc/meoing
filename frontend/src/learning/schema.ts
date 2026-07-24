@@ -8,12 +8,24 @@ import {
   type QuestionFormat,
 } from "./types";
 import { QUESTION_FORMAT_REGISTRY } from "./questionRegistry";
+import {
+  isListeningQuestionFormat,
+  isWrittenAnswerFormat,
+  supportsQuestionFormatForLanguage,
+} from "./questionSettings";
 import { segmentGlossaryText } from "./glossary";
 import { questionVisibleTexts } from "./questionContent";
 
 const id = z.string().min(1).max(120);
 const plainText = z.string().min(1).max(16_000);
 const optionSchema = z.object({ id, label: plainText.max(500) }).strict();
+const answerBankSchema = z
+  .object({
+    tokens: z.array(optionSchema).min(2).max(30),
+    separator: z.enum(["space", "none"]),
+    defaultMode: z.enum(["keyboard", "bank"]),
+  })
+  .strict();
 const textMatchSchema = z
   .object({
     caseSensitive: z.boolean().optional(),
@@ -53,6 +65,7 @@ const baseFields = {
   templateId: id.optional(),
   presentation: presentationSchema.optional(),
   glossaryTargets: z.array(plainText.max(2_000)).max(80).optional(),
+  answerBank: answerBankSchema.optional(),
 };
 
 export const lessonQuestionSchema = z.discriminatedUnion("type", [
@@ -103,18 +116,86 @@ export const lessonQuestionSchema = z.discriminatedUnion("type", [
   }).strict(),
   z.object({ ...baseFields, type: z.literal("speakingRepeat"), modelText: plainText, rubric: z.array(plainText.max(500)).min(1).max(12) }).strict(),
   z.object({ ...baseFields, type: z.literal("speakingRoleplay"), role: plainText.max(500), scenario: plainText, goal: plainText, rubric: z.array(plainText.max(500)).min(1).max(12) }).strict(),
+  z.object({
+    ...baseFields,
+    type: z.literal("listenSelect"),
+    audioText: plainText,
+    options: z.array(optionSchema).min(2).max(8),
+    correctOptionId: id,
+  }).strict(),
+  z.object({
+    ...baseFields,
+    type: z.literal("audioMatching"),
+    pairs: z.array(z.object({
+      audioId: id,
+      audioText: plainText.max(500),
+      matchId: id,
+      label: plainText.max(500),
+    }).strict()).min(2).max(8),
+  }).strict(),
+  z.object({
+    ...baseFields,
+    type: z.literal("soundDiscrimination"),
+    audioText: plainText,
+    options: z.array(optionSchema).min(2).max(8),
+    correctOptionId: id,
+  }).strict(),
+  z.object({
+    ...baseFields,
+    type: z.literal("flashcardRecall"),
+    cue: plainText,
+    acceptedAnswers: z.array(plainText.max(500)).min(1).max(20),
+    match: textMatchSchema.optional(),
+  }).strict(),
+  z.object({
+    ...baseFields,
+    type: z.literal("characterTracing"),
+    character: plainText.max(8),
+    meaning: plainText.max(500).optional(),
+    reading: plainText.max(500).optional(),
+    requireStrokeOrder: z.boolean(),
+    unavailableReason: plainText.max(1_000).optional(),
+  }).strict(),
 ]).superRefine((question, context) => {
-  if (question.type !== "selectBlank") return;
-  const blankCount = question.template.split("{{blank}}").length - 1;
-  if (blankCount !== 1) {
-    context.addIssue({ code: "custom", path: ["template"], message: "selectBlank requires exactly one {{blank}} marker." });
+  if (question.answerBank) {
+    const tokenIds = new Set(question.answerBank.tokens.map((token) => token.id));
+    if (tokenIds.size !== question.answerBank.tokens.length) {
+      context.addIssue({ code: "custom", path: ["answerBank", "tokens"], message: "Answer-bank token IDs must be unique." });
+    }
+    if (!isWrittenAnswerFormat(question.type)) {
+      context.addIssue({ code: "custom", path: ["answerBank"], message: `${question.type} cannot define an answer bank.` });
+    } else {
+      const expectedMode = question.type === "shortAnswer" || question.type === "freeWriting" ? "keyboard" : "bank";
+      if (question.answerBank.defaultMode !== expectedMode) {
+        context.addIssue({
+          code: "custom",
+          path: ["answerBank", "defaultMode"],
+          message: `${question.type} answerBank.defaultMode must be ${expectedMode}.`,
+        });
+      }
+    }
   }
-  const optionIds = new Set(question.options.map((option) => option.id));
-  if (optionIds.size !== question.options.length) {
-    context.addIssue({ code: "custom", path: ["options"], message: "selectBlank option IDs must be unique." });
+  if (question.type === "selectBlank") {
+    const blankCount = question.template.split("{{blank}}").length - 1;
+    if (blankCount !== 1) {
+      context.addIssue({ code: "custom", path: ["template"], message: "selectBlank requires exactly one {{blank}} marker." });
+    }
   }
-  if (!optionIds.has(question.correctOptionId)) {
-    context.addIssue({ code: "custom", path: ["correctOptionId"], message: "selectBlank correctOptionId must reference an option." });
+  if (question.type === "selectBlank" || question.type === "listenSelect" || question.type === "soundDiscrimination") {
+    const optionIds = new Set(question.options.map((option) => option.id));
+    if (optionIds.size !== question.options.length) {
+      context.addIssue({ code: "custom", path: ["options"], message: `${question.type} option IDs must be unique.` });
+    }
+    if (!optionIds.has(question.correctOptionId)) {
+      context.addIssue({ code: "custom", path: ["correctOptionId"], message: `${question.type} correctOptionId must reference an option.` });
+    }
+  }
+  if (question.type === "audioMatching") {
+    const audioIds = new Set(question.pairs.map((pair) => pair.audioId));
+    const matchIds = new Set(question.pairs.map((pair) => pair.matchId));
+    if (audioIds.size !== question.pairs.length || matchIds.size !== question.pairs.length) {
+      context.addIssue({ code: "custom", path: ["pairs"], message: "Audio-matching IDs must be unique." });
+    }
   }
 });
 
@@ -130,7 +211,7 @@ export function validateQuestionGlossaryCoverage(
 ): string[] {
   if (question.glossaryTargets === undefined) return [`Question ${question.id} needs glossaryTargets.`];
   if (!question.glossaryTargets.length) {
-    return question.type === "translation"
+    return question.type === "translation" || question.type === "flashcardRecall"
       ? []
       : [`Question ${question.id} needs at least one glossary target.`];
   }
@@ -148,7 +229,7 @@ export function validateQuestionGlossaryCoverage(
 
 export const lessonSchema = z
   .object({
-    schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
+    schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]),
     id,
     unitId: id,
     title: plainText.max(300),
@@ -161,14 +242,14 @@ export const lessonSchema = z
     examples: z.array(z.object({ id, source: plainText, translation: plainText.optional(), note: plainText.optional() }).strict()).max(30),
     glossary: z.array(glossaryEntrySchema).max(160),
     sourceReferences: z.array(z.object({ id, kind: z.enum(["unit", "document", "youtube", "transcript", "note"]), title: plainText.max(500), url: z.string().url().max(2_000).optional(), excerpt: plainText.max(2_000).optional() }).strict()).max(50),
-    questions: z.array(lessonQuestionSchema).min(8).max(19),
-    questionAlternates: z.array(z.object({ questionId: id, question: lessonQuestionSchema }).strict()).max(19).optional(),
+    questions: z.array(lessonQuestionSchema).min(8).max(24),
+    questionAlternates: z.array(z.object({ questionId: id, question: lessonQuestionSchema }).strict()).max(24).optional(),
     createdAt: z.string().datetime(),
   })
   .strict()
   .superRefine((lesson, context) => {
-    if (lesson.schemaVersion === 4 && !lesson.sourceLanguage?.trim()) {
-      context.addIssue({ code: "custom", path: ["sourceLanguage"], message: "Schema-v4 lessons need sourceLanguage." });
+    if (lesson.schemaVersion >= 4 && !lesson.sourceLanguage?.trim()) {
+      context.addIssue({ code: "custom", path: ["sourceLanguage"], message: "Schema-v4+ lessons need sourceLanguage." });
     }
     const formats = new Set(lesson.questions.map((question) => question.type));
     if (formats.size < 5) {
@@ -199,11 +280,11 @@ export const lessonSchema = z
       if (primary?.type === alternate.question.type) {
         context.addIssue({ code: "custom", path: ["questionAlternates", index, "question", "type"], message: "Alternate must use a different format." });
       }
-      if (primary?.type === "dictation" && alternate.question.type === "dictation") {
-        context.addIssue({ code: "custom", path: ["questionAlternates", index, "question", "type"], message: "Dictation alternates cannot require listening." });
+      if (primary && isListeningQuestionFormat(primary.type) && isListeningQuestionFormat(alternate.question.type)) {
+        context.addIssue({ code: "custom", path: ["questionAlternates", index, "question", "type"], message: "Listening alternates cannot require listening." });
       }
     });
-    if (lesson.schemaVersion === 3 || lesson.schemaVersion === 4) {
+    if (lesson.schemaVersion >= 3) {
       if ((lesson.questionAlternates?.length ?? 0) !== lesson.questions.length) {
         context.addIssue({ code: "custom", path: ["questionAlternates"], message: "Schema-v3+ lessons need exactly one alternate per primary question." });
       }
@@ -219,8 +300,11 @@ export const lessonSchema = z
         if (question.evaluationMode !== QUESTION_FORMAT_REGISTRY[question.type].evaluationMode) {
           context.addIssue({ code: "custom", path: ["questions"], message: `${question.type} must use ${QUESTION_FORMAT_REGISTRY[question.type].evaluationMode} evaluation.` });
         }
-        if (question.type === "freeWriting" && (!question.supportBank || !question.supportBankSeparator)) {
+        if (lesson.schemaVersion < 5 && question.type === "freeWriting" && (!question.supportBank || !question.supportBankSeparator)) {
           context.addIssue({ code: "custom", path: ["questions"], message: `Free-writing question ${question.id} needs a support bank and separator.` });
+        }
+        if (lesson.schemaVersion === 5 && isWrittenAnswerFormat(question.type) && !question.answerBank) {
+          context.addIssue({ code: "custom", path: ["questions"], message: `${question.type} question ${question.id} needs an answer bank.` });
         }
       });
     }
@@ -253,10 +337,10 @@ export function parseEvaluation(value: unknown): Evaluation {
 export const lessonProgressSnapshotSchema = z
   .object({
     lessonId: id,
-    completedQuestionIds: z.array(id).max(19),
+    completedQuestionIds: z.array(id).max(24),
     attemptsByQuestion: z.record(id, z.number().int().min(0).max(100)),
-    firstTryCorrect: z.number().int().min(0).max(19),
-    totalQuestions: z.number().int().min(8).max(19),
+    firstTryCorrect: z.number().int().min(0).max(24),
+    totalQuestions: z.number().int().min(8).max(24),
     masteryPercent: z.number().min(0).max(100),
     updatedAt: z.string().datetime(),
   })
@@ -315,7 +399,7 @@ export function validateLessonForExpectation(lesson: Lesson, expectation: Lesson
   const errors: string[] = [];
   const allowedFormats = new Set(expectation.allowedFormats);
   const requiredTemplates = new Map(expectation.requiredTemplates.map((template) => [template.id, template.format]));
-  if (lesson.schemaVersion !== 4) errors.push("Generated lessons must use schemaVersion 4.");
+  if (lesson.schemaVersion !== 5) errors.push("Generated lessons must use schemaVersion 5.");
   if (new Set(lesson.questions.map((question) => question.type)).size < 5) {
     errors.push("Lesson must use at least five formats.");
   }
@@ -329,12 +413,18 @@ export function validateLessonForExpectation(lesson: Lesson, expectation: Lesson
   if (lesson.questions.some((question) => !allowedFormats.has(question.type))) {
     errors.push("Lesson contains a disabled question format.");
   }
+  if (lesson.questions.some((question) => !supportsQuestionFormatForLanguage(question.type, expectation.targetLanguage))) {
+    errors.push("Lesson contains a question format unavailable for the target language.");
+  }
   if (lesson.questions.some((question) => question.presentation !== undefined)) {
     errors.push("Generated questions must not provide presentation settings.");
   }
   lesson.questions.forEach((question) => {
     if (question.evaluationMode !== QUESTION_FORMAT_REGISTRY[question.type].evaluationMode) {
       errors.push(`${question.type} must use ${QUESTION_FORMAT_REGISTRY[question.type].evaluationMode} evaluation.`);
+    }
+    if (question.type === "characterTracing" && question.unavailableReason) {
+      errors.push(`Generated character tracing question ${question.id} cannot be unavailable.`);
     }
     if (!question.templateId) return;
     const requiredFormat = requiredTemplates.get(question.templateId);
@@ -358,8 +448,14 @@ export function validateLessonForExpectation(lesson: Lesson, expectation: Lesson
     if (question.evaluationMode !== QUESTION_FORMAT_REGISTRY[question.type].evaluationMode) {
       errors.push(`${question.type} alternate must use ${QUESTION_FORMAT_REGISTRY[question.type].evaluationMode} evaluation.`);
     }
-    if (primary?.type === "dictation" && question.type === "dictation") {
-      errors.push(`Dictation alternate ${question.id} cannot require listening.`);
+    if (primary && isListeningQuestionFormat(primary.type) && isListeningQuestionFormat(question.type)) {
+      errors.push(`Listening alternate ${question.id} cannot require listening.`);
+    }
+    if (!supportsQuestionFormatForLanguage(question.type, expectation.targetLanguage)) {
+      errors.push(`Alternate ${question.id} is unavailable for ${expectation.targetLanguage}.`);
+    }
+    if (question.type === "characterTracing" && question.unavailableReason) {
+      errors.push(`Generated character tracing alternate ${question.id} cannot be unavailable.`);
     }
   });
   lesson.questions.forEach((question) => {

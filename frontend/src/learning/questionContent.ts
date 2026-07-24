@@ -30,6 +30,11 @@ function questionTextCandidates(question: LessonQuestion): string[] {
     case "dictation": parts.push(question.transcript); break;
     case "speakingRepeat": parts.push(question.modelText); break;
     case "speakingRoleplay": parts.push(question.role, question.scenario, question.goal); break;
+    case "listenSelect":
+    case "soundDiscrimination": parts.push(question.audioText); break;
+    case "audioMatching": parts.push(...question.pairs.map((pair) => pair.audioText)); break;
+    case "flashcardRecall": parts.push(question.cue); break;
+    case "characterTracing": parts.push(question.character); break;
   }
   return parts;
 }
@@ -61,7 +66,15 @@ function answerTextCandidates(question: LessonQuestion, evaluation?: Evaluation 
     case "freeWriting":
       parts.push(...(question.supportBank ?? []).map((token) => token.label));
       break;
+    case "listenSelect":
+    case "soundDiscrimination":
+      parts.push(...question.options.map((option) => option.label));
+      break;
+    case "audioMatching":
+      parts.push(...question.pairs.flatMap((pair) => [pair.audioText, pair.label]));
+      break;
   }
+  parts.push(...(question.answerBank?.tokens ?? []).map((token) => token.label));
   if (evaluation?.correction) parts.push(evaluation.correction);
   return parts;
 }
@@ -93,8 +106,22 @@ export function questionVisibleTexts(question: LessonQuestion): string[] {
     case "freeWriting": parts.push(...(question.supportBank ?? []).map((token) => token.label)); break;
     case "speakingRepeat": parts.push(question.modelText); break;
     case "speakingRoleplay": parts.push(question.role, question.scenario, question.goal); break;
+    case "listenSelect":
+    case "soundDiscrimination":
+      parts.push(question.audioText, ...question.options.map((option) => option.label));
+      break;
+    case "audioMatching":
+      parts.push(...question.pairs.flatMap((pair) => [pair.audioText, pair.label]));
+      break;
+    case "flashcardRecall": parts.push(question.cue); break;
+    case "characterTracing":
+      parts.push(question.character);
+      if (question.meaning) parts.push(question.meaning);
+      if (question.reading) parts.push(question.reading);
+      break;
     case "shortAnswer": break;
   }
+  parts.push(...(question.answerBank?.tokens ?? []).map((token) => token.label));
   return parts.filter((part) => part.trim().length > 0);
 }
 
@@ -105,6 +132,7 @@ export function questionSpeechText(question: LessonQuestion): string {
   // Legacy lessons do not identify target-language spans. Only use fields whose
   // format guarantees that the stored text is in the language being learned.
   if (question.type === "dictation") return question.transcript;
+  if (question.type === "listenSelect" || question.type === "soundDiscrimination") return question.audioText;
   if (question.type === "speakingRepeat") return question.modelText;
   return "";
 }

@@ -1,0 +1,157 @@
+// @vitest-environment jsdom
+import { act, createElement, useState, type ReactNode } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GlossaryText } from "./GlossaryText";
+import { QuestionRenderer } from "./QuestionRenderer";
+import type { LessonQuestion, QuestionAnswer } from "./types";
+
+let root: Root | null = null;
+
+function button(label: string): HTMLButtonElement {
+  const match = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+    .find((candidate) => candidate.textContent?.trim().includes(label));
+  if (!match) throw new Error(`Button not found: ${label}`);
+  return match;
+}
+
+function Harness({ question, evaluated = false }: { question: LessonQuestion; evaluated?: boolean }) {
+  const [answer, setAnswer] = useState<QuestionAnswer>("");
+  return createElement(
+    "div",
+    null,
+    createElement(QuestionRenderer, {
+      question,
+      answer,
+      language: "English",
+      evaluated,
+      onChange: setAnswer,
+      renderText: (text, interactive) => createElement("span", { "data-answer-interactive": String(Boolean(interactive)) }, text),
+    }),
+    createElement("output", { id: "answer-value" }, JSON.stringify(answer)),
+  );
+}
+
+async function render(node: ReactNode) {
+  document.body.innerHTML = '<div class="app-shell"><div id="mount"></div></div>';
+  root = createRoot(document.querySelector("#mount")!);
+  await act(async () => root!.render(node));
+}
+
+beforeEach(() => {
+  Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+});
+
+afterEach(async () => {
+  vi.useRealTimers();
+  if (root) await act(async () => root?.unmount());
+  root = null;
+  document.body.innerHTML = "";
+});
+
+describe("QuestionRenderer interactions", () => {
+  it("locks correct matching pairs and clears a wrong pair without creating an answer", async () => {
+    vi.useFakeTimers();
+    const question: LessonQuestion = {
+      id: "matching",
+      type: "matching",
+      prompt: "Match",
+      explanation: "Pairs",
+      evaluationMode: "local",
+      pairs: [
+        { leftId: "water", left: "water", rightId: "nuoc", right: "nước" },
+        { leftId: "tea", left: "tea", rightId: "tra", right: "trà" },
+      ],
+    };
+    await render(createElement(Harness, { question }));
+
+    await act(async () => button("water").click());
+    await act(async () => button("trà").click());
+    expect(document.querySelector("#answer-value")?.textContent).toBe('""');
+    expect(document.querySelectorAll(".is-wrong")).toHaveLength(2);
+
+    await act(async () => vi.advanceTimersByTime(450));
+    await act(async () => button("water").click());
+    await act(async () => button("nước").click());
+    expect(document.querySelector("#answer-value")?.textContent).toContain('"water":"nuoc"');
+    expect(document.querySelectorAll(".pair-column > button.is-locked")).toHaveLength(2);
+  });
+
+  it("keeps duplicate-label bank tokens distinct and supports keyboard reordering", async () => {
+    const question: LessonQuestion = {
+      id: "writing",
+      type: "freeWriting",
+      prompt: "Write",
+      explanation: "Write",
+      evaluationMode: "ai",
+      minWords: 1,
+      maxWords: 20,
+      rubric: ["Clarity"],
+      answerBank: {
+        tokens: [
+          { id: "same-one", label: "same" },
+          { id: "same-two", label: "same" },
+          { id: "end", label: "end" },
+        ],
+        separator: "space",
+        defaultMode: "keyboard",
+      },
+    };
+    await render(createElement(Harness, { question }));
+    await act(async () => button("Word bank").click());
+    const bankButtons = document.querySelectorAll<HTMLButtonElement>(".token-bank button");
+    await act(async () => bankButtons[0].click());
+    await act(async () => bankButtons[1].click());
+    expect(document.querySelectorAll("[data-answer-token-id]")).toHaveLength(2);
+    expect(document.querySelector("#answer-value")?.textContent).toBe('"same same"');
+
+    const second = document.querySelector<HTMLButtonElement>('[data-answer-token-id="same-two"]')!;
+    await act(async () => second.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })));
+    expect(Array.from(document.querySelectorAll<HTMLElement>("[data-answer-token-id]")).map((element) => element.dataset.answerTokenId))
+      .toEqual(["same-two", "same-one"]);
+
+    await act(async () => button("Keyboard").click());
+    await act(async () => button("Word bank").click());
+    expect(Array.from(document.querySelectorAll<HTMLElement>("[data-answer-token-id]")).map((element) => element.dataset.answerTokenId))
+      .toEqual(["same-two", "same-one"]);
+    await act(async () => button("end").click());
+    expect(document.querySelector("#answer-value")?.textContent).toBe('"same same end"');
+  });
+
+  it("marks answer text interactive only after evaluation", async () => {
+    const question: LessonQuestion = {
+      id: "choice",
+      type: "singleChoice",
+      prompt: "Choose",
+      explanation: "Choice",
+      evaluationMode: "local",
+      options: [{ id: "water", label: "water" }, { id: "tea", label: "tea" }],
+      correctOptionId: "water",
+    };
+    await render(createElement(Harness, { question }));
+    expect(Array.from(document.querySelectorAll("[data-answer-interactive]")).every((node) => node.getAttribute("data-answer-interactive") === "false")).toBe(true);
+    await act(async () => root!.render(createElement(Harness, { question, evaluated: true })));
+    expect(Array.from(document.querySelectorAll("[data-answer-interactive]")).every((node) => node.getAttribute("data-answer-interactive") === "true")).toBe(true);
+  });
+
+  it("does not open a glossary tooltip for a locked answer", async () => {
+    await render(createElement(GlossaryText, {
+      text: "water",
+      glossary: [{ term: "water", meaning: "nước" }],
+      tooltipsEnabled: true,
+      interactive: false,
+    }));
+    const term = document.querySelector<HTMLElement>(".glossary-pronunciation")!;
+    await act(async () => term.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
+    expect(document.querySelector(".glossary-tooltip")).toBeNull();
+
+    await act(async () => root!.render(createElement(GlossaryText, {
+      text: "water",
+      glossary: [{ term: "water", meaning: "nước" }],
+      tooltipsEnabled: true,
+      interactive: true,
+    })));
+    await act(async () => document.querySelector<HTMLElement>(".glossary-term")!.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
+    expect(document.querySelector(".glossary-tooltip")?.textContent).toContain("nước");
+  });
+});

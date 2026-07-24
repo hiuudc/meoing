@@ -12,8 +12,26 @@ import {
 export const MAX_CUSTOM_QUESTION_TEMPLATES = 20;
 export const MAX_CUSTOM_TEMPLATE_NAME_LENGTH = 80;
 export const MAX_CUSTOM_TEMPLATE_GUIDANCE_LENGTH = 2_000;
+export const LISTENING_QUESTION_FORMATS = [
+  "dictation",
+  "listenSelect",
+  "audioMatching",
+  "soundDiscrimination",
+] as const satisfies readonly QuestionFormat[];
+export const WRITTEN_ANSWER_FORMATS = [
+  "fillBlank",
+  "multiCloze",
+  "translation",
+  "shortAnswer",
+  "errorCorrection",
+  "sentenceTransformation",
+  "dictation",
+  "freeWriting",
+] as const satisfies readonly QuestionFormat[];
 
 const formatSet = new Set<string>(QUESTION_FORMATS);
+const listeningFormatSet = new Set<QuestionFormat>(LISTENING_QUESTION_FORMATS);
+const writtenAnswerFormatSet = new Set<QuestionFormat>(WRITTEN_ANSWER_FORMATS);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -27,13 +45,26 @@ export function isSpeakingQuestionFormat(format: QuestionFormat): boolean {
   return QUESTION_FORMAT_REGISTRY[format].badge === "speaking";
 }
 
+export function isListeningQuestionFormat(format: QuestionFormat): boolean {
+  return listeningFormatSet.has(format);
+}
+
+export function isWrittenAnswerFormat(format: QuestionFormat): boolean {
+  return writtenAnswerFormatSet.has(format);
+}
+
+export function supportsQuestionFormatForLanguage(format: QuestionFormat, targetLanguage: string): boolean {
+  if (format !== "characterTracing") return true;
+  return ["chinese", "japanese", "korean"].includes(targetLanguage.trim().toLocaleLowerCase());
+}
+
 export function isAiGradedQuestionFormat(format: QuestionFormat): boolean {
   return QUESTION_FORMAT_REGISTRY[format].evaluationMode === "ai";
 }
 
 export function defaultPresentationForFormat(format: QuestionFormat): QuestionPresentationSettings {
   return {
-    readQuestion: format === "dictation" || format === "speakingRepeat",
+    readQuestion: isListeningQuestionFormat(format) || format === "speakingRepeat",
     readAnswers: false,
     wordTooltips: true,
   };
@@ -102,6 +133,12 @@ export function normalizeUnitQuestionSettings(value: unknown): UnitQuestionSetti
     enabledFormats: enabledFormats.length ? enabledFormats : [...QUESTION_FORMATS],
     formatPresentation,
     customTemplates,
+    characterTracing: {
+      requireStrokeOrder: !isRecord(source.characterTracing)
+        || typeof source.characterTracing.requireStrokeOrder !== "boolean"
+        ? true
+        : source.characterTracing.requireStrokeOrder,
+    },
   };
 }
 
@@ -110,17 +147,31 @@ export function getEffectiveUnitQuestionSettings(
   profile: LearningProfile,
 ): UnitQuestionSettings {
   const normalized = settings ? normalizeUnitQuestionSettings(settings) : normalizeUnitQuestionSettings({
-    enabledFormats: [...new Set([...profile.preferredFormats, "selectBlank" as const])],
+    enabledFormats: [...new Set([
+      ...profile.preferredFormats,
+      "selectBlank" as const,
+      "listenSelect" as const,
+      "audioMatching" as const,
+      "soundDiscrimination" as const,
+      "flashcardRecall" as const,
+      "characterTracing" as const,
+    ])],
   });
   const speakingAllowed = profile.speakingEnabled;
   return {
-    enabledFormats: normalized.enabledFormats.filter((format) => speakingAllowed || !isSpeakingQuestionFormat(format)),
+    enabledFormats: normalized.enabledFormats.filter((format) => (
+      (speakingAllowed || !isSpeakingQuestionFormat(format))
+      && supportsQuestionFormatForLanguage(format, profile.targetLanguage)
+    )),
     formatPresentation: normalized.formatPresentation,
     customTemplates: normalized.customTemplates.map((template) => ({
       ...template,
       presentation: { ...template.presentation },
-      enabled: template.enabled && (speakingAllowed || !isSpeakingQuestionFormat(template.baseFormat)),
+      enabled: template.enabled
+        && (speakingAllowed || !isSpeakingQuestionFormat(template.baseFormat))
+        && supportsQuestionFormatForLanguage(template.baseFormat, profile.targetLanguage),
     })),
+    characterTracing: { ...normalized.characterTracing },
   };
 }
 
@@ -211,6 +262,9 @@ export function decorateLessonPresentation(
       : effective.formatPresentation[question.type] ?? defaultPresentationForFormat(question.type);
     return {
       ...question,
+      ...(question.type === "characterTracing"
+        ? { requireStrokeOrder: effective.characterTracing.requireStrokeOrder }
+        : {}),
       presentation: { ...presentationSettings },
     };
   };

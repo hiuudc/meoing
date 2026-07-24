@@ -149,6 +149,36 @@ export function gradeAnswer(question: LessonQuestion, answer: QuestionAnswer): G
     case "speakingRepeat":
     case "speakingRoleplay":
       return ai("speaking");
+    case "listenSelect":
+    case "soundDiscrimination": {
+      const actual = asString(answer);
+      const expected = question.options.find((option) => option.id === question.correctOptionId)?.label
+        ?? question.correctOptionId;
+      return localResult(question, actual === question.correctOptionId ? 1 : 0, expected);
+    }
+    case "audioMatching": {
+      const answers = asMap(answer);
+      const correct = question.pairs.filter((pair) => answers[pair.audioId] === pair.matchId).length;
+      return localResult(
+        question,
+        correct / question.pairs.length,
+        question.pairs.map((pair) => `${pair.audioText} -> ${pair.label}`).join("; "),
+        "One or more audio pairs do not match.",
+      );
+    }
+    case "flashcardRecall":
+      return localResult(
+        question,
+        matchesAccepted(asString(answer), question.acceptedAnswers, question.match) ? 1 : 0,
+        question.acceptedAnswers[0],
+      );
+    case "characterTracing":
+      return localResult(
+        question,
+        asString(answer) === "passed" ? 1 : 0,
+        question.character,
+        "Complete the character trace before checking the answer.",
+      );
   }
 }
 
@@ -157,4 +187,22 @@ export function isAnswerEmpty(answer: QuestionAnswer): boolean {
   if (typeof answer === "boolean") return false;
   if (Array.isArray(answer)) return answer.length === 0;
   return Object.keys(answer).length === 0 || Object.values(answer).some((value) => !value.trim());
+}
+
+export function isAnswerComplete(question: LessonQuestion, answer: QuestionAnswer): boolean {
+  if (isAnswerEmpty(answer)) return false;
+  if (question.type === "multiCloze") {
+    const values = asMap(answer);
+    return question.blanks.every((blank) => Boolean(values[blank.id]?.trim()));
+  }
+  if (question.type === "matching") {
+    const values = asMap(answer);
+    return question.pairs.every((pair) => values[pair.leftId] === pair.rightId);
+  }
+  if (question.type === "audioMatching") {
+    const values = asMap(answer);
+    return question.pairs.every((pair) => values[pair.audioId] === pair.matchId);
+  }
+  if (question.type === "characterTracing") return asString(answer) === "passed";
+  return true;
 }

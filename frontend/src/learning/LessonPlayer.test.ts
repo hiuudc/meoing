@@ -154,6 +154,32 @@ afterEach(async () => {
 });
 
 describe("fullscreen lesson player", () => {
+  it("wraps backward focus from the initially focused dialog", async () => {
+    await renderPlayer();
+    await act(async () => {
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+    });
+    const dialog = document.querySelector<HTMLElement>(".lesson-fullscreen-dialog")!;
+    const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+    )).filter((element) => !element.hidden && element.getAttribute("aria-hidden") !== "true");
+    const lastFocusable = focusable[focusable.length - 1];
+    dialog.focus();
+
+    const keyEvent = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Tab",
+      shiftKey: true,
+    });
+    await act(async () => {
+      dialog.dispatchEvent(keyEvent);
+    });
+
+    expect(keyEvent.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(lastFocusable);
+  });
+
   it("keeps the mastered position on an incorrect retry and shows red feedback", async () => {
     await renderPlayer();
     expect(document.querySelector("#background")?.getAttribute("aria-hidden")).toBe("true");
@@ -472,12 +498,13 @@ describe("fullscreen lesson player", () => {
     };
     await renderPlayer({ lesson: lessonWithQuestions("writing-test", [writing]) });
     await setTextValue(document.querySelector<HTMLTextAreaElement>(".free-writing-response textarea")!, "I");
-    await act(async () => button("Use word bank").click());
+    await act(async () => button("Word bank").click());
     await act(async () => button("usually").click());
     await act(async () => button("then").click());
-    await act(async () => button("Move then up").click());
-    await act(async () => button("Remove usually").click());
-    await act(async () => button("Use keyboard").click());
+    const thenChip = document.querySelector<HTMLButtonElement>('[data-answer-token-id="then"]')!;
+    await act(async () => thenChip.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })));
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-answer-token-id="usually"]')!.click());
+    await act(async () => button("Keyboard").click());
 
     expect(document.querySelector<HTMLTextAreaElement>(".free-writing-response textarea")?.value).toBe("I then");
   });

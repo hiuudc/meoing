@@ -6,6 +6,7 @@ import {
   defaultPresentationForFormat,
   getEffectiveUnitQuestionSettings,
   isSpeakingQuestionFormat,
+  supportsQuestionFormatForLanguage,
   validateUnitQuestionSettings,
 } from "../learning/questionSettings";
 import { QuestionRenderer } from "../learning/QuestionRenderer";
@@ -45,7 +46,7 @@ interface GeneralDraft {
 
 function initialAnswer(question: LessonQuestion): QuestionAnswer {
   if (["multipleChoice", "wordBank", "reorderTokens", "reorderDialogue"].includes(question.type)) return [];
-  if (["multiCloze", "matching", "categorize"].includes(question.type)) return {};
+  if (["multiCloze", "matching", "audioMatching", "categorize"].includes(question.type)) return {};
   return "";
 }
 
@@ -144,7 +145,8 @@ function BlueprintEditor({
               <option
                 key={definition.id}
                 value={definition.id}
-                disabled={!speakingEnabled && definition.badge === "speaking"}
+                disabled={(!speakingEnabled && definition.badge === "speaking")
+                  || !supportsQuestionFormatForLanguage(definition.id, language)}
               >
                 {definition.label}
               </option>
@@ -317,7 +319,7 @@ export function UnitSettingsModal({ request, profile, onClose, onSave }: UnitSet
             <section id="unit-settings-questions-panel" role="tabpanel" aria-labelledby="unit-settings-questions-tab" className="unit-question-settings">
               <div className="question-settings-summary">
                 <div><span>Lesson size</span><strong>{profile.lessonQuestionCount} questions</strong></div>
-                <div><span>Enabled formats</span><strong>{questionSettings.enabledFormats.filter((format) => profile.speakingEnabled || !isSpeakingQuestionFormat(format)).length}/19</strong></div>
+                <div><span>Enabled formats</span><strong>{getEffectiveUnitQuestionSettings(questionSettings, profile).enabledFormats.length}/{QUESTION_FORMAT_DEFINITIONS.length}</strong></div>
                 <div><span>Enabled blueprints</span><strong>{questionSettings.customTemplates.filter((template) => template.enabled).length}/{profile.lessonQuestionCount}</strong></div>
               </div>
 
@@ -330,7 +332,10 @@ export function UnitSettingsModal({ request, profile, onClose, onSave }: UnitSet
               <div className="question-format-grid">
                 {QUESTION_FORMAT_DEFINITIONS.map((definition) => {
                   const speakingUnavailable = !profile.speakingEnabled && definition.badge === "speaking";
-                  const enabled = questionSettings.enabledFormats.includes(definition.id) && !speakingUnavailable;
+                  const languageUnavailable = !supportsQuestionFormatForLanguage(definition.id, profile.targetLanguage);
+                  const enabled = questionSettings.enabledFormats.includes(definition.id)
+                    && !speakingUnavailable
+                    && !languageUnavailable;
                   const formatPresentation = questionSettings.formatPresentation[definition.id]
                     ?? defaultPresentationForFormat(definition.id);
                   return (
@@ -340,7 +345,7 @@ export function UnitSettingsModal({ request, profile, onClose, onSave }: UnitSet
                           <input
                             type="checkbox"
                             checked={enabled}
-                            disabled={speakingUnavailable}
+                            disabled={speakingUnavailable || languageUnavailable}
                             onChange={(event) => updateFormatEnabled(definition.id, event.target.checked)}
                           />
                           <span>{definition.label}</span>
@@ -349,6 +354,24 @@ export function UnitSettingsModal({ request, profile, onClose, onSave }: UnitSet
                       </div>
                       <p>{definition.description}</p>
                       {speakingUnavailable ? <small>Collection speaking is disabled.</small> : null}
+                      {languageUnavailable ? <small>Available only when learning Chinese, Japanese, or Korean.</small> : null}
+                      {definition.id === "characterTracing" ? (
+                        <label className="character-tracing-order-toggle">
+                          <input
+                            type="checkbox"
+                            checked={questionSettings.characterTracing.requireStrokeOrder}
+                            disabled={!enabled}
+                            onChange={(event) => {
+                              setQuestionsDirty(true);
+                              setQuestionSettings((current) => ({
+                                ...current,
+                                characterTracing: { requireStrokeOrder: event.target.checked },
+                              }));
+                            }}
+                          />
+                          <span>Require stroke order</span>
+                        </label>
+                      ) : null}
                       <PresentationToggles
                         value={formatPresentation}
                         disabled={!enabled}

@@ -2612,7 +2612,9 @@ input[type="range"] {
 .unit-question-preview .question-text-response textarea,
 .unit-question-preview .mapping-response label,
 .unit-question-preview .token-bank button,
-.unit-question-preview .reorder-selected-list li {
+.unit-question-preview .reorder-selected-list li,
+.unit-question-preview .answer-tray,
+.unit-question-preview .pair-column > button {
   background: var(--bg-main);
 }
 

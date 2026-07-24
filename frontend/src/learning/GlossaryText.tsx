@@ -81,7 +81,7 @@ export function GlossaryText({
   }, [openGlossary]);
 
   function open(entry: GlossaryEntry, index: number, anchor: HTMLElement) {
-    if (!tooltipsEnabled) return;
+    if (!tooltipsEnabled || !interactive) return;
     setOpenGlossary({ entry, index, anchor });
   }
 
@@ -99,7 +99,7 @@ export function GlossaryText({
       {segments.map((segment, index) => segment.entry ? (
         <span
           key={`${index}-${segment.text}`}
-          className={tooltipsEnabled ? "glossary-term" : "glossary-pronunciation"}
+          className={tooltipsEnabled && interactive ? "glossary-term" : "glossary-pronunciation"}
           role={tooltipsEnabled && interactive ? "button" : undefined}
           tabIndex={tooltipsEnabled && interactive ? 0 : undefined}
           aria-describedby={tooltipsEnabled && interactive && openGlossary?.index === index ? tooltipId : undefined}

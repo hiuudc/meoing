@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { gradeAnswer, isAnswerEmpty } from "./grader";
+import { gradeAnswer, isAnswerComplete } from "./grader";
 import { GlossaryText } from "./GlossaryText";
 import { shouldFlushProgress } from "./progress";
 import { answerActivationSpeechText, answerSpeechText, questionSpeechText } from "./questionContent";
@@ -32,7 +32,7 @@ import {
   type LessonPlayerPreference,
 } from "./playerPreferences";
 import { getQuestionFormatDefinition } from "./questionRegistry";
-import { defaultPresentationForFormat } from "./questionSettings";
+import { defaultPresentationForFormat, isListeningQuestionFormat } from "./questionSettings";
 import { applyAttempt, createRetryState, masteryPercent, skipQuestion, useListeningAlternate, type RetryState } from "./retry";
 import {
   filterSpeechVoices,
@@ -85,7 +85,7 @@ const FOCUSABLE_SELECTOR = [
 
 function initialAnswer(question: LessonQuestion): QuestionAnswer {
   if (["multipleChoice", "wordBank", "reorderTokens", "reorderDialogue"].includes(question.type)) return [];
-  if (["multiCloze", "matching", "categorize"].includes(question.type)) return {};
+  if (["multiCloze", "matching", "audioMatching", "categorize"].includes(question.type)) return {};
   return "";
 }
 
@@ -302,7 +302,8 @@ export function LessonPlayer({
   useEffect(() => {
     if (
       !currentSlotId
-      || currentPrimaryQuestion?.type !== "dictation"
+      || !currentPrimaryQuestion
+      || !isListeningQuestionFormat(currentPrimaryQuestion.type)
       || playerPreference.listeningDisabledUntil <= Date.now()
       || retryState.alternateQuestionIds.includes(currentSlotId)
       || !alternateMap.has(currentSlotId)
@@ -393,7 +394,7 @@ export function LessonPlayer({
     }
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
-    if (event.shiftKey && document.activeElement === first) {
+    if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog)) {
       event.preventDefault();
       last.focus();
     } else if (!event.shiftKey && document.activeElement === last) {
@@ -416,8 +417,12 @@ export function LessonPlayer({
 
   async function submitAnswer() {
     if (!currentQuestion || evaluation || submitting) return;
-    if (isAnswerEmpty(answer) && !(speaking?.audio || speaking?.transcript)) {
-      setError("Enter or select an answer before checking it.");
+    if (!isAnswerComplete(currentQuestion, answer) && !(speaking?.audio || speaking?.transcript)) {
+      setError(currentQuestion.type === "matching" || currentQuestion.type === "audioMatching"
+        ? "Complete every matching pair before checking the answer."
+        : currentQuestion.type === "characterTracing"
+          ? "Complete the character trace before checking the answer."
+          : "Enter or select an answer before checking it.");
       return;
     }
     setError("");
@@ -476,13 +481,28 @@ export function LessonPlayer({
   }
 
   function pauseListeningExercises() {
-    if (!currentSlotId || currentQuestion?.type !== "dictation" || !alternateMap.has(currentSlotId)) return;
+    if (!currentSlotId || !currentQuestion || !isListeningQuestionFormat(currentQuestion.type) || !alternateMap.has(currentSlotId)) return;
     const nextPreference = pauseListening(playerPreference);
     setPlayerPreference(nextPreference);
     setNow(Date.now());
     const next = useListeningAlternate(retryState, currentSlotId, true);
     showRetryState(next);
     setNotice("Listening exercises are paused for 15 minutes and will use non-listening alternatives.");
+  }
+
+  function useCurrentAlternate(reason: string) {
+    if (!currentSlotId || retryState.alternateQuestionIds.includes(currentSlotId)) {
+      setError(reason);
+      return;
+    }
+    const alternate = alternateMap.get(currentSlotId);
+    if (!alternate) {
+      setError(`${reason} No alternate exercise is available for this saved lesson.`);
+      return;
+    }
+    const next = useListeningAlternate(retryState, currentSlotId, true);
+    showRetryState(next);
+    setNotice(`${reason} This slot will return as ${getQuestionFormatDefinition(alternate.type).label}.`);
   }
 
   async function restartLesson() {
@@ -661,9 +681,12 @@ export function LessonPlayer({
                 answer={answer}
                 language={lesson.targetLanguage}
                 disabled={Boolean(evaluation) || submitting}
+                evaluated={Boolean(evaluation)}
                 onChange={setAnswer}
                 onAnswerActivate={speakActivatedAnswer}
+                onSpeakTarget={speak}
                 onSpeakingChange={setSpeaking}
+                onRequireAlternate={() => useCurrentAlternate("This exercise is not supported on this device.")}
                 renderText={renderGlossaryText
                   ? (text, interactive = true) => <GlossaryText
                       text={text}
@@ -699,7 +722,7 @@ export function LessonPlayer({
               <button className="secondary-button" type="button" onClick={skipCurrentQuestion} disabled={submitting}>
                 <SkipForward size={16} /> Skip
               </button>
-              {currentSlotId && currentQuestion.type === "dictation" && alternateMap.has(currentSlotId) ? (
+              {currentSlotId && isListeningQuestionFormat(currentQuestion.type) && alternateMap.has(currentSlotId) ? (
                 <button className="secondary-button" type="button" onClick={pauseListeningExercises} disabled={submitting}>
                   <HeadphoneOff size={16} /> Can't listen now
                 </button>
@@ -843,7 +866,7 @@ export function LessonPlayer({
             </section>
             <section className="lesson-settings-section">
               <div className="lesson-settings-section-title"><strong>Listening</strong>{listeningPaused ? <span>{listeningCountdown(playerPreference.listeningDisabledUntil, now)}</span> : <span>Available</span>}</div>
-              <p>{listeningPaused ? "Dictation exercises use their non-listening alternative." : "Listening exercises are enabled."}</p>
+              <p>{listeningPaused ? "Listening exercises use their non-listening alternatives." : "Listening exercises are enabled."}</p>
               {listeningPaused ? <button className="secondary-button" type="button" onClick={() => setPlayerPreference((current) => enableListening(current))}>Enable listening now</button> : null}
             </section>
             <section className="lesson-settings-section">
@@ -888,7 +911,7 @@ export function LessonPlayer({
                 <input
                   id="lesson-voice-speed"
                   type="range"
-                  min="0.5"
+                  min="0.25"
                   max="2"
                   step="0.05"
                   value={speechPreference.rate}
@@ -896,7 +919,7 @@ export function LessonPlayer({
                   aria-valuetext={speechRateLabel}
                   onChange={(event) => setSpeechPreference((current) => ({ ...current, rate: Number(event.target.value) }))}
                 />
-                <small><span>0.5x</span><span>1x</span><span>1.5x</span><span>2x</span></small>
+                <small><span>0.25x</span><span>1x</span><span>1.5x</span><span>2x</span></small>
               </label>
               <p>Speech uses only {lesson.targetLanguage}. Read question plays automatically on each new exercise; answer speech starts only when you select an answer.</p>
             </section>

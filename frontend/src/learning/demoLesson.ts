@@ -207,15 +207,24 @@ function prompts(values: string[]): Record<QuestionFormat, string> {
     "multiCloze", "wordBank", "matching", "reorderTokens", "reorderDialogue",
     "categorize", "translation", "shortAnswer", "errorCorrection",
     "sentenceTransformation", "dictation", "freeWriting", "speakingRepeat",
-    "speakingRoleplay",
+    "speakingRoleplay", "listenSelect", "audioMatching", "soundDiscrimination",
+    "flashcardRecall", "characterTracing",
   ];
-  return Object.fromEntries(formats.map((format, index) => [format, values[index]])) as Record<QuestionFormat, string>;
+  const expanded = [
+    ...values,
+    values[15],
+    values[7],
+    values[15],
+    values[18],
+    values[3],
+  ];
+  return Object.fromEntries(formats.map((format, index) => [format, expanded[index]])) as Record<QuestionFormat, string>;
 }
 
 const SOURCE_COPY: Record<SupportedLanguage, DemoSourceCopy> = {
   English: {
     title: "Language-pair player demo",
-    summary: "A complete 19-format lesson preview using the selected spoken and learning languages.",
+    summary: "A complete 24-format lesson preview using the selected spoken and learning languages.",
     objective: "Recognize and produce a short everyday exchange.",
     theoryTitle: "Everyday communication",
     theoryBody: "Notice the target-language phrase, its meaning, and its natural word order.",
@@ -238,7 +247,7 @@ const SOURCE_COPY: Record<SupportedLanguage, DemoSourceCopy> = {
   },
   Vietnamese: {
     title: "Bài học mẫu theo cặp ngôn ngữ",
-    summary: "Bài học xem trước đủ 19 dạng câu hỏi bằng ngôn ngữ bạn nói và ngôn ngữ đang học.",
+    summary: "Bài học xem trước đủ 24 dạng câu hỏi bằng ngôn ngữ bạn nói và ngôn ngữ đang học.",
     objective: "Nhận biết và sử dụng một đoạn giao tiếp ngắn hằng ngày.",
     theoryTitle: "Giao tiếp hằng ngày",
     theoryBody: "Quan sát câu ở ngôn ngữ đích, ý nghĩa và trật tự từ tự nhiên của câu.",
@@ -261,7 +270,7 @@ const SOURCE_COPY: Record<SupportedLanguage, DemoSourceCopy> = {
   },
   Japanese: {
     title: "言語ペアのレッスンデモ",
-    summary: "話す言語と学習言語を使った19形式のプレビューレッスンです。",
+    summary: "話す言語と学習言語を使った24形式のプレビューレッスンです。",
     objective: "短い日常会話を理解して使います。",
     theoryTitle: "日常会話",
     theoryBody: "学習言語の表現、意味、自然な語順を確認しましょう。",
@@ -284,7 +293,7 @@ const SOURCE_COPY: Record<SupportedLanguage, DemoSourceCopy> = {
   },
   Spanish: {
     title: "Demostración de la pareja de idiomas",
-    summary: "Una lección de prueba con los 19 formatos y los idiomas seleccionados.",
+    summary: "Una lección de prueba con los 24 formatos y los idiomas seleccionados.",
     objective: "Reconocer y producir un intercambio cotidiano breve.",
     theoryTitle: "Comunicación cotidiana",
     theoryBody: "Observa la frase del idioma meta, su significado y su orden natural.",
@@ -306,7 +315,7 @@ const SOURCE_COPY: Record<SupportedLanguage, DemoSourceCopy> = {
   },
   Chinese: {
     title: "语言组合课程预览",
-    summary: "使用所选母语和学习语言的十九种题型预览。",
+    summary: "使用所选母语和学习语言的二十四种题型预览。",
     objective: "理解并使用简短的日常交流。",
     theoryTitle: "日常交流",
     theoryBody: "观察目标语言句子的含义和自然语序。",
@@ -327,7 +336,7 @@ const SOURCE_COPY: Record<SupportedLanguage, DemoSourceCopy> = {
   },
   Korean: {
     title: "언어 쌍 수업 미리보기",
-    summary: "선택한 모국어와 학습 언어를 사용하는 19개 문제 형식의 수업입니다.",
+    summary: "선택한 모국어와 학습 언어를 사용하는 24개 문제 형식의 수업입니다.",
     objective: "짧은 일상 대화를 이해하고 사용합니다.",
     theoryTitle: "일상 의사소통",
     theoryBody: "학습 언어 문장의 뜻과 자연스러운 어순을 확인하세요.",
@@ -349,7 +358,7 @@ const SOURCE_COPY: Record<SupportedLanguage, DemoSourceCopy> = {
   },
   French: {
     title: "Démo de la paire de langues",
-    summary: "Une leçon complète de 19 formats avec les langues sélectionnées.",
+    summary: "Une leçon complète de 24 formats avec les langues sélectionnées.",
     objective: "Reconnaître et produire un bref échange quotidien.",
     theoryTitle: "Communication quotidienne",
     theoryBody: "Observez la phrase cible, son sens et l'ordre naturel des mots.",
@@ -372,7 +381,7 @@ const SOURCE_COPY: Record<SupportedLanguage, DemoSourceCopy> = {
   },
   German: {
     title: "Vorschau für das Sprachenpaar",
-    summary: "Eine vollständige Vorschau mit 19 Aufgabenformaten und den gewählten Sprachen.",
+    summary: "Eine vollständige Vorschau mit 24 Aufgabenformaten und den gewählten Sprachen.",
     objective: "Einen kurzen Alltagsdialog verstehen und verwenden.",
     theoryTitle: "Alltagskommunikation",
     theoryBody: "Beachte den Zielsatz, seine Bedeutung und die natürliche Wortstellung.",
@@ -447,6 +456,15 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
   const selectWater = replaceFirst(target.drinkWater, target.water, "{{blank}}");
   const clozeSentence = target.tokens.map((token, index) => index === 0 ? token : "___").join(target.separator === "none" ? "" : " ");
   const glossary = uniqueGlossary(target, source);
+  const answerBank = (
+    values: string[],
+    idPrefix: string,
+    defaultMode: "keyboard" | "bank" = "bank",
+  ) => ({
+    tokens: [...new Set(values)].map((label, index) => ({ id: `${idPrefix}-${index}`, label })),
+    separator: target.separator,
+    defaultMode,
+  } as const);
   const question = <Type extends LessonQuestion["type"]>(
     value: Omit<Extract<LessonQuestion, { type: Type }>, "id" | "explanation" | "hint"> & { type: Type },
     index: number,
@@ -497,7 +515,8 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
       template: blankWater,
       acceptedAnswers: [target.water],
       match: { ignorePunctuation: true },
-      glossaryTargets: [target.tokens[0]],
+      answerBank: answerBank([target.water, target.tea, target.student, target.teacher], "fill"),
+      glossaryTargets: [target.tokens[0], target.water, target.tea, target.student, target.teacher],
     }, 4),
     question({
       type: "selectBlank",
@@ -522,7 +541,8 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
         { id: "object", acceptedAnswers: [target.tokens[2]] },
       ],
       match: { ignorePunctuation: true },
-      glossaryTargets: [target.tokens[0]],
+      answerBank: answerBank([...target.tokens, target.tea, target.teacher], "cloze"),
+      glossaryTargets: [...target.tokens, target.tea, target.teacher],
     }, 6),
     question({
       type: "wordBank",
@@ -587,7 +607,8 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
       targetLanguage: profile.targetLanguage,
       referenceAnswer: target.drinkWater,
       rubric: [copy.objective],
-      glossaryTargets: [],
+      answerBank: answerBank([target.drinkWater, ...target.tokens, target.drinkTea], "translation"),
+      glossaryTargets: [target.drinkWater, ...target.tokens, target.drinkTea],
     }, 12),
     question({
       type: "shortAnswer",
@@ -596,6 +617,12 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
       referenceAnswer: source.drinkWater,
       requiredIdeas: [source.water],
       rubric: [copy.objective],
+      answerBank: {
+        tokens: [source.drinkWater, source.water, source.tea, source.student]
+          .map((label, index) => ({ id: `short-${index}`, label })),
+        separator: source.separator,
+        defaultMode: "keyboard",
+      },
       glossaryTargets: [target.drinkWater],
     }, 13),
     question({
@@ -605,7 +632,8 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
       incorrectText: target.drinkTea,
       acceptedAnswers: [target.drinkTea],
       match: { ignorePunctuation: true },
-      glossaryTargets: [target.drinkTea],
+      answerBank: answerBank([target.drinkTea, ...target.tokens, target.water, target.tea], "correction"),
+      glossaryTargets: [target.drinkTea, ...target.tokens, target.water, target.tea],
     }, 14),
     question({
       type: "sentenceTransformation",
@@ -615,7 +643,8 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
       constraint: copy.prompts.sentenceTransformation,
       acceptedAnswers: [target.askWater],
       match: { ignorePunctuation: true },
-      glossaryTargets: [target.drinkWater],
+      answerBank: answerBank([target.askWater, target.drinkWater, target.water, target.tea], "transform"),
+      glossaryTargets: [target.drinkWater, target.askWater, target.water, target.tea],
     }, 15),
     question({
       type: "dictation",
@@ -624,7 +653,8 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
       transcript: target.morning,
       acceptedAnswers: [target.morning],
       match: { ignorePunctuation: true },
-      glossaryTargets: [target.morning],
+      answerBank: answerBank([target.morning, target.hello, target.thanks, target.water], "dictation"),
+      glossaryTargets: [target.morning, target.hello, target.thanks, target.water],
     }, 16),
     question({
       type: "freeWriting",
@@ -638,6 +668,10 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
         target.tea, target.student, target.teacher, target.drinkWater,
       ].map((label, index) => ({ id: `support-${index}`, label })),
       supportBankSeparator: target.separator,
+      answerBank: answerBank([
+        target.hello, target.morning, target.thanks, target.water,
+        target.tea, target.student, target.teacher, target.drinkWater,
+      ], "writing", "keyboard"),
       glossaryTargets: [
         target.hello, target.morning, target.thanks, target.water,
         target.tea, target.student, target.teacher, target.drinkWater,
@@ -661,10 +695,75 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
       rubric: [copy.objective],
       glossaryTargets: [target.askWater],
     }, 19),
+    question({
+      type: "listenSelect",
+      evaluationMode: "local",
+      prompt: copy.prompts.listenSelect,
+      audioText: target.morning,
+      options: [
+        { id: "listen-morning", label: target.morning },
+        { id: "listen-hello", label: target.hello },
+        { id: "listen-thanks", label: target.thanks },
+      ],
+      correctOptionId: "listen-morning",
+      glossaryTargets: [target.morning, target.hello, target.thanks],
+    }, 20),
+    question({
+      type: "audioMatching",
+      evaluationMode: "local",
+      prompt: copy.prompts.audioMatching,
+      pairs: [
+        { audioId: "audio-water", audioText: target.water, matchId: "meaning-water", label: source.water },
+        { audioId: "audio-tea", audioText: target.tea, matchId: "meaning-tea", label: source.tea },
+        { audioId: "audio-student", audioText: target.student, matchId: "meaning-student", label: source.student },
+      ],
+      glossaryTargets: [target.water, target.tea, target.student],
+    }, 21),
+    question({
+      type: "soundDiscrimination",
+      evaluationMode: "local",
+      prompt: copy.prompts.soundDiscrimination,
+      audioText: target.water,
+      options: [
+        { id: "sound-water", label: target.water },
+        { id: "sound-tea", label: target.tea },
+        { id: "sound-teacher", label: target.teacher },
+      ],
+      correctOptionId: "sound-water",
+      glossaryTargets: [target.water, target.tea, target.teacher],
+    }, 22),
+    question({
+      type: "flashcardRecall",
+      evaluationMode: "local",
+      prompt: copy.prompts.flashcardRecall,
+      cue: source.water,
+      acceptedAnswers: [target.water],
+      match: { ignorePunctuation: true },
+      glossaryTargets: [],
+    }, 23),
+    question({
+      type: "characterTracing",
+      evaluationMode: "local",
+      prompt: copy.prompts.characterTracing,
+      character: target.water,
+      meaning: source.water,
+      reading: target.pronunciation?.water?.romanized ?? target.pronunciation?.water?.native,
+      requireStrokeOrder: true,
+      unavailableReason: ["Chinese", "Japanese", "Korean"].includes(profile.targetLanguage)
+        ? undefined
+        : `Character tracing is not available for ${profile.targetLanguage}.`,
+      glossaryTargets: [target.water],
+    }, 24),
   ];
 
   const questionAlternates = questions.map((primary, index) => {
-    const sourceQuestion = questions[(index + 1) % questions.length];
+    const listeningFormats = new Set(["dictation", "listenSelect", "audioMatching", "soundDiscrimination"]);
+    const sourceQuestion = Array.from({ length: questions.length - 1 }, (_, offset) => (
+      questions[(index + offset + 1) % questions.length]
+    )).find((candidate) => (
+      candidate.type !== primary.type
+      && (!listeningFormats.has(primary.type) || !listeningFormats.has(candidate.type))
+    )) ?? questions[(index + 1) % questions.length];
     const { templateId: _templateId, presentation: _presentation, ...alternate } = sourceQuestion;
     return {
       questionId: primary.id,
@@ -673,7 +772,7 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
   });
 
   return decorateLessonPresentation({
-    schemaVersion: 4,
+    schemaVersion: 5,
     id: `${prefix}-lesson`,
     unitId,
     title: `${copy.title}: ${profile.sourceLanguage} → ${profile.targetLanguage}`,

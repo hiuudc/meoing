@@ -112,7 +112,7 @@ export function normalizeSpeechPreference(value: unknown): BrowserSpeechPreferen
   return {
     version: SPEECH_PREFERENCE_VERSION,
     voiceURI: typeof source.voiceURI === "string" ? source.voiceURI.slice(0, 500) : "",
-    rate: Math.min(2, Math.max(0.5, rawRate)),
+    rate: Math.min(2, Math.max(0.25, rawRate)),
   };
 }
 

@@ -19,12 +19,16 @@ interface SpeechRecognitionEventLike extends Event {
   results: ArrayLike<SpeechRecognitionResultLike>;
 }
 
+interface SpeechRecognitionErrorEventLike extends Event {
+  error?: string;
+}
+
 interface SpeechRecognitionLike {
   continuous: boolean;
   interimResults: boolean;
   lang: string;
   onresult: ((event: SpeechRecognitionEventLike) => void) | null;
-  onerror: (() => void) | null;
+  onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null;
   start(): void;
   stop(): void;
 }
@@ -41,6 +45,8 @@ declare global {
 interface SpeakingRecorderProps {
   language?: string;
   disabled?: boolean;
+  requireRecognition?: boolean;
+  onUnavailable?: () => void;
   onChange: (submission: SpeakingSubmission | null) => void;
   onTranscriptChange: (transcript: string) => void;
 }
@@ -49,11 +55,22 @@ function speechRecognitionConstructor(): SpeechRecognitionConstructor | undefine
   return window.SpeechRecognition ?? window.webkitSpeechRecognition;
 }
 
+export function supportsSpeechRecognition(): boolean {
+  return typeof window !== "undefined" && Boolean(speechRecognitionConstructor());
+}
+
 function countWords(value: string): number {
   return value.trim() ? value.trim().split(/\s+/).length : 0;
 }
 
-export function SpeakingRecorder({ language = "en-US", disabled, onChange, onTranscriptChange }: SpeakingRecorderProps) {
+export function SpeakingRecorder({
+  language = "en-US",
+  disabled,
+  requireRecognition = false,
+  onUnavailable,
+  onChange,
+  onTranscriptChange,
+}: SpeakingRecorderProps) {
   const [state, setState] = useState<"idle" | "recording" | "recorded">("idle");
   const [audioUrl, setAudioUrl] = useState("");
   const [elapsedMs, setElapsedMs] = useState(0);
@@ -66,6 +83,13 @@ export function SpeakingRecorder({ language = "en-US", disabled, onChange, onTra
   const lastSpeechAtRef = useRef(0);
   const pauseCountRef = useRef(0);
   const transcriptRef = useRef("");
+  const unavailableReportedRef = useRef(false);
+
+  function reportUnavailable() {
+    if (unavailableReportedRef.current) return;
+    unavailableReportedRef.current = true;
+    onUnavailable?.();
+  }
 
   useEffect(() => {
     if (state !== "recording") return;
@@ -100,7 +124,10 @@ export function SpeakingRecorder({ language = "en-US", disabled, onChange, onTra
 
   function startRecognition() {
     const Recognition = speechRecognitionConstructor();
-    if (!Recognition) return;
+    if (!Recognition) {
+      if (requireRecognition) reportUnavailable();
+      return;
+    }
     try {
       const recognition = new Recognition();
       recognition.continuous = true;
@@ -115,13 +142,17 @@ export function SpeakingRecorder({ language = "en-US", disabled, onChange, onTra
         transcriptRef.current = transcript.trim();
         onTranscriptChange(transcriptRef.current);
       };
-      recognition.onerror = () => {
+      recognition.onerror = (event) => {
         recognitionRef.current = null;
+        if (requireRecognition && ["not-allowed", "service-not-allowed", "audio-capture"].includes(event.error ?? "")) {
+          reportUnavailable();
+        }
       };
       recognition.start();
       recognitionRef.current = recognition;
     } catch {
       recognitionRef.current = null;
+      if (requireRecognition) reportUnavailable();
     }
   }
 
@@ -133,11 +164,20 @@ export function SpeakingRecorder({ language = "en-US", disabled, onChange, onTra
     pauseCountRef.current = 0;
     lastSpeechAtRef.current = 0;
     startedAtRef.current = Date.now();
+    unavailableReportedRef.current = false;
+    if (requireRecognition && !supportsSpeechRecognition()) {
+      setError("Speech Recognition is unavailable. Switching to an alternate exercise.");
+      reportUnavailable();
+      return;
+    }
     startRecognition();
 
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
       if (!speechRecognitionConstructor()) {
-        setError("This browser does not support recording or Speech Recognition. Enter a transcript below instead.");
+        setError(requireRecognition
+          ? "This browser does not support Speech Recognition. Switching to an alternate exercise."
+          : "This browser does not support recording or Speech Recognition.");
+        if (requireRecognition) reportUnavailable();
         return;
       }
       setState("recording");
@@ -184,7 +224,10 @@ export function SpeakingRecorder({ language = "en-US", disabled, onChange, onTra
     } catch {
       recognitionRef.current?.stop();
       recognitionRef.current = null;
-      setError("The microphone could not be accessed. You can still enter a transcript for content feedback.");
+      setError(requireRecognition
+        ? "The microphone could not be accessed. Switching to an alternate exercise."
+        : "The microphone could not be accessed.");
+      if (requireRecognition) reportUnavailable();
       setState("idle");
     }
   }
