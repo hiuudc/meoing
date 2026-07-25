@@ -1,5 +1,5 @@
 import { LoaderCircle, Play, RotateCcw } from "lucide-react";
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import type { CharacterJson, Point } from "hanzi-writer";
 import type { CharacterTracingQuestion, QuestionAnswer } from "./types";
 import { loadStrokeCharacterData } from "./strokeData";
@@ -12,6 +12,7 @@ interface CharacterTracingResponseProps {
   onChange: (answer: QuestionAnswer) => void;
   onUnavailable?: () => void;
   onStart?: () => void;
+  strokeTolerance?: number;
 }
 
 interface DrawnStroke {
@@ -156,13 +157,40 @@ export function CharacterTracingResponse({
   onChange,
   onUnavailable,
   onStart,
+  strokeTolerance = 1,
 }: CharacterTracingResponseProps) {
   const targetRef = useRef<HTMLDivElement>(null);
   const writerRef = useRef<import("hanzi-writer").default | null>(null);
   const [data, setData] = useState<CharacterJson | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [error, setError] = useState(question.unavailableReason ?? "");
+  const [quizMessage, setQuizMessage] = useState("Follow the stroke order. A hint appears after two misses.");
+  const [animating, setAnimating] = useState(false);
   const completed = answer === "passed";
+
+  const startQuiz = useCallback((writer: import("hanzi-writer").default) => {
+    setQuizMessage("Follow the stroke order. A hint appears after two misses.");
+    void writer.quiz({
+      leniency: strokeTolerance,
+      showHintAfterMisses: 2,
+      highlightOnComplete: true,
+      onMistake: ({ strokeNum, mistakesOnStroke }) => {
+        if (writerRef.current !== writer) return;
+        setQuizMessage(`Stroke ${strokeNum + 1} was not recognized. Miss ${mistakesOnStroke}; follow the highlighted path.`);
+      },
+      onCorrectStroke: ({ strokeNum, strokesRemaining }) => {
+        if (writerRef.current !== writer) return;
+        setQuizMessage(strokesRemaining
+          ? `Stroke ${strokeNum + 1} accepted. ${strokesRemaining} remaining.`
+          : "Final stroke accepted.");
+      },
+      onComplete: () => {
+        if (writerRef.current !== writer) return;
+        setQuizMessage("Tracing complete.");
+        onChange("passed");
+      },
+    });
+  }, [onChange, strokeTolerance]);
 
   useEffect(() => {
     let active = true;
@@ -192,6 +220,7 @@ export function CharacterTracingResponse({
   useEffect(() => {
     if (!question.requireStrokeOrder || !data || !targetRef.current || disabled) return;
     let active = true;
+    setAnimating(false);
     const target = targetRef.current;
     target.replaceChildren();
     void import("hanzi-writer").then(({ default: HanziWriter }) => {
@@ -209,18 +238,14 @@ export function CharacterTracingResponse({
         charDataLoader: () => data,
       });
       writerRef.current = writer;
-      void writer.quiz({
-        showHintAfterMisses: 2,
-        highlightOnComplete: true,
-        onComplete: () => onChange("passed"),
-      });
+      startQuiz(writer);
     });
     return () => {
       active = false;
       writerRef.current?.cancelQuiz();
       writerRef.current = null;
     };
-  }, [data, disabled, onChange, question.character, question.requireStrokeOrder]);
+  }, [data, disabled, question.character, question.requireStrokeOrder, startQuiz]);
 
   return (
     <section className="character-tracing-response" aria-label={`Trace ${question.character}`}>
@@ -242,28 +267,29 @@ export function CharacterTracingResponse({
         <>
           <div className="hanzi-writer-target" ref={targetRef} onPointerDown={onStart} />
           <div className="tracing-instruction">
-            <p>{completed ? "Tracing complete." : "Follow the stroke order. A hint appears after two misses."}</p>
+            <p role="status">{completed ? "Tracing complete." : quizMessage}</p>
             <button
               type="button"
               className="icon-text-button"
               onClick={() => {
                 const writer = writerRef.current;
-                if (!writer) return;
+                if (!writer || animating) return;
+                setAnimating(true);
+                setQuizMessage("Animating the complete stroke order...");
                 writer.cancelQuiz();
                 void writer.animateCharacter({
-                  onComplete: () => {
-                    if (disabled || completed) return;
-                    void writer.quiz({
-                      showHintAfterMisses: 2,
-                      highlightOnComplete: true,
-                      onComplete: () => onChange("passed"),
-                    });
+                  onComplete: ({ canceled }) => {
+                    if (writerRef.current !== writer) return;
+                    setAnimating(false);
+                    if (canceled || disabled || completed) return;
+                    startQuiz(writer);
                   },
                 });
               }}
-              disabled={disabled}
+              disabled={disabled || animating}
             >
-              <Play size={15} /> Animate strokes
+              {animating ? <LoaderCircle className="spin" size={15} /> : <Play size={15} />}
+              {animating ? "Animating..." : "Animate strokes"}
             </button>
           </div>
         </>

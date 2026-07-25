@@ -263,7 +263,10 @@ export function LessonPlayer({
       element.inert = true;
       element.setAttribute("aria-hidden", "true");
     });
-    const frame = window.requestAnimationFrame(() => dialogRef.current?.focus());
+    const frame = window.requestAnimationFrame(() => {
+      const initialFocus = dialogRef.current?.querySelector<HTMLElement>(".answer-composer") ?? dialogRef.current;
+      initialFocus?.focus();
+    });
     return () => {
       window.cancelAnimationFrame(frame);
       document.body.style.overflow = previousOverflow;
@@ -378,6 +381,7 @@ export function LessonPlayer({
   }
 
   function handleDialogKeyDown(event: React.KeyboardEvent<HTMLElement>) {
+    if (event.defaultPrevented) return;
     if (event.key === "Escape") {
       event.preventDefault();
       if (speechOpen) {
@@ -388,6 +392,33 @@ export function LessonPlayer({
       } else {
         void requestExit();
       }
+      return;
+    }
+    if (event.key === "Enter") {
+      if (
+        event.repeat
+        || event.nativeEvent.isComposing
+        || event.nativeEvent.keyCode === 229
+        || speechOpen
+        || theoryOpen
+      ) return;
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      const button = target?.closest("button");
+      const coachForm = target?.closest(".lesson-coach-chat form");
+      if (coachForm) {
+        if (button) return;
+        if (target instanceof HTMLTextAreaElement && event.shiftKey) return;
+        event.preventDefault();
+        if (coachDraft.trim() && coachingAvailable && !coachSending) void sendCoachMessage();
+        return;
+      }
+      if (button && !button.classList.contains("answer-token")) return;
+      if (target instanceof HTMLSelectElement) return;
+      if (target instanceof HTMLTextAreaElement && event.shiftKey) return;
+      if (!currentQuestion) return;
+      event.preventDefault();
+      if (evaluation) continueLesson();
+      else void submitAnswer();
       return;
     }
     if (event.key !== "Tab") return;
@@ -636,6 +667,7 @@ export function LessonPlayer({
         interactive={interactive}
         termClassName={isExactTargetText ? undefined : "lesson-target-text"}
         termLang={isExactTargetText ? undefined : targetLanguageTag}
+        onTermActivate={speak}
       />
     ) : text;
     return isExactTargetText ? (

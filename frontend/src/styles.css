@@ -2659,6 +2659,45 @@ input[type="range"] {
   align-content: center;
 }
 
+.letters-tolerance-control {
+  display: grid;
+  width: min(100%, 360px);
+  gap: 7px;
+  margin: 18px auto 0;
+  padding: 12px 14px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+}
+
+.letters-tolerance-control > span,
+.letters-tolerance-control > small {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.letters-tolerance-control > span {
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.letters-tolerance-control output {
+  color: var(--accent-readable);
+  font-weight: 800;
+}
+
+.letters-tolerance-control input {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.letters-tolerance-control > small {
+  color: var(--text-muted);
+  font-size: 9px;
+}
+
 .letters-practice-dialog > footer {
   display: grid;
   grid-template-columns: auto auto minmax(130px, 1fr);

@@ -195,6 +195,94 @@ describe("fullscreen lesson player", () => {
     expect(document.querySelector("#lesson-player-title")?.textContent).toContain("second answer");
   });
 
+  it("uses Enter to check and continue while ignoring composition and open settings", async () => {
+    await renderPlayer();
+    await selectAnswer("a");
+    const dialog = document.querySelector<HTMLElement>(".lesson-fullscreen-dialog")!;
+
+    await act(async () => dialog.dispatchEvent(new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      isComposing: true,
+      key: "Enter",
+    })));
+    expect(document.querySelector(".lesson-feedback-tray")).toBeNull();
+
+    await act(async () => button("Lesson settings").click());
+    await act(async () => dialog.dispatchEvent(new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Enter",
+    })));
+    expect(document.querySelector(".lesson-feedback-tray")).toBeNull();
+    await act(async () => button("Close lesson settings").click());
+
+    await act(async () => dialog.dispatchEvent(new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Enter",
+    })));
+    expect(document.querySelector(".lesson-feedback-tray.is-correct")).not.toBeNull();
+
+    await act(async () => dialog.dispatchEvent(new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Enter",
+    })));
+    expect(document.querySelector("#lesson-player-title")?.textContent).toContain("second answer");
+  });
+
+  it("checks an answer textarea with Enter and preserves Shift+Enter for a newline", async () => {
+    const writing: LessonQuestion = {
+      id: "enter-writing",
+      type: "freeWriting",
+      prompt: "Write an answer",
+      explanation: "Use a complete sentence.",
+      evaluationMode: "ai",
+      minWords: 1,
+      maxWords: 20,
+      rubric: ["Clarity"],
+    };
+    const onEvaluate = vi.fn(async () => ({
+      status: "correct" as const,
+      score: 1,
+      correctParts: ["Complete sentence"],
+      errors: [],
+      correction: "A complete sentence.",
+      explanation: "The response is clear.",
+      nextHint: "",
+    }));
+    await renderPlayer({
+      lesson: lessonWithQuestions("enter-writing-test", [writing]),
+      onEvaluate,
+    });
+    const textarea = document.querySelector<HTMLTextAreaElement>(".free-writing-response textarea")!;
+    await setTextValue(textarea, "A complete sentence.");
+
+    const shiftEnter = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Enter",
+      shiftKey: true,
+    });
+    await act(async () => textarea.dispatchEvent(shiftEnter));
+    expect(shiftEnter.defaultPrevented).toBe(false);
+    expect(onEvaluate).not.toHaveBeenCalled();
+
+    const enter = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Enter",
+    });
+    await act(async () => {
+      textarea.dispatchEvent(enter);
+      await Promise.resolve();
+    });
+    expect(enter.defaultPrevented).toBe(true);
+    expect(onEvaluate).toHaveBeenCalledTimes(1);
+    expect(document.querySelector(".lesson-feedback-tray.is-correct")).not.toBeNull();
+  });
+
   it("flushes pending progress before calling the explicit exit callback", async () => {
     const order: string[] = [];
     const onProgressBatch = vi.fn(async () => { order.push("progress"); });
@@ -226,7 +314,24 @@ describe("fullscreen lesson player", () => {
       setter?.call(textarea, "Why is A correct?");
       textarea.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    await act(async () => button("Send coaching message").click());
+    const shiftEnter = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Enter",
+      shiftKey: true,
+    });
+    await act(async () => textarea.dispatchEvent(shiftEnter));
+    expect(shiftEnter.defaultPrevented).toBe(false);
+    expect(onAskCoach).not.toHaveBeenCalled();
+
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "Enter",
+      }));
+      await Promise.resolve();
+    });
 
     expect(onAskCoach).toHaveBeenCalledWith(
       expect.objectContaining({ id: "q1" }),
@@ -486,6 +591,35 @@ describe("fullscreen lesson player", () => {
     expect(document.querySelector("ruby rt")?.textContent).toBe("\u307f\u305a");
   });
 
+  it("speaks the exact target term on tooltip hover independently of read settings", async () => {
+    speechVoices = [speechVoice("Japanese", "ja-JP", "voice-ja", true)];
+    const question = {
+      ...lesson.questions[0],
+      id: "tooltip-speech-question",
+      prompt: "Choose \u6c34",
+      glossaryTargets: ["\u6c34"],
+      presentation: { readQuestion: false, readAnswers: false, wordTooltips: true },
+    } as LessonQuestion;
+    await renderPlayer({
+      lesson: {
+        ...lessonWithQuestions("tooltip-speech-test", [question], undefined, [{
+          term: "\u6c34",
+          meaning: "water",
+          pronunciation: { native: "\u307f\u305a", romanized: "mizu" },
+        }]),
+        targetLanguage: "Japanese",
+      },
+    });
+    const cancelCount = vi.mocked(window.speechSynthesis.cancel).mock.calls.length;
+    const term = document.querySelector<HTMLElement>("#lesson-player-title .glossary-term")!;
+
+    await act(async () => term.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
+
+    expect(spokenUtterances).toHaveLength(1);
+    expect(spokenUtterances[0]).toMatchObject({ text: "\u6c34", lang: "ja-JP" });
+    expect(window.speechSynthesis.cancel).toHaveBeenCalledTimes(cancelCount + 1);
+  });
+
   it("keeps a free-writing draft while adding, removing, and reordering word-bank chips", async () => {
     const writing: LessonQuestion = {
       id: "writing",
@@ -507,6 +641,12 @@ describe("fullscreen lesson player", () => {
     await renderPlayer({ lesson: lessonWithQuestions("writing-test", [writing, { ...writing, id: "writing-two" }]) });
     await setTextValue(document.querySelector<HTMLTextAreaElement>(".free-writing-response textarea")!, "I");
     await act(async () => button("Use word bank").click());
+    const composer = document.querySelector<HTMLElement>(".answer-composer")!;
+    await act(async () => composer.dispatchEvent(new KeyboardEvent("keydown", { key: "w", bubbles: true })));
+    expect(document.querySelectorAll(".is-typeahead-match").length).toBeGreaterThanOrEqual(2);
+    await act(async () => composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(document.querySelector(".lesson-fullscreen-dialog")).not.toBeNull();
+    expect(document.querySelector(".is-typeahead-match")).toBeNull();
     await act(async () => button("usually").click());
     await act(async () => button("then").click());
     const thenChip = document.querySelector<HTMLButtonElement>('[data-answer-token-id="then"]')!;

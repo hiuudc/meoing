@@ -24,6 +24,8 @@ import {
   getLettersLanguageProgress,
   getCharacterWindow,
   INTERNAL_CHARACTER_READINGS,
+  MAX_STROKE_TOLERANCE,
+  MIN_STROKE_TOLERANCE,
   loadLettersProgress,
   matchesCharacterQuery,
   saveLettersProgress,
@@ -68,10 +70,12 @@ interface LettersPracticeProps {
   language: string;
   metadata?: CharacterMetadata;
   requireStrokeOrder: boolean;
+  strokeTolerance: number;
   onClose: () => void;
   onSelect: (character: string) => void;
   onStart: (character: string) => void;
   onMastered: (character: string) => void;
+  onStrokeToleranceChange: (value: number) => void;
 }
 
 const GRID_ROW_HEIGHT = 100;
@@ -205,10 +209,12 @@ function LettersPractice({
   language,
   metadata,
   requireStrokeOrder,
+  strokeTolerance,
   onClose,
   onSelect,
   onStart,
   onMastered,
+  onStrokeToleranceChange,
 }: LettersPracticeProps) {
   const closeRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLElement>(null);
@@ -288,6 +294,12 @@ function LettersPractice({
   };
   const completed = answer === "passed";
 
+  function changeStrokeTolerance(value: number) {
+    setAnswer("");
+    setRunId((current) => current + 1);
+    onStrokeToleranceChange(value);
+  }
+
   return createPortal(
     <div className="letters-practice-backdrop">
       <section ref={dialogRef} className="letters-practice-dialog" role="dialog" aria-modal="true" aria-labelledby="letters-practice-title">
@@ -307,7 +319,25 @@ function LettersPractice({
             answer={answer}
             onStart={handleStart}
             onChange={handleAnswerChange}
+            strokeTolerance={strokeTolerance}
           />
+          {requireStrokeOrder ? (
+            <label className="letters-tolerance-control">
+              <span>
+                <strong>Stroke tolerance</strong>
+                <output>{strokeTolerance.toFixed(1)}x</output>
+              </span>
+              <input
+                type="range"
+                min={MIN_STROKE_TOLERANCE}
+                max={MAX_STROKE_TOLERANCE}
+                step={0.1}
+                value={strokeTolerance}
+                onChange={(event) => changeStrokeTolerance(Number(event.target.value))}
+              />
+              <small><span>Strict</span><span>Standard</span><span>Forgiving</span></small>
+            </label>
+          ) : null}
         </main>
         <footer>
           <button
@@ -589,10 +619,15 @@ export function LettersWorkspace({
           language={language}
           metadata={selectedMetadata}
           requireStrokeOrder={languageProgress.requireStrokeOrder}
+          strokeTolerance={languageProgress.strokeTolerance}
           onClose={() => setSelectedCharacter("")}
           onSelect={setSelectedCharacter}
           onStart={(character) => markCharacter(character, "practicing")}
           onMastered={(character) => markCharacter(character, "mastered")}
+          onStrokeToleranceChange={(strokeTolerance) => updateProgress((current) => ({
+            ...current,
+            strokeTolerance,
+          }))}
         />
       ) : null}
     </>

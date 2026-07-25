@@ -127,7 +127,11 @@
 .question-reset-button { margin-top: 10px; color: var(--text-secondary, #646174); }
 
 .answer-bank-response { display: grid; gap: 11px; }
-.answer-composer { display: grid; gap: 10px; }
+.answer-composer { display: grid; gap: 10px; outline: none; }
+.answer-composer:focus-visible .answer-tray {
+  outline: 2px solid color-mix(in srgb, var(--accent-readable, var(--accent, #6e5de7)) 30%, transparent);
+  outline-offset: 2px;
+}
 .answer-composer .question-control-label { margin-bottom: -2px; }
 .answer-tray {
   display: flex;
@@ -180,6 +184,18 @@
   border-bottom-width: 3px;
   font-weight: 720;
   touch-action: none;
+  transition: opacity 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+.answer-composer .token-bank button.is-typeahead-match {
+  background: color-mix(in srgb, var(--accent, #6e5de7) 13%, var(--bg-elevated, #fff));
+  border-color: var(--accent-readable, var(--accent, #6e5de7));
+}
+.answer-composer .token-bank button.is-typeahead-dimmed { opacity: .35; }
+.answer-tray.is-drop-target,
+.answer-composer .token-bank.is-drop-target {
+  background-color: color-mix(in srgb, var(--accent, #6e5de7) 11%, var(--bg-main, #f7f6fb));
+  outline: 2px solid color-mix(in srgb, var(--accent-readable, var(--accent, #6e5de7)) 55%, transparent);
+  outline-offset: 2px;
 }
 .token-bank-placeholder {
   display: inline-flex;
@@ -352,13 +368,33 @@
   border: 1px solid var(--border, #dedbe9);
   border-radius: 13px;
 }
-.hanzi-writer-target > svg { width: 100%; height: 100%; }
+.hanzi-writer-target {
+  touch-action: none;
+  user-select: none;
+}
+.hanzi-writer-target > svg { width: 100%; height: 100%; touch-action: none; }
 .tracing-loading { display: flex; align-items: center; gap: 8px; }
 .tracing-unavailable { display: grid; justify-items: center; gap: 10px; padding: 18px; color: var(--text-secondary, #646174); background: var(--bg-elevated, #fff); border: 1px dashed var(--border, #dedbe9); border-radius: 11px; text-align: center; }
 .tracing-unavailable p,
 .tracing-instruction p,
 .tracing-status-row p { margin: 0; color: var(--text-muted, #888496); font-size: 11px; line-height: 1.5; }
 .tracing-instruction { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 9px; }
+.character-tracing-response .icon-text-button {
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 8px 13px;
+  color: var(--text-primary, #252333);
+  background: var(--bg-hover, #eeebfa);
+  border: 1px solid var(--border, #dedbe9);
+  border-radius: 9px;
+  font-weight: 750;
+}
+.character-tracing-response .icon-text-button:hover:not(:disabled) {
+  border-color: var(--accent-readable, var(--accent, #6e5de7));
+}
 .tracing-canvas-stack { position: relative; touch-action: none; }
 .tracing-canvas-stack svg,
 .tracing-canvas-stack canvas { position: absolute; width: 100%; height: 100%; inset: 0; }
@@ -1053,8 +1089,8 @@
 .lesson-target-text:lang(ja),
 .lesson-target-text:lang(zh),
 .lesson-target-text:lang(ko) {
-  font-size: max(20px, 1em);
-  line-height: 1.85;
+  font-size: max(24px, 1em);
+  line-height: 1.95;
 }
 
 .glossary-term:focus-visible {

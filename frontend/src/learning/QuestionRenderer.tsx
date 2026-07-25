@@ -120,6 +120,26 @@ interface DragPreview {
   y: number;
 }
 
+type DragDropTarget = "tray" | "bank" | null;
+
+const DRAG_DROP_MARGIN = 32;
+const TYPEAHEAD_RESET_MS = 1_500;
+
+function pointInRect(rect: DOMRect | undefined, x: number, y: number, margin = 0): boolean {
+  return Boolean(rect
+    && x >= rect.left - margin
+    && x <= rect.right + margin
+    && y >= rect.top - margin
+    && y <= rect.bottom + margin);
+}
+
+function normalizeTypeahead(value: string): string {
+  return value
+    .normalize("NFKD")
+    .replace(/\p{Mark}/gu, "")
+    .toLocaleLowerCase();
+}
+
 export function OrderedAnswerComposer({
   options,
   value,
@@ -140,18 +160,73 @@ export function OrderedAnswerComposer({
   maxSelections?: number;
 }) {
   const labels = useMemo(() => new Map(options.map((option) => [option.id, option.label])), [options]);
+  const composerRef = useRef<HTMLDivElement>(null);
   const trayRef = useRef<HTMLDivElement>(null);
   const bankRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<PointerDrag | null>(null);
   const dragPreviewRef = useRef<HTMLDivElement>(null);
   const suppressClickRef = useRef("");
+  const typeaheadTimerRef = useRef<number | null>(null);
   const [dragPreview, setDragPreview] = useState<DragPreview | null>(null);
+  const [dragDropTarget, setDragDropTarget] = useState<DragDropTarget>(null);
+  const [typeahead, setTypeahead] = useState("");
   const [announcement, setAnnouncement] = useState("");
+  const availableOptions = options.filter((option) => !value.includes(option.id));
+  const matchingOptionIds = new Set(typeahead
+    ? availableOptions
+      .filter((option) => normalizeTypeahead(option.label).startsWith(typeahead))
+      .map((option) => option.id)
+    : []);
 
   function announce(message: string) {
     setAnnouncement("");
     window.requestAnimationFrame(() => setAnnouncement(message));
   }
+
+  function focusComposer() {
+    window.requestAnimationFrame(() => composerRef.current?.focus({ preventScroll: true }));
+  }
+
+  function clearTypeahead() {
+    if (typeaheadTimerRef.current !== null) window.clearTimeout(typeaheadTimerRef.current);
+    typeaheadTimerRef.current = null;
+    setTypeahead("");
+  }
+
+  function scheduleTypeaheadReset() {
+    if (typeaheadTimerRef.current !== null) window.clearTimeout(typeaheadTimerRef.current);
+    typeaheadTimerRef.current = window.setTimeout(() => {
+      typeaheadTimerRef.current = null;
+      setTypeahead("");
+    }, TYPEAHEAD_RESET_MS);
+  }
+
+  function addToken(id: string, label: string, targetIndex = value.length) {
+    if (value.includes(id) || (maxSelections !== undefined && value.length >= maxSelections)) return;
+    const next = [...value];
+    const safeIndex = Math.max(0, Math.min(targetIndex, next.length));
+    next.splice(safeIndex, 0, id);
+    onAnswerActivate?.(label);
+    onChange(next);
+    announce(`${label} added at position ${safeIndex + 1}.`);
+    focusComposer();
+  }
+
+  function removeToken(id: string) {
+    const label = labels.get(id) ?? id;
+    onChange(value.filter((valueId) => valueId !== id));
+    announce(`${label} returned to the word bank.`);
+    focusComposer();
+  }
+
+  useEffect(() => () => {
+    if (typeaheadTimerRef.current !== null) window.clearTimeout(typeaheadTimerRef.current);
+  }, []);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => composerRef.current?.focus({ preventScroll: true }));
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
 
   function moveBy(id: string, direction: -1 | 1) {
     const index = value.indexOf(id);
@@ -161,6 +236,20 @@ export function OrderedAnswerComposer({
     [next[index], next[target]] = [next[target], next[index]];
     onChange(next);
     announce(`${labels.get(id) ?? id} moved to position ${target + 1}.`);
+  }
+
+  function dropTargetFor(origin: PointerDrag["origin"], clientX: number, clientY: number): DragDropTarget {
+    const trayRect = trayRef.current?.getBoundingClientRect();
+    const bankRect = bankRef.current?.getBoundingClientRect();
+    const overTray = pointInRect(trayRect, clientX, clientY);
+    const overBank = pointInRect(bankRect, clientX, clientY);
+    if (origin === "bank") {
+      if (overTray || (!overBank && pointInRect(trayRect, clientX, clientY, DRAG_DROP_MARGIN))) return "tray";
+      return null;
+    }
+    if (overBank || (!overTray && pointInRect(bankRect, clientX, clientY, DRAG_DROP_MARGIN))) return "bank";
+    if (overTray || pointInRect(trayRect, clientX, clientY, DRAG_DROP_MARGIN)) return "tray";
+    return null;
   }
 
   function insertionIndex(clientX: number, clientY: number, excludedId?: string): number {
@@ -214,39 +303,31 @@ export function OrderedAnswerComposer({
     }
     if (!drag.moved || !dragPreviewRef.current) return;
     dragPreviewRef.current.style.transform = `translate3d(${event.clientX - drag.offsetX}px, ${event.clientY - drag.offsetY}px, 0)`;
+    const nextTarget = dropTargetFor(drag.origin, event.clientX, event.clientY);
+    setDragDropTarget((current) => current === nextTarget ? current : nextTarget);
   }
 
   function finishPointerDrag(event: ReactPointerEvent<HTMLButtonElement>) {
     const drag = dragRef.current;
     dragRef.current = null;
     setDragPreview(null);
+    setDragDropTarget(null);
     if (!drag?.moved) return;
-    const trayRect = trayRef.current?.getBoundingClientRect();
-    const bankRect = bankRef.current?.getBoundingClientRect();
-    const overTray = Boolean(trayRect
-      && event.clientX >= trayRect.left && event.clientX <= trayRect.right
-      && event.clientY >= trayRect.top && event.clientY <= trayRect.bottom);
-    const overBank = Boolean(bankRect
-      && event.clientX >= bankRect.left && event.clientX <= bankRect.right
-      && event.clientY >= bankRect.top && event.clientY <= bankRect.bottom);
+    const dropTarget = dropTargetFor(drag.origin, event.clientX, event.clientY);
 
-    if (drag.origin === "bank" && overTray) {
+    if (drag.origin === "bank" && dropTarget === "tray") {
       if (maxSelections === undefined || value.length < maxSelections) {
-        const next = [...value];
         const targetIndex = insertionIndex(event.clientX, event.clientY);
-        next.splice(targetIndex, 0, drag.id);
-        onAnswerActivate?.(drag.label);
-        onChange(next);
-        announce(`${drag.label} added at position ${targetIndex + 1}.`);
+        addToken(drag.id, drag.label, targetIndex);
       }
-    } else if (drag.origin === "tray" && overBank) {
-      onChange(value.filter((valueId) => valueId !== drag.id));
-      announce(`${drag.label} returned to the word bank.`);
-    } else if (drag.origin === "tray" && overTray) {
+    } else if (drag.origin === "tray" && dropTarget === "bank") {
+      removeToken(drag.id);
+    } else if (drag.origin === "tray" && dropTarget === "tray") {
       const targetIndex = insertionIndex(event.clientX, event.clientY, drag.id);
       const next = moveItem(value, drag.id, targetIndex);
       onChange(next);
       announce(`${drag.label} moved to position ${next.indexOf(drag.id) + 1}.`);
+      focusComposer();
     }
     suppressClickRef.current = drag.id;
   }
@@ -254,13 +335,13 @@ export function OrderedAnswerComposer({
   function cancelPointerDrag() {
     dragRef.current = null;
     setDragPreview(null);
+    setDragDropTarget(null);
   }
 
   function handleSelectedKey(event: ReactKeyboardEvent<HTMLButtonElement>, id: string) {
     if (event.key === "Delete" || event.key === "Backspace") {
       event.preventDefault();
-      onChange(value.filter((valueId) => valueId !== id));
-      announce(`${labels.get(id) ?? id} returned to the word bank.`);
+      removeToken(id);
       return;
     }
     if (!event.altKey || !["ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown"].includes(event.key)) return;
@@ -268,11 +349,60 @@ export function OrderedAnswerComposer({
     moveBy(id, event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1);
   }
 
+  function handleComposerKey(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (disabled || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    if (event.key === "Escape" && typeahead) {
+      event.preventDefault();
+      clearTypeahead();
+      announce("Word bank filter cleared.");
+      return;
+    }
+    if (event.key === "Backspace") {
+      if (target?.closest("[data-answer-token-id]")) return;
+      event.preventDefault();
+      if (typeahead) {
+        const next = typeahead.slice(0, -1);
+        setTypeahead(next);
+        if (next) scheduleTypeaheadReset();
+        else clearTypeahead();
+        announce(next ? `Word bank prefix ${next}.` : "Word bank filter cleared.");
+      } else if (value.length) {
+        removeToken(value[value.length - 1]);
+      }
+      return;
+    }
+    if (event.altKey || event.ctrlKey || event.metaKey || event.key.length !== 1 || !/[\p{L}\p{N}]/u.test(event.key)) return;
+    event.preventDefault();
+    if (maxSelections !== undefined && value.length >= maxSelections) {
+      announce("The answer tray is full.");
+      return;
+    }
+    const next = `${typeahead}${normalizeTypeahead(event.key)}`;
+    const matches = availableOptions.filter((option) => normalizeTypeahead(option.label).startsWith(next));
+    setTypeahead(next);
+    if (matches.length === 1) {
+      clearTypeahead();
+      addToken(matches[0].id, matches[0].label);
+      return;
+    }
+    scheduleTypeaheadReset();
+    announce(matches.length
+      ? `${matches.length} words match ${next}: ${matches.map((option) => option.label).join(", ")}.`
+      : `No available word matches ${next}.`);
+  }
+
   const portalTarget = document.querySelector<HTMLElement>(".app-shell") ?? document.body;
   return (
-    <div className="answer-composer">
+    <div
+      className="answer-composer"
+      ref={composerRef}
+      tabIndex={0}
+      onKeyDownCapture={handleComposerKey}
+      aria-label="Word bank composer. Type a word prefix to select it."
+    >
       <p className="sr-only">Selected order</p>
-      <div className={value.length ? "answer-tray" : "answer-tray is-empty"} ref={trayRef} aria-label="Selected answer">
+      <div className={`${value.length ? "answer-tray" : "answer-tray is-empty"}${dragDropTarget === "tray" ? " is-drop-target" : ""}`} ref={trayRef} aria-label="Selected answer">
         {value.map((id, index) => (
           <button
             type="button"
@@ -284,15 +414,14 @@ export function OrderedAnswerComposer({
             onPointerMove={movePointerDrag}
             onPointerUp={finishPointerDrag}
             onPointerCancel={cancelPointerDrag}
+            onLostPointerCapture={cancelPointerDrag}
             onKeyDown={(event) => handleSelectedKey(event, id)}
             onClick={() => {
               if (suppressClickRef.current === id) {
                 suppressClickRef.current = "";
                 return;
               }
-              onAnswerActivate?.(labels.get(id) ?? id);
-              onChange(value.filter((valueId) => valueId !== id));
-              announce(`${labels.get(id) ?? id} returned to the word bank.`);
+              removeToken(id);
             }}
             disabled={disabled}
           >
@@ -300,7 +429,7 @@ export function OrderedAnswerComposer({
           </button>
         ))}
       </div>
-      <div className="token-bank" ref={bankRef} aria-label="Available words">
+      <div className={`token-bank${dragDropTarget === "bank" ? " is-drop-target" : ""}`} ref={bankRef} aria-label="Available words">
         {options.map((option) => value.includes(option.id) ? (
           <span className="token-bank-placeholder" key={option.id} aria-hidden="true">
             {renderText(option.label, false)}
@@ -313,16 +442,17 @@ export function OrderedAnswerComposer({
             onPointerMove={movePointerDrag}
             onPointerUp={finishPointerDrag}
             onPointerCancel={cancelPointerDrag}
+            onLostPointerCapture={cancelPointerDrag}
             onClick={() => {
               if (suppressClickRef.current === option.id) {
                 suppressClickRef.current = "";
                 return;
               }
-              onAnswerActivate?.(option.label);
-              if (maxSelections !== undefined && value.length >= maxSelections) return;
-              onChange([...value, option.id]);
-              announce(`${option.label} added at position ${value.length + 1}.`);
+              addToken(option.id, option.label);
             }}
+            className={typeahead
+              ? matchingOptionIds.has(option.id) ? "is-typeahead-match" : "is-typeahead-dimmed"
+              : undefined}
             disabled={disabled || (maxSelections !== undefined && value.length >= maxSelections)}
           >
             {renderText(option.label, Boolean(evaluated))}
@@ -330,7 +460,12 @@ export function OrderedAnswerComposer({
         ))}
       </div>
       {value.length ? (
-        <button className="question-reset-button" type="button" onClick={() => onChange([])} disabled={disabled}>
+        <button className="question-reset-button" type="button" onClick={() => {
+          clearTypeahead();
+          onChange([]);
+          announce("Answer reset.");
+          focusComposer();
+        }} disabled={disabled}>
           <RotateCcw size={14} /> Reset answer
         </button>
       ) : null}

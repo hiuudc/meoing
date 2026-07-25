@@ -2,6 +2,9 @@ import { BASIC_HANGUL_JAMO } from "./strokeData";
 
 export const LETTERS_STORAGE_KEY = "meoi.letters.v1";
 export const LETTERS_STORAGE_VERSION = 1;
+export const MIN_STROKE_TOLERANCE = 0.5;
+export const MAX_STROKE_TOLERANCE = 2;
+export const DEFAULT_STROKE_TOLERANCE = 1;
 
 export type LetterProgressStatus = "practicing" | "mastered";
 export type LettersScript =
@@ -15,6 +18,7 @@ export type LettersScript =
 
 export interface LettersLanguageProgress {
   requireStrokeOrder: boolean;
+  strokeTolerance: number;
   characters: Record<string, LetterProgressStatus>;
 }
 
@@ -38,6 +42,7 @@ export interface CharacterWindow {
 
 const DEFAULT_LANGUAGE_PROGRESS: LettersLanguageProgress = {
   requireStrokeOrder: true,
+  strokeTolerance: DEFAULT_STROKE_TOLERANCE,
   characters: {},
 };
 
@@ -101,6 +106,12 @@ function isSingleCharacter(value: string): boolean {
   return [...value].length === 1;
 }
 
+export function normalizeStrokeTolerance(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_STROKE_TOLERANCE;
+  const clamped = Math.min(MAX_STROKE_TOLERANCE, Math.max(MIN_STROKE_TOLERANCE, value));
+  return Math.round(clamped * 10) / 10;
+}
+
 function normalizeLanguageProgress(value: unknown): LettersLanguageProgress {
   if (!isRecord(value)) return { ...DEFAULT_LANGUAGE_PROGRESS, characters: {} };
   const rawCharacters = isRecord(value.characters) ? value.characters : {};
@@ -111,6 +122,7 @@ function normalizeLanguageProgress(value: unknown): LettersLanguageProgress {
   });
   return {
     requireStrokeOrder: typeof value.requireStrokeOrder === "boolean" ? value.requireStrokeOrder : true,
+    strokeTolerance: normalizeStrokeTolerance(value.strokeTolerance),
     characters,
   };
 }
@@ -166,7 +178,11 @@ export function getLettersLanguageProgress(
 ): LettersLanguageProgress {
   const progress = store.collections[collectionId]?.[language];
   return progress
-    ? { requireStrokeOrder: progress.requireStrokeOrder, characters: { ...progress.characters } }
+    ? {
+      requireStrokeOrder: progress.requireStrokeOrder,
+      strokeTolerance: progress.strokeTolerance,
+      characters: { ...progress.characters },
+    }
     : { ...DEFAULT_LANGUAGE_PROGRESS, characters: {} };
 }
 

@@ -12,6 +12,7 @@ interface GlossaryTextProps {
   interactive?: boolean;
   termClassName?: string;
   termLang?: string;
+  onTermActivate?: (text: string) => void;
 }
 
 interface OpenGlossary {
@@ -31,11 +32,13 @@ export function GlossaryText({
   interactive = true,
   termClassName,
   termLang,
+  onTermActivate,
 }: GlossaryTextProps) {
   const segments = segmentGlossaryText(text, glossary);
   const [openGlossary, setOpenGlossary] = useState<OpenGlossary | null>(null);
   const [position, setPosition] = useState({ top: 0, left: 0 });
   const tooltipRef = useRef<HTMLDivElement>(null);
+  const activatedIndexRef = useRef<number | null>(null);
   const baseId = useId().replace(/:/g, "");
   const tooltipId = openGlossary ? `glossary-${baseId}-${openGlossary.index}` : undefined;
 
@@ -61,15 +64,18 @@ export function GlossaryText({
     const activeGlossary = openGlossary;
     function closeOnOutsidePointer(event: PointerEvent) {
       if (activeGlossary.anchor.contains(event.target as Node) || tooltipRef.current?.contains(event.target as Node)) return;
+      activatedIndexRef.current = null;
       setOpenGlossary(null);
     }
     function closeOnKey(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
       event.preventDefault();
       event.stopPropagation();
+      activatedIndexRef.current = null;
       setOpenGlossary(null);
     }
     function closeOnViewportChange() {
+      activatedIndexRef.current = null;
       setOpenGlossary(null);
     }
     document.addEventListener("pointerdown", closeOnOutsidePointer, true);
@@ -84,9 +90,17 @@ export function GlossaryText({
     };
   }, [openGlossary]);
 
-  function open(entry: GlossaryEntry, index: number, anchor: HTMLElement) {
+  function open(entry: GlossaryEntry, index: number, anchor: HTMLElement, spokenText: string) {
     if (!tooltipsEnabled || !interactive) return;
     setOpenGlossary({ entry, index, anchor });
+    if (activatedIndexRef.current === index) return;
+    activatedIndexRef.current = index;
+    onTermActivate?.(spokenText);
+  }
+
+  function close(index: number) {
+    activatedIndexRef.current = null;
+    setOpenGlossary((current) => current?.index === index ? null : current);
   }
 
   function renderedTerm(segmentText: string, entry: GlossaryEntry) {
@@ -111,21 +125,21 @@ export function GlossaryText({
           role={tooltipsEnabled && interactive ? "button" : undefined}
           tabIndex={tooltipsEnabled && interactive ? 0 : undefined}
           aria-describedby={tooltipsEnabled && interactive && openGlossary?.index === index ? tooltipId : undefined}
-          onMouseEnter={(event) => open(segment.entry!, index, event.currentTarget)}
-          onMouseLeave={() => setOpenGlossary((current) => current?.index === index ? null : current)}
-          onFocus={(event) => open(segment.entry!, index, event.currentTarget)}
-          onBlur={() => setOpenGlossary((current) => current?.index === index ? null : current)}
+          onMouseEnter={(event) => open(segment.entry!, index, event.currentTarget, segment.text)}
+          onMouseLeave={() => close(index)}
+          onFocus={(event) => open(segment.entry!, index, event.currentTarget, segment.text)}
+          onBlur={() => close(index)}
           onClick={(event) => {
             if (!interactive) return;
             event.preventDefault();
             event.stopPropagation();
-            if (tooltipsEnabled) open(segment.entry!, index, event.currentTarget);
+            if (tooltipsEnabled) open(segment.entry!, index, event.currentTarget, segment.text);
           }}
           onKeyDown={(event) => {
             if (!interactive) return;
             if (event.key !== "Enter" && event.key !== " ") return;
             event.preventDefault();
-            if (tooltipsEnabled) open(segment.entry!, index, event.currentTarget);
+            if (tooltipsEnabled) open(segment.entry!, index, event.currentTarget, segment.text);
           }}
         >
           {renderedTerm(segment.text, segment.entry)}

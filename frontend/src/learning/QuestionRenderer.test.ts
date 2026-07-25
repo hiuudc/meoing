@@ -19,10 +19,12 @@ function Harness({
   question,
   evaluated = false,
   inputMode,
+  onAnswerActivate,
 }: {
   question: LessonQuestion;
   evaluated?: boolean;
   inputMode?: AnswerInputMode;
+  onAnswerActivate?: (text: string) => void;
 }) {
   const [answer, setAnswer] = useState<QuestionAnswer>("");
   return createElement(
@@ -35,6 +37,7 @@ function Harness({
       evaluated,
       answerInputMode: inputMode,
       onChange: setAnswer,
+      onAnswerActivate,
       renderText: (text, interactive) => createElement("span", { "data-answer-interactive": String(Boolean(interactive)) }, text),
     }),
     createElement("output", { id: "answer-value" }, JSON.stringify(answer)),
@@ -123,6 +126,99 @@ describe("QuestionRenderer interactions", () => {
     expect(document.querySelectorAll(".token-bank-placeholder")).toHaveLength(3);
   });
 
+  it("filters bank tokens by prefix, auto-selects a unique match, and removes it silently", async () => {
+    vi.useFakeTimers();
+    const onAnswerActivate = vi.fn();
+    const question: LessonQuestion = {
+      id: "typeahead-writing",
+      type: "freeWriting",
+      prompt: "Write",
+      explanation: "Write",
+      evaluationMode: "ai",
+      minWords: 1,
+      maxWords: 20,
+      rubric: ["Clarity"],
+      answerBank: {
+        tokens: [
+          { id: "america", label: "America" },
+          { id: "and", label: "and" },
+          { id: "japan", label: "Japan" },
+        ],
+        separator: "space",
+        defaultMode: "bank",
+      },
+    };
+    await render(createElement(Harness, { question, inputMode: "bank", onAnswerActivate }));
+    const composer = document.querySelector<HTMLElement>(".answer-composer")!;
+
+    await act(async () => composer.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true })));
+    expect(Array.from(document.querySelectorAll(".is-typeahead-match")).map((element) => element.textContent))
+      .toEqual(["America", "and"]);
+    expect(document.querySelector(".is-typeahead-dimmed")?.textContent).toBe("Japan");
+
+    await act(async () => composer.dispatchEvent(new KeyboardEvent("keydown", { key: "m", bubbles: true })));
+    expect(document.querySelector("#answer-value")?.textContent).toBe('"America"');
+    expect(onAnswerActivate).toHaveBeenCalledTimes(1);
+    expect(onAnswerActivate).toHaveBeenLastCalledWith("America");
+
+    await act(async () => composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true })));
+    expect(document.querySelector("#answer-value")?.textContent).toBe('""');
+    expect(onAnswerActivate).toHaveBeenCalledTimes(1);
+
+    await act(async () => composer.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true })));
+    await act(async () => vi.advanceTimersByTime(1_500));
+    expect(document.querySelector(".is-typeahead-match")).toBeNull();
+    expect(document.querySelector(".is-typeahead-dimmed")).toBeNull();
+  });
+
+  it("accepts a bank-token drop inside the expanded tray hitbox", async () => {
+    Object.defineProperty(HTMLElement.prototype, "setPointerCapture", {
+      configurable: true,
+      value: vi.fn(),
+    });
+    const question: LessonQuestion = {
+      id: "drag-writing",
+      type: "freeWriting",
+      prompt: "Write",
+      explanation: "Write",
+      evaluationMode: "ai",
+      minWords: 1,
+      maxWords: 20,
+      rubric: ["Clarity"],
+      answerBank: {
+        tokens: [{ id: "america", label: "America" }],
+        separator: "space",
+        defaultMode: "bank",
+      },
+    };
+    await render(createElement(Harness, { question, inputMode: "bank" }));
+    const tray = document.querySelector<HTMLElement>(".answer-tray")!;
+    const bank = document.querySelector<HTMLElement>(".token-bank")!;
+    const token = bank.querySelector<HTMLButtonElement>("button")!;
+    const rect = (left: number, top: number, width: number, height: number) => ({
+      bottom: top + height,
+      height,
+      left,
+      right: left + width,
+      top,
+      width,
+      x: left,
+      y: top,
+      toJSON: () => ({}),
+    }) as DOMRect;
+    tray.getBoundingClientRect = () => rect(0, 0, 200, 40);
+    bank.getBoundingClientRect = () => rect(0, 120, 200, 40);
+    token.getBoundingClientRect = () => rect(20, 120, 80, 40);
+
+    await act(async () => {
+      token.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, clientX: 30, clientY: 130 }));
+      token.dispatchEvent(new MouseEvent("pointermove", { bubbles: true, clientX: 100, clientY: 65 }));
+      token.dispatchEvent(new MouseEvent("pointerup", { bubbles: true, clientX: 100, clientY: 65 }));
+    });
+
+    expect(document.querySelector("#answer-value")?.textContent).toBe('"America"');
+  });
+
   it("marks answer text interactive only after evaluation", async () => {
     const question: LessonQuestion = {
       id: "choice",
@@ -181,23 +277,28 @@ describe("QuestionRenderer interactions", () => {
   });
 
   it("does not open a glossary tooltip for a locked answer", async () => {
+    const onTermActivate = vi.fn();
     await render(createElement(GlossaryText, {
       text: "water",
       glossary: [{ term: "water", meaning: "nước" }],
       tooltipsEnabled: true,
       interactive: false,
+      onTermActivate,
     }));
     const term = document.querySelector<HTMLElement>(".glossary-pronunciation")!;
     await act(async () => term.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
     expect(document.querySelector(".glossary-tooltip")).toBeNull();
+    expect(onTermActivate).not.toHaveBeenCalled();
 
     await act(async () => root!.render(createElement(GlossaryText, {
       text: "water",
       glossary: [{ term: "water", meaning: "nước" }],
       tooltipsEnabled: true,
       interactive: true,
+      onTermActivate,
     })));
     await act(async () => document.querySelector<HTMLElement>(".glossary-term")!.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
     expect(document.querySelector(".glossary-tooltip")?.textContent).toContain("nước");
+    expect(onTermActivate).toHaveBeenCalledWith("water");
   });
 });
