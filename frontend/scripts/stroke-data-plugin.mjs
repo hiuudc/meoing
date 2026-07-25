@@ -95,11 +95,7 @@ export function strokeDataPlugin() {
         response.setHeader("Content-Type", "application/json; charset=utf-8");
         response.setHeader("Cache-Control", "public, max-age=31536000, immutable");
         response.end(shard);
-    })
-    .sort((left, right) => (
-      (basename(left.name, ".json").codePointAt(0) ?? 0)
-      - (basename(right.name, ".json").codePointAt(0) ?? 0)
-    ));
+      });
     },
     async generateBundle() {
       const catalog = {};
