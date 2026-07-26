@@ -7,6 +7,7 @@ import {
   Play,
   RotateCcw,
   Search,
+  Volume2,
   X,
 } from "lucide-react";
 import {
@@ -20,14 +21,19 @@ import {
 import { createPortal } from "react-dom";
 import { loadLocalLearningCache } from "../integration/learningStorage";
 import { CharacterTracingResponse } from "../learning/CharacterTracingResponse";
+import { LessonPlayer } from "../learning/LessonPlayer";
 import {
+  DEFAULT_LETTERS_PRACTICE_QUESTIONS,
   getLettersLanguageProgress,
   getCharacterWindow,
   INTERNAL_CHARACTER_READINGS,
+  MAX_LETTERS_PRACTICE_QUESTIONS,
   MAX_STROKE_TOLERANCE,
+  MIN_LETTERS_PRACTICE_QUESTIONS,
   MIN_STROKE_TOLERANCE,
   loadLettersProgress,
   matchesCharacterQuery,
+  normalizeLettersPracticeQuestionCount,
   saveLettersProgress,
   scriptForCharacter,
   scriptsForLanguage,
@@ -37,10 +43,24 @@ import {
   type LettersProgressStore,
   type LettersScript,
 } from "../learning/letters";
+import {
+  buildLettersPracticeSession,
+  selectLettersPracticeCharacters,
+  type LettersCharacterMetadata,
+  type LettersPracticeSession,
+} from "../learning/lettersPractice";
 import { normalizeLearningProfile } from "../learning/profile";
+import { languageTagForSpeech } from "../learning/speech";
 import { loadStrokeCatalog } from "../learning/strokeData";
-import type { CharacterTracingQuestion, GlossaryEntry, QuestionAnswer } from "../learning/types";
+import type {
+  AttemptRecord,
+  CharacterTracingQuestion,
+  GlossaryEntry,
+  LessonProgressSnapshot,
+  QuestionAnswer,
+} from "../learning/types";
 import type { Collection, StudyItem, Unit } from "../types";
+import { AnimatedModal } from "./AnimatedModal";
 import { WorkspaceModeSwitch, type WorkspaceMode } from "./WorkspaceModeSwitch";
 
 interface LettersWorkspaceProps {
@@ -52,14 +72,9 @@ interface LettersWorkspaceProps {
   onOpenMobileNavigation: () => void;
 }
 
-interface CharacterMetadata {
-  reading?: string;
-  meaning?: string;
-}
-
 interface VirtualCharacterGridProps {
   characters: string[];
-  metadata: ReadonlyMap<string, CharacterMetadata>;
+  metadata: ReadonlyMap<string, LettersCharacterMetadata>;
   progress: Readonly<Record<string, LetterProgressStatus>>;
   onSelect: (character: string) => void;
 }
@@ -68,14 +83,29 @@ interface LettersPracticeProps {
   characters: string[];
   character: string;
   language: string;
-  metadata?: CharacterMetadata;
+  metadata?: LettersCharacterMetadata;
   requireStrokeOrder: boolean;
+  showStrokeGuide: boolean;
   strokeTolerance: number;
   onClose: () => void;
   onSelect: (character: string) => void;
   onStart: (character: string) => void;
   onMastered: (character: string) => void;
+  onShowStrokeGuideChange: (value: boolean) => void;
   onStrokeToleranceChange: (value: number) => void;
+}
+
+interface LettersLessonIntroProps {
+  open: boolean;
+  language: string;
+  scriptLabel: string;
+  characters: string[];
+  metadata: ReadonlyMap<string, LettersCharacterMetadata>;
+  questionCount: number;
+  onQuestionCountChange: (value: number) => void;
+  onClose: () => void;
+  onExited: () => void;
+  onStart: () => void;
 }
 
 const GRID_ROW_HEIGHT = 100;
@@ -86,7 +116,7 @@ function singleCharacter(value: string): boolean {
   return [...value].length === 1;
 }
 
-function glossaryMetadata(entry: GlossaryEntry): CharacterMetadata {
+function glossaryMetadata(entry: GlossaryEntry): LettersCharacterMetadata {
   return {
     reading: entry.pronunciation?.romanized ?? entry.pronunciation?.native,
     meaning: entry.meaning,
@@ -96,8 +126,8 @@ function glossaryMetadata(entry: GlossaryEntry): CharacterMetadata {
 function collectionCharacterMetadata(
   unitIds: ReadonlySet<string>,
   studyItems: StudyItem[],
-): Map<string, CharacterMetadata> {
-  const metadata = new Map<string, CharacterMetadata>();
+): Map<string, LettersCharacterMetadata> {
+  const metadata = new Map<string, LettersCharacterMetadata>();
   studyItems.forEach((item) => {
     if (!unitIds.has(item.unitId) || !singleCharacter(item.text.trim())) return;
     metadata.set(item.text.trim(), { meaning: item.translation.trim() || undefined });
@@ -203,17 +233,116 @@ function VirtualCharacterGrid({
   );
 }
 
+function speakCharacter(language: string, character: string) {
+  if (!("speechSynthesis" in window) || typeof SpeechSynthesisUtterance === "undefined") return;
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(character);
+  utterance.lang = languageTagForSpeech(language);
+  utterance.rate = .82;
+  window.speechSynthesis.speak(utterance);
+}
+
+function LettersLessonIntro({
+  open,
+  language,
+  scriptLabel,
+  characters,
+  metadata,
+  questionCount,
+  onQuestionCountChange,
+  onClose,
+  onExited,
+  onStart,
+}: LettersLessonIntroProps) {
+  return createPortal(
+    <AnimatedModal
+      open={open}
+      onClose={onClose}
+      onExited={onExited}
+      labelledBy="letters-lesson-intro-title"
+      backdropClassName="letters-lesson-intro-backdrop"
+      panelClassName="letters-lesson-intro"
+    >
+      <header>
+        <div>
+          <p className="section-kicker">{language} letters</p>
+          <h1 id="letters-lesson-intro-title">Let&apos;s learn {scriptLabel}</h1>
+        </div>
+        <button type="button" aria-label="Close Letters lesson" onClick={onClose}>
+          <X size={20} />
+        </button>
+      </header>
+      <main>
+        <div className="letters-lesson-intro-copy">
+          <h2>Practice sound, recognition, and stroke order</h2>
+          <p>
+            There are no hearts. A missed exercise returns later in the session until you answer it correctly.
+          </p>
+        </div>
+        <div className="letters-lesson-character-list" aria-label="Characters in this practice">
+          {characters.map((character) => {
+            const characterMetadata = metadata.get(character);
+            return (
+              <article key={character}>
+                <strong lang={languageTagForSpeech(language)}>{character}</strong>
+                <div>
+                  <b>{characterMetadata?.reading ?? unicodeLabel(character)}</b>
+                  {characterMetadata?.meaning ? <span>{characterMetadata.meaning}</span> : null}
+                </div>
+                <button
+                  type="button"
+                  aria-label={`Play ${character}`}
+                  onClick={() => speakCharacter(language, character)}
+                >
+                  <Volume2 size={17} />
+                </button>
+              </article>
+            );
+          })}
+        </div>
+        <label className="letters-session-length">
+          <span>
+            <strong>Practice length</strong>
+            <small>Custom session size, saved for this Collection and language.</small>
+          </span>
+          <input
+            type="number"
+            min={MIN_LETTERS_PRACTICE_QUESTIONS}
+            max={MAX_LETTERS_PRACTICE_QUESTIONS}
+            step={1}
+            value={questionCount}
+            onChange={(event) => onQuestionCountChange(
+              normalizeLettersPracticeQuestionCount(event.currentTarget.valueAsNumber),
+            )}
+            aria-label="Number of practice questions"
+          />
+          <output>{questionCount} questions</output>
+        </label>
+      </main>
+      <footer>
+        <button className="secondary-button" type="button" onClick={onClose}>Not now</button>
+        <button className="primary-button" type="button" onClick={onStart} disabled={!characters.length}>
+          Start lesson <ChevronRight size={16} />
+        </button>
+      </footer>
+    </AnimatedModal>,
+    document.querySelector<HTMLElement>(".app-shell") ?? document.body,
+  );
+}
+
 function LettersPractice({
   characters,
   character,
   language,
   metadata,
   requireStrokeOrder,
+  showStrokeGuide,
   strokeTolerance,
   onClose,
   onSelect,
   onStart,
   onMastered,
+  onShowStrokeGuideChange,
   onStrokeToleranceChange,
 }: LettersPracticeProps) {
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -320,14 +449,16 @@ function LettersPractice({
             onStart={handleStart}
             onChange={handleAnswerChange}
             strokeTolerance={strokeTolerance}
+            showStrokeGuide={showStrokeGuide}
           />
           {requireStrokeOrder ? (
-            <label className="letters-tolerance-control">
+            <div className="letters-tolerance-control">
               <span>
-                <strong>Stroke tolerance</strong>
+                <label htmlFor="letters-stroke-tolerance"><strong>Stroke tolerance</strong></label>
                 <output>{strokeTolerance.toFixed(1)}x</output>
               </span>
               <input
+                id="letters-stroke-tolerance"
                 type="range"
                 min={MIN_STROKE_TOLERANCE}
                 max={MAX_STROKE_TOLERANCE}
@@ -335,8 +466,32 @@ function LettersPractice({
                 value={strokeTolerance}
                 onChange={(event) => changeStrokeTolerance(Number(event.target.value))}
               />
-              <small><span>Strict</span><span>Standard</span><span>Forgiving</span></small>
-            </label>
+              <div className="letters-tolerance-presets" aria-label="Stroke tolerance presets">
+                {([
+                  ["Strict", MIN_STROKE_TOLERANCE],
+                  ["Standard", 1],
+                  ["Forgiving", MAX_STROKE_TOLERANCE],
+                ] as const).map(([label, value]) => (
+                  <button
+                    type="button"
+                    key={label}
+                    aria-pressed={strokeTolerance === value}
+                    onClick={() => changeStrokeTolerance(value)}
+                  >
+                    <span>{label}</span>
+                    <small>{value.toFixed(1)}x</small>
+                  </button>
+                ))}
+              </div>
+              <label className="letters-practice-guide-toggle">
+                <input
+                  type="checkbox"
+                  checked={showStrokeGuide}
+                  onChange={(event) => onShowStrokeGuideChange(event.target.checked)}
+                />
+                Show drag direction guide
+              </label>
+            </div>
           ) : null}
         </main>
         <footer>
@@ -389,18 +544,27 @@ export function LettersWorkspace({
   const [activeScript, setActiveScript] = useState<LettersScript>(() => scriptDefinitions[0]?.id ?? "other");
   const [query, setQuery] = useState("");
   const [selectedCharacter, setSelectedCharacter] = useState("");
+  const [practiceIntroOpen, setPracticeIntroOpen] = useState(false);
+  const [pendingPracticeSession, setPendingPracticeSession] = useState<LettersPracticeSession | null>(null);
+  const [practiceSession, setPracticeSession] = useState<LettersPracticeSession | null>(null);
   const [progressStore, setProgressStore] = useState<LettersProgressStore>(() => loadLettersProgress(window.localStorage));
   const unitIds = useMemo(() => new Set(units.map((unit) => unit.id)), [units]);
   const metadata = useMemo(
     () => collectionCharacterMetadata(unitIds, studyItems),
     [collection.id, studyItems, unitIds],
   );
-  const languageProgress = getLettersLanguageProgress(progressStore, collection.id, language);
+  const languageProgress = useMemo(
+    () => getLettersLanguageProgress(progressStore, collection.id, language),
+    [collection.id, language, progressStore],
+  );
 
   useEffect(() => {
     setActiveScript(scriptDefinitions[0]?.id ?? "other");
     setQuery("");
     setSelectedCharacter("");
+    setPracticeIntroOpen(false);
+    setPendingPracticeSession(null);
+    setPracticeSession(null);
   }, [language]);
 
   useEffect(() => {
@@ -452,6 +616,19 @@ export function LettersWorkspace({
     (character) => languageProgress.characters[character] === "mastered",
   ).length;
   const selectedMetadata = metadata.get(selectedCharacter);
+  const activeScriptLabel = scriptDefinitions.find((script) => script.id === activeScript)?.label ?? "characters";
+  const practiceCharacters = useMemo(
+    () => selectLettersPracticeCharacters(
+      scriptCharacters,
+      languageProgress.characters,
+      languageProgress.practiceQuestionCount ?? DEFAULT_LETTERS_PRACTICE_QUESTIONS,
+    ),
+    [
+      languageProgress.characters,
+      languageProgress.practiceQuestionCount,
+      scriptCharacters,
+    ],
+  );
 
   function updateProgress(
     update: (progress: ReturnType<typeof getLettersLanguageProgress>) => ReturnType<typeof getLettersLanguageProgress>,
@@ -466,10 +643,52 @@ export function LettersWorkspace({
     });
   }
 
-  function startNextCharacter() {
-    const next = scriptCharacters.find((character) => languageProgress.characters[character] !== "mastered")
-      ?? scriptCharacters[0];
-    if (next) setSelectedCharacter(next);
+  function preparePracticeSession() {
+    const next = buildLettersPracticeSession({
+      collectionId: collection.id,
+      language,
+      sourceLanguage: profile.sourceLanguage,
+      level: profile.level,
+      script: activeScript,
+      scriptLabel: activeScriptLabel,
+      characters: scriptCharacters,
+      metadata,
+      progress: languageProgress.characters,
+      requireStrokeOrder: languageProgress.requireStrokeOrder,
+      questionCount: languageProgress.practiceQuestionCount,
+    });
+    updateProgress((current) => ({
+      ...current,
+      characters: Object.fromEntries([
+        ...Object.entries(current.characters),
+        ...next.targetCharacters.map((character) => [
+          character,
+          current.characters[character] === "mastered" ? "mastered" : "practicing",
+        ] as const),
+      ]),
+    }));
+    setPendingPracticeSession(next);
+    setPracticeIntroOpen(false);
+  }
+
+  function savePracticeProgress(
+    _attempts: AttemptRecord[],
+    snapshot: LessonProgressSnapshot,
+  ) {
+    if (!practiceSession) return;
+    const completedQuestionIds = new Set(snapshot.completedQuestionIds);
+    updateProgress((current) => {
+      const characters = { ...current.characters };
+      practiceSession.targetCharacters.forEach((character) => {
+        const questionIds = practiceSession.questionIdsByCharacter[character] ?? [];
+        if (questionIds.length && questionIds.every((questionId) => completedQuestionIds.has(questionId))) {
+          characters[character] = "mastered";
+        } else if (characters[character] !== "mastered") {
+          characters[character] = "practicing";
+        }
+      });
+      return { ...current, characters };
+    });
   }
 
   return (
@@ -492,7 +711,12 @@ export function LettersWorkspace({
               </p>
             </div>
             {scriptDefinitions.length ? (
-              <button className="primary-button" type="button" onClick={startNextCharacter} disabled={!scriptCharacters.length}>
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() => setPracticeIntroOpen(true)}
+                disabled={!scriptCharacters.length}
+              >
                 <Play size={16} /> Learn the characters
               </button>
             ) : null}
@@ -527,17 +751,30 @@ export function LettersWorkspace({
                     placeholder="Search character, reading, meaning, or U+ code"
                   />
                 </label>
-                <label className="letters-stroke-order-toggle">
-                  <input
-                    type="checkbox"
-                    checked={languageProgress.requireStrokeOrder}
-                    onChange={(event) => updateProgress((current) => ({
-                      ...current,
-                      requireStrokeOrder: event.target.checked,
-                    }))}
-                  />
-                  Require stroke order
-                </label>
+                <div className="letters-option-toggles">
+                  <label className="letters-stroke-order-toggle">
+                    <input
+                      type="checkbox"
+                      checked={languageProgress.requireStrokeOrder}
+                      onChange={(event) => updateProgress((current) => ({
+                        ...current,
+                        requireStrokeOrder: event.target.checked,
+                      }))}
+                    />
+                    Require stroke order
+                  </label>
+                  <label className="letters-stroke-order-toggle">
+                    <input
+                      type="checkbox"
+                      checked={languageProgress.showStrokeGuide}
+                      onChange={(event) => updateProgress((current) => ({
+                        ...current,
+                        showStrokeGuide: event.target.checked,
+                      }))}
+                    />
+                    Show drag direction
+                  </label>
+                </div>
               </section>
 
               <section className="letters-catalog" aria-labelledby="letters-catalog-title">
@@ -619,15 +856,54 @@ export function LettersWorkspace({
           language={language}
           metadata={selectedMetadata}
           requireStrokeOrder={languageProgress.requireStrokeOrder}
+          showStrokeGuide={languageProgress.showStrokeGuide}
           strokeTolerance={languageProgress.strokeTolerance}
           onClose={() => setSelectedCharacter("")}
           onSelect={setSelectedCharacter}
           onStart={(character) => markCharacter(character, "practicing")}
           onMastered={(character) => markCharacter(character, "mastered")}
+          onShowStrokeGuideChange={(showStrokeGuide) => updateProgress((current) => ({
+            ...current,
+            showStrokeGuide,
+          }))}
           onStrokeToleranceChange={(strokeTolerance) => updateProgress((current) => ({
             ...current,
             strokeTolerance,
           }))}
+        />
+      ) : null}
+
+      <LettersLessonIntro
+        open={practiceIntroOpen}
+        language={language}
+        scriptLabel={activeScriptLabel}
+        characters={practiceCharacters}
+        metadata={metadata}
+        questionCount={languageProgress.practiceQuestionCount}
+        onQuestionCountChange={(practiceQuestionCount) => updateProgress((current) => ({
+          ...current,
+          practiceQuestionCount,
+        }))}
+        onClose={() => setPracticeIntroOpen(false)}
+        onExited={() => {
+          if (!pendingPracticeSession) return;
+          setPracticeSession(pendingPracticeSession);
+          setPendingPracticeSession(null);
+        }}
+        onStart={preparePracticeSession}
+      />
+
+      {practiceSession ? (
+        <LessonPlayer
+          lesson={practiceSession.lesson}
+          coachingAvailable={false}
+          tracingOptions={{
+            strokeTolerance: languageProgress.strokeTolerance,
+            showStrokeGuide: languageProgress.showStrokeGuide,
+          }}
+          returnLabel="Return to Letters"
+          onProgressBatch={savePracticeProgress}
+          onExit={() => setPracticeSession(null)}
         />
       ) : null}
     </>

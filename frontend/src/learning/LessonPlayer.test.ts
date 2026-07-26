@@ -8,12 +8,13 @@ import { SPEECH_PREFERENCE_KEY } from "./speech";
 import type { Lesson, LessonQuestion } from "./types";
 
 const lesson: Lesson = {
-  schemaVersion: 2,
+  schemaVersion: 7,
   id: "player-test",
   unitId: "unit-test",
   title: "Player test",
   summary: "A compact player interaction fixture.",
   targetLanguage: "English",
+  sourceLanguage: "Vietnamese",
   level: "elementary",
   objectives: ["Answer two questions"],
   theory: [{ id: "theory", kind: "concept", title: "Test theory", body: "Use the answer key." }],
@@ -43,6 +44,7 @@ const lesson: Lesson = {
       presentation: { readQuestion: false, readAnswers: false, wordTooltips: false },
     },
   ],
+  questionAlternates: [],
   createdAt: "2026-07-20T00:00:00.000Z",
 };
 
@@ -119,7 +121,7 @@ function lessonWithQuestions(
   questionAlternates?: Lesson["questionAlternates"],
   glossary: Lesson["glossary"] = [],
 ): Lesson {
-  return { ...lesson, id, schemaVersion: questionAlternates ? 3 : 2, questions, questionAlternates, glossary };
+  return { ...lesson, id, schemaVersion: 7, questions, questionAlternates: questionAlternates ?? [], glossary };
 }
 
 beforeEach(() => {

@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ExtensionBridge } from "./extensionBridge";
-import type { ChatOperationState, ExtensionCommand, SendOperationPayload } from "./protocol";
+import type {
+  ChatOperationState,
+  ExtensionCommand,
+  IntegrationStatus,
+  SendOperationPayload,
+} from "./protocol";
 import { LESSON_QUESTION_FORMATS } from "../learning/types";
 
 function state(phase: ChatOperationState["phase"], patch: Partial<ChatOperationState> = {}): ChatOperationState {
@@ -54,9 +59,45 @@ const payload: SendOperationPayload = {
     questionCount: 10,
     speaking: false,
     allowedFormats: LESSON_QUESTION_FORMATS.filter((format) => format !== "speakingRepeat" && format !== "speakingRoleplay"),
-    requiredTemplates: [],
   },
 };
+
+const integrationStatus: IntegrationStatus = {
+  installed: true,
+  pausedForQuota: false,
+  queueLength: 0,
+};
+
+function respondToStatusVersions(versions: number[]) {
+  vi.spyOn(window, "postMessage").mockImplementation((message: unknown) => {
+    const request = message as {
+      command?: string;
+      nonce?: string;
+      requestId?: string;
+      version?: number;
+    };
+    if (request.command !== "GET_INTEGRATION_STATUS" || !versions.includes(request.version ?? -1)) return;
+    queueMicrotask(() => {
+      window.dispatchEvent(new MessageEvent("message", {
+        data: {
+          source: "meoi-extension",
+          version: request.version,
+          nonce: request.nonce,
+          requestId: request.requestId,
+          ok: true,
+          data: integrationStatus,
+        },
+        origin: window.location.origin,
+        source: window,
+      }));
+    });
+  });
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 describe("ExtensionBridge operation waiting", () => {
   it("reports session phases until a direct result is complete", async () => {
@@ -67,7 +108,7 @@ describe("ExtensionBridge operation waiting", () => {
       state("completed", {
         result: {
           type: "meoi.operation.result",
-          protocolVersion: 7,
+          protocolVersion: 8,
           operationId: "op-1",
           kind: "coaching",
           outcome: "completed",
@@ -103,7 +144,7 @@ describe("ExtensionBridge operation waiting", () => {
       state("completed", {
         result: {
           type: "meoi.operation.result",
-          protocolVersion: 7,
+          protocolVersion: 8,
           operationId: "op-1",
           kind: "coaching",
           outcome: "completed",
@@ -129,5 +170,39 @@ describe("ExtensionBridge operation waiting", () => {
     await expect(bridge.resetUnitChat("unit-1")).resolves.toBe(true);
     expect(bridge.commands).toEqual(["RESET_UNIT_CHAT"]);
     expect(bridge.payloads).toEqual([{ unitId: "unit-1" }]);
+  });
+});
+
+describe("ExtensionBridge compatibility detection", () => {
+  it("prefers bridge v8 when current and older status responders coexist", async () => {
+    vi.useFakeTimers();
+    respondToStatusVersions([8, 7]);
+    const result = new ExtensionBridge().detectCompatibility("unit-1");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await expect(result).resolves.toEqual({
+      state: "ready",
+      version: 8,
+      integration: integrationStatus,
+    });
+  });
+
+  it("identifies an older bridge without allowing it to become ready", async () => {
+    vi.useFakeTimers();
+    respondToStatusVersions([6]);
+    const result = new ExtensionBridge().detectCompatibility("unit-1");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await expect(result).resolves.toEqual({
+      state: "outdated",
+      version: 6,
+      integration: integrationStatus,
+    });
+  });
+
+  it("reports unavailable when no supported status responder answers", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(window, "postMessage").mockImplementation(() => undefined);
+    const result = new ExtensionBridge().detectCompatibility("unit-1");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await expect(result).resolves.toEqual({ state: "unavailable" });
   });
 });

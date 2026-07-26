@@ -6,6 +6,109 @@ type Point = [number, number];
 
 const shardCache = new Map<string, Promise<Record<string, CharacterJson>>>();
 let catalogPromise: Promise<{ zh: string[]; ja: string[] }> | null = null;
+const CHARACTER_BOUNDS = {
+  minX: 0,
+  maxX: 1_024,
+  minY: -124,
+  maxY: 900,
+} as const;
+
+function matchingEdgePoints(left: number[][], right: number[][], fromStart: boolean): number {
+  const limit = Math.min(left.length, right.length);
+  let count = 0;
+  while (count < limit) {
+    const leftIndex = fromStart ? count : left.length - count - 1;
+    const rightIndex = fromStart ? count : right.length - count - 1;
+    const leftPoint = left[leftIndex];
+    const rightPoint = right[rightIndex];
+    if (leftPoint[0] !== rightPoint[0] || leftPoint[1] !== rightPoint[1]) break;
+    count += 1;
+  }
+  return count;
+}
+
+function isTechnicalStrokePart(left: number[][], right: number[][]): boolean {
+  const shorterLength = Math.min(left.length, right.length);
+  if (shorterLength < 3) return false;
+  const sharedEdgePoints = Math.max(
+    matchingEdgePoints(left, right, true),
+    matchingEdgePoints(left, right, false),
+  );
+  return sharedEdgePoints >= Math.max(3, Math.ceil(shorterLength * .25));
+}
+
+function hasImpossibleMedianPoint(median: number[][]): boolean {
+  return median.some(([x, y]) => (
+    x < CHARACTER_BOUNDS.minX
+    || x > CHARACTER_BOUNDS.maxX
+    || y < CHARACTER_BOUNDS.minY
+    || y > CHARACTER_BOUNDS.maxY
+  ));
+}
+
+function normalizeJapaneseStrokeData(data: CharacterJson): CharacterJson {
+  if (data.strokes.length < 2 || data.strokes.length !== data.medians.length) return data;
+  const strokes: string[] = [];
+  const medians: number[][][] = [];
+  const mergedIndexes: number[] = [];
+  let changed = false;
+
+  data.strokes.forEach((stroke, index) => {
+    const previousMedian = data.medians[index - 1];
+    const median = data.medians[index];
+    if (previousMedian && (
+      isTechnicalStrokePart(previousMedian, median)
+      || hasImpossibleMedianPoint(median)
+    )) {
+      const mergedIndex = strokes.length - 1;
+      strokes[mergedIndex] = `${strokes[mergedIndex]} ${stroke}`;
+      mergedIndexes[index] = mergedIndex;
+      changed = true;
+      return;
+    }
+    mergedIndexes[index] = strokes.length;
+    strokes.push(stroke);
+    medians.push(median);
+  });
+
+  if (!changed) return data;
+  const radStrokes = data.radStrokes
+    ? [...new Set(data.radStrokes.map((index) => mergedIndexes[index]))]
+    : undefined;
+  return {
+    ...data,
+    strokes,
+    medians,
+    ...(radStrokes ? { radStrokes } : {}),
+  };
+}
+
+function validateCharacterData(data: CharacterJson, character: string): CharacterJson {
+  if (
+    !Array.isArray(data.strokes)
+    || !Array.isArray(data.medians)
+    || !data.strokes.length
+    || data.strokes.length !== data.medians.length
+  ) {
+    throw new Error(`Stroke data for ${character} is malformed.`);
+  }
+  const valid = data.medians.every((median) => (
+    Array.isArray(median)
+    && median.length >= 2
+    && median.every((point) => (
+      Array.isArray(point)
+      && point.length >= 2
+      && Number.isFinite(point[0])
+      && Number.isFinite(point[1])
+      && point[0] >= CHARACTER_BOUNDS.minX
+      && point[0] <= CHARACTER_BOUNDS.maxX
+      && point[1] >= CHARACTER_BOUNDS.minY
+      && point[1] <= CHARACTER_BOUNDS.maxY
+    ))
+  ));
+  if (!valid) throw new Error(`Stroke data for ${character} contains an invalid median.`);
+  return data;
+}
 
 function shardKey(character: string): string {
   const codePoint = character.codePointAt(0);
@@ -171,12 +274,15 @@ export async function loadStrokeCharacterData(language: string, character: strin
   if (family === "ko") {
     const generated = jamoData(character) ?? hangulData(character);
     if (!generated) throw new Error("Only modern Hangul syllables are supported.");
-    return generated;
+    return validateCharacterData(generated, character);
   }
   const shard = await loadShard(family, character);
   const data = shard[character];
   if (!data) throw new Error(`No stroke data is available for ${character}.`);
-  return data;
+  return validateCharacterData(
+    family === "ja" ? normalizeJapaneseStrokeData(data) : data,
+    character,
+  );
 }
 
 export function clearStrokeDataCache(): void {

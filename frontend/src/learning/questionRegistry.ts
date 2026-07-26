@@ -1,5 +1,11 @@
 import { LESSON_QUESTION_FORMATS } from "./types";
-import type { AnswerBank, LessonQuestion, QuestionFormat, QuestionPresentationSettings } from "./types";
+import type {
+  AnswerBank,
+  CharacterTracingQuestion,
+  LessonQuestion,
+  QuestionFormat,
+  QuestionPresentationSettings,
+} from "./types";
 
 export type QuestionFormatBadge = "local" | "ai" | "speaking";
 
@@ -10,7 +16,7 @@ export interface QuestionFormatDefinition {
   badge: QuestionFormatBadge;
   evaluationMode: "local" | "ai";
   presentation: Record<keyof QuestionPresentationSettings, boolean>;
-  sample: LessonQuestion;
+  sample: LessonQuestion | CharacterTracingQuestion;
 }
 
 const localBase = {
@@ -100,7 +106,7 @@ export const QUESTION_FORMAT_REGISTRY = {
       id: "preview-fill-blank",
       type: "fillBlank",
       prompt: "Complete the greeting.",
-      template: "Good ___.",
+      template: "Good {{blank}}.",
       acceptedAnswers: ["morning"],
       match: { ignorePunctuation: true },
       answerBank: sampleAnswerBank(["morning", "night", "afternoon"], "bank"),

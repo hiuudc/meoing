@@ -6,6 +6,7 @@ import {
   Volume2,
 } from "lucide-react";
 import {
+  Fragment,
   useEffect,
   useMemo,
   useRef,
@@ -13,6 +14,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
+  type CSSProperties,
 } from "react";
 import { createPortal } from "react-dom";
 import { CharacterTracingResponse } from "./CharacterTracingResponse";
@@ -23,12 +25,13 @@ import type {
   AnswerBank,
   ChoiceOption,
   LessonQuestion,
+  PlayableQuestion,
   QuestionAnswer,
   SpeakingSubmission,
 } from "./types";
 
 interface QuestionRendererProps {
-  question: LessonQuestion;
+  question: PlayableQuestion;
   answer: QuestionAnswer;
   language: string;
   disabled?: boolean;
@@ -41,6 +44,10 @@ interface QuestionRendererProps {
   onComplete?: (answer: QuestionAnswer) => void;
   renderText?: (text: string, interactive?: boolean) => ReactNode;
   answerInputMode?: AnswerInputMode;
+  tracingOptions?: {
+    strokeTolerance?: number;
+    showStrokeGuide?: boolean;
+  };
 }
 
 type TextRenderer = (text: string, interactive?: boolean) => ReactNode;
@@ -70,7 +77,7 @@ function TargetStimulusRow({
   );
 }
 
-export function answerBankForQuestion(question: LessonQuestion): AnswerBank | undefined {
+export function answerBankForQuestion(question: PlayableQuestion): AnswerBank | undefined {
   if (question.answerBank) return question.answerBank;
   if (question.type !== "freeWriting" || !question.supportBank?.length) return undefined;
   return {
@@ -117,6 +124,106 @@ function TextResponse({
   );
 }
 
+function NumericChoiceResponse({
+  id,
+  options,
+  selectedIds,
+  multiple,
+  legend,
+  legendClassName = "sr-only",
+  inline,
+  disabled,
+  evaluated,
+  onChange,
+  onAnswerActivate,
+  renderText,
+  renderOption,
+}: {
+  id: string;
+  options: ChoiceOption[];
+  selectedIds: string[];
+  multiple?: boolean;
+  legend: string;
+  legendClassName?: string;
+  inline?: boolean;
+  disabled?: boolean;
+  evaluated?: boolean;
+  onChange: (ids: string[]) => void;
+  onAnswerActivate?: (text: string) => void;
+  renderText: TextRenderer;
+  renderOption?: (option: ChoiceOption, interactive: boolean) => ReactNode;
+}) {
+  const numberBufferRef = useRef("");
+  const numberTimerRef = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (numberTimerRef.current !== null) window.clearTimeout(numberTimerRef.current);
+  }, []);
+
+  function activate(index: number) {
+    const option = options[index - 1];
+    if (!option) return;
+    const selected = selectedIds.includes(option.id);
+    onAnswerActivate?.(option.label);
+    onChange(multiple
+      ? selected
+        ? selectedIds.filter((candidate) => candidate !== option.id)
+        : [...selectedIds, option.id]
+      : [option.id]);
+  }
+
+  function handleNumberKey(event: ReactKeyboardEvent<HTMLFieldSetElement>) {
+    if (disabled || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+    const digit = event.code.startsWith("Numpad") ? event.code.slice(6) : event.key;
+    if (!/^\d$/.test(digit)) return;
+    event.preventDefault();
+    if (numberTimerRef.current !== null) window.clearTimeout(numberTimerRef.current);
+    const nextBuffer = `${numberBufferRef.current}${digit}`.replace(/^0+/, "");
+    numberBufferRef.current = nextBuffer;
+    const numeric = Number(nextBuffer);
+    const hasLongerCandidate = nextBuffer.length === 1 && options.length >= 10 && numeric === 1;
+    if (numeric >= 1 && numeric <= options.length && !hasLongerCandidate) {
+      numberBufferRef.current = "";
+      activate(numeric);
+      return;
+    }
+    numberTimerRef.current = window.setTimeout(() => {
+      const pending = Number(numberBufferRef.current);
+      numberBufferRef.current = "";
+      numberTimerRef.current = null;
+      if (pending >= 1 && pending <= options.length) activate(pending);
+    }, 420);
+  }
+
+  return (
+    <fieldset
+      className={`choice-list${inline ? " choice-list-inline" : ""}`}
+      disabled={disabled}
+      tabIndex={0}
+      data-question-primary-focus
+      onKeyDownCapture={handleNumberKey}
+    >
+      <legend className={legendClassName}>{legend}</legend>
+      {options.map((option, index) => {
+        const selected = selectedIds.includes(option.id);
+        return (
+          <label key={option.id} className={selected ? "is-selected" : ""}>
+            <input
+              type={multiple ? "checkbox" : "radio"}
+              name={multiple ? undefined : id}
+              value={option.id}
+              checked={selected}
+              onChange={() => activate(index + 1)}
+            />
+            <span className="choice-index" aria-hidden="true">{index + 1}</span>
+            <span>{renderText(option.label, Boolean(evaluated))}</span>
+          </label>
+        );
+      })}
+    </fieldset>
+  );
+}
+
 function moveItem(values: string[], sourceId: string, targetIndex: number): string[] {
   const sourceIndex = values.indexOf(sourceId);
   if (sourceIndex < 0) return values;
@@ -140,6 +247,7 @@ interface PointerDrag {
 interface DragPreview {
   id: string;
   label: string;
+  origin: PointerDrag["origin"];
   width: number;
   height: number;
   x: number;
@@ -147,6 +255,10 @@ interface DragPreview {
 }
 
 type DragDropTarget = "tray" | "bank" | null;
+interface DragInsertion {
+  index: number;
+  beforeId: string | null;
+}
 
 const DRAG_DROP_MARGIN = 32;
 const TYPEAHEAD_RESET_MS = 1_500;
@@ -174,6 +286,7 @@ export function OrderedAnswerComposer({
   disabled,
   evaluated,
   renderText,
+  renderOption,
   maxSelections,
 }: {
   options: ChoiceOption[];
@@ -183,9 +296,11 @@ export function OrderedAnswerComposer({
   disabled?: boolean;
   evaluated?: boolean;
   renderText: TextRenderer;
+  renderOption?: (option: ChoiceOption, interactive: boolean) => ReactNode;
   maxSelections?: number;
 }) {
   const labels = useMemo(() => new Map(options.map((option) => [option.id, option.label])), [options]);
+  const optionsById = useMemo(() => new Map(options.map((option) => [option.id, option])), [options]);
   const composerRef = useRef<HTMLDivElement>(null);
   const trayRef = useRef<HTMLDivElement>(null);
   const bankRef = useRef<HTMLDivElement>(null);
@@ -195,6 +310,8 @@ export function OrderedAnswerComposer({
   const typeaheadTimerRef = useRef<number | null>(null);
   const [dragPreview, setDragPreview] = useState<DragPreview | null>(null);
   const [dragDropTarget, setDragDropTarget] = useState<DragDropTarget>(null);
+  const [dragInsertion, setDragInsertion] = useState<DragInsertion | null>(null);
+  const dragInsertionRef = useRef<DragInsertion | null>(null);
   const [typeahead, setTypeahead] = useState("");
   const [announcement, setAnnouncement] = useState("");
   const availableOptions = options.filter((option) => !value.includes(option.id));
@@ -278,17 +395,42 @@ export function OrderedAnswerComposer({
     return null;
   }
 
-  function insertionIndex(clientX: number, clientY: number, excludedId?: string): number {
+  function insertionTarget(clientX: number, clientY: number, excludedId?: string): DragInsertion {
     const elements = Array.from(
       trayRef.current?.querySelectorAll<HTMLElement>("[data-answer-token-id]") ?? [],
     ).filter((element) => element.dataset.answerTokenId !== excludedId);
-    const target = elements.find((element) => {
+    if (!elements.length) return { index: 0, beforeId: null };
+    const rows: Array<Array<{ element: HTMLElement; rect: DOMRect }>> = [];
+    elements.forEach((element) => {
       const rect = element.getBoundingClientRect();
-      return clientY < rect.top + rect.height / 2
-        || (clientY <= rect.bottom && clientX < rect.left + rect.width / 2);
+      const row = rows.find((candidate) => Math.abs(candidate[0].rect.top - rect.top) < 8);
+      if (row) row.push({ element, rect });
+      else rows.push([{ element, rect }]);
     });
-    if (!target) return elements.length;
-    return elements.indexOf(target);
+    rows.sort((left, right) => left[0].rect.top - right[0].rect.top);
+    const row = rows.reduce((closest, candidate) => {
+      const top = Math.min(...candidate.map((item) => item.rect.top));
+      const bottom = Math.max(...candidate.map((item) => item.rect.bottom));
+      const distance = clientY < top ? top - clientY : clientY > bottom ? clientY - bottom : 0;
+      return !closest || distance < closest.distance ? { items: candidate, distance } : closest;
+    }, null as { items: Array<{ element: HTMLElement; rect: DOMRect }>; distance: number } | null)?.items ?? rows[0];
+    row.sort((left, right) => left.rect.left - right.rect.left);
+    const before = row.find((item) => clientX < item.rect.left + item.rect.width / 2);
+    if (before) {
+      const index = elements.indexOf(before.element);
+      return { index, beforeId: before.element.dataset.answerTokenId ?? null };
+    }
+    const last = row[row.length - 1].element;
+    const index = elements.indexOf(last) + 1;
+    return {
+      index,
+      beforeId: elements[index]?.dataset.answerTokenId ?? null,
+    };
+  }
+
+  function updateDragInsertion(next: DragInsertion | null) {
+    dragInsertionRef.current = next;
+    setDragInsertion(next);
   }
 
   function startPointerDrag(
@@ -313,6 +455,7 @@ export function OrderedAnswerComposer({
     setDragPreview({
       id,
       label,
+      origin,
       width: rect.width,
       height: rect.height,
       x: rect.left,
@@ -331,6 +474,9 @@ export function OrderedAnswerComposer({
     dragPreviewRef.current.style.transform = `translate3d(${event.clientX - drag.offsetX}px, ${event.clientY - drag.offsetY}px, 0)`;
     const nextTarget = dropTargetFor(drag.origin, event.clientX, event.clientY);
     setDragDropTarget((current) => current === nextTarget ? current : nextTarget);
+    updateDragInsertion(nextTarget === "tray"
+      ? insertionTarget(event.clientX, event.clientY, drag.origin === "tray" ? drag.id : undefined)
+      : null);
   }
 
   function finishPointerDrag(event: ReactPointerEvent<HTMLButtonElement>) {
@@ -338,18 +484,20 @@ export function OrderedAnswerComposer({
     dragRef.current = null;
     setDragPreview(null);
     setDragDropTarget(null);
+    const displayedInsertion = dragInsertionRef.current;
+    updateDragInsertion(null);
     if (!drag?.moved) return;
     const dropTarget = dropTargetFor(drag.origin, event.clientX, event.clientY);
 
     if (drag.origin === "bank" && dropTarget === "tray") {
       if (maxSelections === undefined || value.length < maxSelections) {
-        const targetIndex = insertionIndex(event.clientX, event.clientY);
+        const targetIndex = displayedInsertion?.index ?? insertionTarget(event.clientX, event.clientY).index;
         addToken(drag.id, drag.label, targetIndex);
       }
     } else if (drag.origin === "tray" && dropTarget === "bank") {
       removeToken(drag.id);
     } else if (drag.origin === "tray" && dropTarget === "tray") {
-      const targetIndex = insertionIndex(event.clientX, event.clientY, drag.id);
+      const targetIndex = displayedInsertion?.index ?? insertionTarget(event.clientX, event.clientY, drag.id).index;
       const next = moveItem(value, drag.id, targetIndex);
       onChange(next);
       announce(`${drag.label} moved to position ${next.indexOf(drag.id) + 1}.`);
@@ -362,6 +510,7 @@ export function OrderedAnswerComposer({
     dragRef.current = null;
     setDragPreview(null);
     setDragDropTarget(null);
+    updateDragInsertion(null);
   }
 
   function handleSelectedKey(event: ReactKeyboardEvent<HTMLButtonElement>, id: string) {
@@ -431,10 +580,11 @@ export function OrderedAnswerComposer({
       <p className="sr-only">Selected order</p>
       <div className={`${value.length ? "answer-tray" : "answer-tray is-empty"}${dragDropTarget === "tray" ? " is-drop-target" : ""}`} ref={trayRef} aria-label="Selected answer">
         {value.map((id, index) => (
-          <button
+          <Fragment key={id}>
+            {dragInsertion?.beforeId === id ? <span className="answer-insertion-gap" aria-hidden="true" /> : null}
+            <button
             type="button"
-            key={id}
-            className="answer-token"
+            className={`answer-token${dragPreview?.origin === "tray" && dragPreview.id === id ? " is-drag-origin" : ""}`}
             data-answer-token-id={id}
             aria-label={`${labels.get(id) ?? id}, position ${index + 1}. Alt plus arrow keys reorders; Delete returns it to the bank.`}
             onPointerDown={(event) => startPointerDrag(event, id, labels.get(id) ?? id, "tray")}
@@ -452,9 +602,12 @@ export function OrderedAnswerComposer({
             }}
             disabled={disabled}
           >
-            {renderText(labels.get(id) ?? id, Boolean(evaluated))}
-          </button>
+            {renderOption?.(optionsById.get(id) ?? { id, label: labels.get(id) ?? id }, Boolean(evaluated))
+              ?? renderText(labels.get(id) ?? id, Boolean(evaluated))}
+            </button>
+          </Fragment>
         ))}
+        {dragInsertion && dragInsertion.beforeId === null ? <span className="answer-insertion-gap" aria-hidden="true" /> : null}
       </div>
       <div className={`token-bank${dragDropTarget === "bank" ? " is-drop-target" : ""}`} ref={bankRef} aria-label="Available words">
         {options.map((option) => value.includes(option.id) ? (
@@ -482,7 +635,7 @@ export function OrderedAnswerComposer({
               : undefined}
             disabled={disabled || (maxSelections !== undefined && value.length >= maxSelections)}
           >
-            {renderText(option.label, Boolean(evaluated))}
+            {renderOption?.(option, Boolean(evaluated)) ?? renderText(option.label, Boolean(evaluated))}
           </button>
         ))}
       </div>
@@ -598,7 +751,13 @@ function AnswerBankResponse({
   );
 }
 
-function MultiClozeResponse({
+type InlineClozeQuestion = Extract<LessonQuestion, { type: "fillBlank" | "multiCloze" }>;
+
+function fillBlankMarkerId(template: string): string {
+  return template.match(/\{\{blank(?::([^{}]+))?\}\}/)?.[1] || "blank";
+}
+
+function InlineClozeResponse({
   question,
   answer,
   onChange,
@@ -609,7 +768,7 @@ function MultiClozeResponse({
   onSpeakTarget,
   renderText,
 }: {
-  question: Extract<LessonQuestion, { type: "multiCloze" }>;
+  question: InlineClozeQuestion;
   answer: QuestionAnswer;
   onChange: (answer: QuestionAnswer) => void;
   inputMode?: AnswerInputMode;
@@ -619,21 +778,29 @@ function MultiClozeResponse({
   onSpeakTarget?: (text: string) => void;
   renderText: TextRenderer;
 }) {
-  const values = mapAnswer(answer);
+  const blanks = useMemo(
+    () => question.type === "fillBlank"
+      ? [{ id: fillBlankMarkerId(question.template), acceptedAnswers: question.acceptedAnswers }]
+      : question.blanks,
+    [question],
+  );
+  const values = question.type === "fillBlank"
+    ? { [blanks[0].id]: stringAnswer(answer) }
+    : mapAnswer(answer);
   const bank = question.answerBank;
   const mode = inputMode ?? bank?.defaultMode ?? "keyboard";
   const [keyboardValues, setKeyboardValues] = useState(values);
   const [assignments, setAssignments] = useState<Record<string, string>>(() => {
     if (!bank) return {};
     const used = new Set<string>();
-    return Object.fromEntries(question.blanks.flatMap((blank) => {
+    return Object.fromEntries(blanks.flatMap((blank) => {
       const token = bank.tokens.find((candidate) => !used.has(candidate.id) && candidate.label === values[blank.id]);
       if (!token) return [];
       used.add(token.id);
       return [[blank.id, token.id]];
     }));
   });
-  const [activeBlankId, setActiveBlankId] = useState(question.blanks[0]?.id ?? "");
+  const [activeBlankId, setActiveBlankId] = useState(blanks[0]?.id ?? "");
   const [drag, setDrag] = useState<{
     tokenId: string;
     label: string;
@@ -658,8 +825,8 @@ function MultiClozeResponse({
   const [typeahead, setTypeahead] = useState("");
   const labels = useMemo(() => new Map(bank?.tokens.map((token) => [token.id, token.label]) ?? []), [bank]);
   const parsedTemplate = useMemo(
-    () => parseMultiClozeTemplate(question.template, question.blanks.map((blank) => blank.id)),
-    [question.blanks, question.template],
+    () => parseMultiClozeTemplate(question.template, blanks.map((blank) => blank.id)),
+    [blanks, question.template],
   );
 
   useEffect(() => {
@@ -669,8 +836,9 @@ function MultiClozeResponse({
       onChange(keyboardValues);
       return;
     }
-    onChange(Object.fromEntries(question.blanks.map((blank) => [blank.id, labels.get(assignments[blank.id]) ?? ""])));
-  }, [assignments, bank, keyboardValues, labels, mode, onChange, question.blanks]);
+    const nextValues = Object.fromEntries(blanks.map((blank) => [blank.id, labels.get(assignments[blank.id]) ?? ""]));
+    onChange(question.type === "fillBlank" ? nextValues[blanks[0].id] : nextValues);
+  }, [assignments, bank, blanks, keyboardValues, labels, mode, onChange, question.type]);
 
   useEffect(() => () => {
     if (typeaheadTimerRef.current !== null) window.clearTimeout(typeaheadTimerRef.current);
@@ -696,20 +864,21 @@ function MultiClozeResponse({
   }
 
   function nextEmptyBlank(currentId: string, nextAssignments: Record<string, string>): string {
-    const currentIndex = question.blanks.findIndex((blank) => blank.id === currentId);
+    const currentIndex = blanks.findIndex((blank) => blank.id === currentId);
     const ordered = [
-      ...question.blanks.slice(currentIndex + 1),
-      ...question.blanks.slice(0, Math.max(0, currentIndex + 1)),
+      ...blanks.slice(currentIndex + 1),
+      ...blanks.slice(0, Math.max(0, currentIndex + 1)),
     ];
     return ordered.find((blank) => !nextAssignments[blank.id])?.id ?? currentId;
   }
 
   function publishAssignments(nextAssignments: Record<string, string>) {
     setAssignments(nextAssignments);
-    onChange(Object.fromEntries(question.blanks.map((blank) => [
+    const nextValues = Object.fromEntries(blanks.map((blank) => [
       blank.id,
       labels.get(nextAssignments[blank.id]) ?? "",
-    ])));
+    ]));
+    onChange(question.type === "fillBlank" ? nextValues[blanks[0].id] : nextValues);
   }
 
   function assignToken(tokenId: string, blankId: string, speakToken: boolean) {
@@ -781,7 +950,7 @@ function MultiClozeResponse({
     const completedDrag = drag;
     setDrag(null);
     if (!completedDrag.moved) return;
-    const targetBlank = question.blanks.find((blank) => (
+    const targetBlank = blanks.find((blank) => (
       pointInRect(blankRefs.current.get(blank.id)?.getBoundingClientRect(), event.clientX, event.clientY, DRAG_DROP_MARGIN)
     ));
     const overBank = pointInRect(bankRef.current?.getBoundingClientRect(), event.clientX, event.clientY, DRAG_DROP_MARGIN);
@@ -817,7 +986,7 @@ function MultiClozeResponse({
         announce(next ? `Word bank prefix ${next}.` : "Word bank filter cleared.");
         return;
       }
-      const lastFilled = [...question.blanks].reverse().find((blank) => assignments[blank.id]);
+      const lastFilled = [...blanks].reverse().find((blank) => assignments[blank.id]);
       if (lastFilled) removeToken(lastFilled.id);
       return;
     }
@@ -832,7 +1001,7 @@ function MultiClozeResponse({
     if (matches.length === 1) {
       clearTypeahead();
       const targetBlank = assignments[activeBlankId]
-        ? question.blanks.find((blank) => !assignments[blank.id])?.id ?? activeBlankId
+        ? blanks.find((blank) => !assignments[blank.id])?.id ?? activeBlankId
         : activeBlankId;
       assignToken(matches[0].id, targetBlank, true);
       return;
@@ -844,11 +1013,23 @@ function MultiClozeResponse({
   }
 
   function renderBlank(blankId: string, index: number) {
+    const blank = blanks.find((candidate) => candidate.id === blankId);
+    const currentValue = mode === "keyboard" || !bank
+      ? keyboardValues[blankId] ?? ""
+      : labels.get(assignments[blankId]) ?? "";
+    const suggestedLength = Math.max(
+      currentValue.length,
+      ...(blank?.acceptedAnswers.map((accepted) => accepted.length) ?? [0]),
+    );
+    const blankStyle = {
+      width: `${Math.max(4, Math.min(18, suggestedLength + 2))}ch`,
+    } as CSSProperties;
     if (mode === "keyboard" || !bank) {
       return (
         <label
           className={`multi-cloze-inline-blank${activeBlankId === blankId ? " is-active" : ""}`}
           key={`${blankId}-${index}`}
+          style={blankStyle}
           ref={(element) => {
             if (element) blankRefs.current.set(blankId, element);
             else blankRefs.current.delete(blankId);
@@ -863,7 +1044,7 @@ function MultiClozeResponse({
             onChange={(event) => {
               const next = { ...keyboardValues, [blankId]: event.target.value };
               setKeyboardValues(next);
-              onChange(next);
+              onChange(question.type === "fillBlank" ? next[blanks[0].id] : next);
             }}
             disabled={disabled}
             autoComplete="off"
@@ -877,6 +1058,7 @@ function MultiClozeResponse({
       <span
         className={`multi-cloze-inline-blank is-bank${activeBlankId === blankId ? " is-active" : ""}${tokenId ? " is-filled" : ""}`}
         key={`${blankId}-${index}`}
+        style={blankStyle}
         ref={(element) => {
           if (element) blankRefs.current.set(blankId, element);
           else blankRefs.current.delete(blankId);
@@ -908,9 +1090,9 @@ function MultiClozeResponse({
     );
   }
 
-  const markerIndexById = new Map(question.blanks.map((blank, index) => [blank.id, index]));
-  const markerIds = parsedTemplate?.markerIds ?? question.blanks.map((blank) => blank.id);
-  const segments = parsedTemplate?.segments ?? [question.template, ...question.blanks.map(() => "")];
+  const markerIndexById = new Map(blanks.map((blank, index) => [blank.id, index]));
+  const markerIds = parsedTemplate?.markerIds ?? blanks.map((blank) => blank.id);
+  const segments = parsedTemplate?.segments ?? [question.template, ...blanks.map(() => "")];
   const usedTokenIds = new Set(Object.values(assignments));
   const portalTarget = document.querySelector<HTMLElement>(".app-shell") ?? document.body;
 
@@ -965,7 +1147,7 @@ function MultiClozeResponse({
                   return;
                 }
                 const target = assignments[activeBlankId]
-                  ? question.blanks.find((blank) => !assignments[blank.id])?.id ?? activeBlankId
+                  ? blanks.find((blank) => !assignments[blank.id])?.id ?? activeBlankId
                   : activeBlankId;
                 assignToken(token.id, target, true);
               }}
@@ -1041,6 +1223,7 @@ export function PairMatchingResponse({
   const timeoutRef = useRef<number | null>(null);
   const numberTimerRef = useRef<number | null>(null);
   const numberBufferRef = useRef("");
+  const groupRef = useRef<HTMLDivElement>(null);
   const rightItems = useMemo(() => stableShuffle(pairs, id), [id, pairs]);
   const lockedRightIds = new Set(Object.values(value));
 
@@ -1056,6 +1239,7 @@ export function PairMatchingResponse({
       onChange(next);
       setSelectedLeft("");
       setSelectedRight("");
+      window.requestAnimationFrame(() => groupRef.current?.focus({ preventScroll: true }));
       if (pairs.every((candidate) => next[candidate.leftId] === candidate.rightId)) {
         window.queueMicrotask(() => onComplete?.(next));
       }
@@ -1067,6 +1251,7 @@ export function PairMatchingResponse({
       setWrong([]);
       setSelectedLeft("");
       setSelectedRight("");
+      groupRef.current?.focus({ preventScroll: true });
     }, 420);
   }
 
@@ -1120,6 +1305,7 @@ export function PairMatchingResponse({
   return (
     <div
       className="pair-matching"
+      ref={groupRef}
       role="group"
       aria-label="Select matching pairs"
       tabIndex={0}
@@ -1361,6 +1547,7 @@ export function QuestionRenderer({
   onComplete,
   renderText,
   answerInputMode,
+  tracingOptions,
 }: QuestionRendererProps) {
   const render = renderText ?? ((text: string) => text);
   const answerInteractive = Boolean(evaluated);
@@ -1368,76 +1555,54 @@ export function QuestionRenderer({
   switch (question.type) {
     case "singleChoice":
       return (
-        <fieldset className="choice-list" disabled={disabled}>
-          <legend className="sr-only">Choose one answer</legend>
-          {question.options.map((option) => (
-            <label key={option.id} className={stringAnswer(answer) === option.id ? "is-selected" : ""}>
-              <input
-                type="radio"
-                name={question.id}
-                value={option.id}
-                checked={stringAnswer(answer) === option.id}
-                onClick={() => onAnswerActivate?.(option.label)}
-                onChange={() => onChange(option.id)}
-              />
-              <span>{render(option.label, answerInteractive)}</span>
-            </label>
-          ))}
-        </fieldset>
+        <NumericChoiceResponse
+          id={question.id}
+          options={question.options}
+          selectedIds={stringAnswer(answer) ? [stringAnswer(answer)] : []}
+          legend="Choose one answer"
+          disabled={disabled}
+          evaluated={evaluated}
+          onChange={(ids) => onChange(ids[0] ?? "")}
+          onAnswerActivate={onAnswerActivate}
+          renderText={render}
+        />
       );
     case "multipleChoice": {
       const selected = stringArrayAnswer(answer);
       return (
-        <fieldset className="choice-list" disabled={disabled}>
-          <legend className="question-control-label">Choose all matching answers</legend>
-          {question.options.map((option) => (
-            <label key={option.id} className={selected.includes(option.id) ? "is-selected" : ""}>
-              <input
-                type="checkbox"
-                value={option.id}
-                checked={selected.includes(option.id)}
-                onChange={(event) => {
-                  onAnswerActivate?.(option.label);
-                  onChange(event.target.checked ? [...selected, option.id] : selected.filter((id) => id !== option.id));
-                }}
-              />
-              <span>{render(option.label, answerInteractive)}</span>
-            </label>
-          ))}
-        </fieldset>
+        <NumericChoiceResponse
+          id={question.id}
+          options={question.options}
+          selectedIds={selected}
+          multiple
+          legend="Choose all matching answers"
+          legendClassName="question-control-label"
+          disabled={disabled}
+          evaluated={evaluated}
+          onChange={onChange}
+          onAnswerActivate={onAnswerActivate}
+          renderText={render}
+        />
       );
     }
     case "trueFalse":
       return (
-        <fieldset className="choice-list choice-list-inline" disabled={disabled}>
-          <legend className={question.targetPrompt ? "sr-only" : undefined}>
-            {question.targetPrompt ? "Choose true or false" : render(question.statement)}
-          </legend>
-          {[{ value: true, label: "True" }, { value: false, label: "False" }].map((option) => (
-            <label key={String(option.value)} className={answer === option.value ? "is-selected" : ""}>
-              <input
-                type="radio"
-                name={question.id}
-                checked={answer === option.value}
-                onClick={() => onAnswerActivate?.(option.label)}
-                onChange={() => onChange(option.value)}
-              />
-              <span>{option.label}</span>
-            </label>
-          ))}
-        </fieldset>
+        <NumericChoiceResponse
+          id={question.id}
+          options={[{ id: "true", label: "True" }, { id: "false", label: "False" }]}
+          selectedIds={typeof answer === "boolean" ? [String(answer)] : []}
+          legend={question.targetPrompt ? "Choose true or false" : question.statement}
+          legendClassName={question.targetPrompt ? "sr-only" : ""}
+          inline
+          disabled={disabled}
+          evaluated={evaluated}
+          onChange={(ids) => onChange(ids[0] === "true")}
+          onAnswerActivate={onAnswerActivate}
+          renderText={render}
+        />
       );
     case "fillBlank":
-      return (
-        <div className="blank-response">
-          {question.targetPrompt || onSpeakTarget ? (
-            <TargetStimulusRow speechText={question.targetPrompt ?? question.template} onSpeak={onSpeakTarget}>
-              <p>{render(question.template)}</p>
-            </TargetStimulusRow>
-          ) : <p>{render(question.template)}</p>}
-          <AnswerBankResponse bank={question.answerBank} value={stringAnswer(answer)} onChange={onChange} inputMode={answerInputMode} label="Missing word or phrase" disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} renderText={render} />
-        </div>
-      );
+      return <InlineClozeResponse question={question} answer={answer} onChange={onChange} inputMode={answerInputMode} disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} onSpeakTarget={onSpeakTarget} renderText={render} />;
     case "selectBlank": {
       const selectedId = stringAnswer(answer);
       const selectedOption = question.options.find((option) => option.id === selectedId);
@@ -1502,7 +1667,7 @@ export function QuestionRenderer({
       );
     }
     case "multiCloze":
-      return <MultiClozeResponse question={question} answer={answer} onChange={onChange} inputMode={answerInputMode} disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} onSpeakTarget={onSpeakTarget} renderText={render} />;
+      return <InlineClozeResponse question={question} answer={answer} onChange={onChange} inputMode={answerInputMode} disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} onSpeakTarget={onSpeakTarget} renderText={render} />;
     case "wordBank":
     case "reorderTokens":
       return <OrderedAnswerComposer options={question.tokens} value={stringArrayAnswer(answer)} onChange={onChange} onAnswerActivate={onAnswerActivate} disabled={disabled} evaluated={evaluated} renderText={render} />;
@@ -1521,18 +1686,32 @@ export function QuestionRenderer({
           onComplete={onComplete}
         />
       );
-    case "reorderDialogue":
+    case "reorderDialogue": {
+      const firstSpeaker = question.turns[0]?.speaker;
       return (
-        <OrderedAnswerComposer
-          options={question.turns.map((turn) => ({ id: turn.id, label: `${turn.speaker}: ${turn.label}` }))}
-          value={stringArrayAnswer(answer)}
-          onChange={onChange}
-          onAnswerActivate={onAnswerActivate}
-          disabled={disabled}
-          evaluated={evaluated}
-          renderText={render}
-        />
+        <div className="dialogue-order-response">
+          <OrderedAnswerComposer
+            options={question.turns.map((turn) => ({ id: turn.id, label: turn.label }))}
+            value={stringArrayAnswer(answer)}
+            onChange={onChange}
+            onAnswerActivate={onAnswerActivate}
+            disabled={disabled}
+            evaluated={evaluated}
+            renderText={render}
+            renderOption={(option, interactive) => {
+              const turn = question.turns.find((candidate) => candidate.id === option.id);
+              if (!turn) return render(option.label, interactive);
+              return (
+                <span className={`dialogue-turn ${turn.speaker === firstSpeaker ? "is-left" : "is-right"}`}>
+                  <small>{turn.speaker}</small>
+                  <span>{render(turn.label, interactive)}</span>
+                </span>
+              );
+            }}
+          />
+        </div>
       );
+    }
     case "categorize": {
       return <CategorizeResponse question={question} value={mapAnswer(answer)} onChange={onChange} disabled={disabled} evaluated={evaluated} renderText={render} onAnswerActivate={onAnswerActivate} onComplete={onComplete} />;
     }
@@ -1639,7 +1818,21 @@ export function QuestionRenderer({
     case "flashcardRecall":
       return <FlashcardRecallResponse question={question} value={stringAnswer(answer)} language={language} disabled={disabled} onChange={onChange} onSpeakingChange={onSpeakingChange} />;
     case "characterTracing":
-      return <CharacterTracingResponse question={question} language={language} answer={answer} disabled={disabled} onChange={onChange} onUnavailable={onRequireAlternate} />;
+      return (
+        <CharacterTracingResponse
+          question={question}
+          language={language}
+          answer={answer}
+          disabled={disabled}
+          strokeTolerance={tracingOptions?.strokeTolerance}
+          showStrokeGuide={tracingOptions?.showStrokeGuide}
+          onUnavailable={onRequireAlternate}
+          onChange={(nextAnswer) => {
+            onChange(nextAnswer);
+            if (nextAnswer === "passed") window.queueMicrotask(() => onComplete?.(nextAnswer));
+          }}
+        />
+      );
   }
 }
 
@@ -1658,7 +1851,8 @@ function FlashcardRecallResponse({
   onChange: (value: string) => void;
   onSpeakingChange?: (submission: SpeakingSubmission | null) => void;
 }) {
-  const [keyboardFallback, setKeyboardFallback] = useState(() => !supportsSpeechRecognition());
+  const speechSupported = supportsSpeechRecognition();
+  const [keyboardFallback, setKeyboardFallback] = useState(() => !speechSupported);
   return (
     <div className="flashcard-recall">
       <blockquote>{question.cue}</blockquote>
@@ -1679,7 +1873,16 @@ function FlashcardRecallResponse({
       ) : (
         <>
           <TextResponse label={`Answer in ${language}`} value={value} onChange={onChange} disabled={disabled} />
-          {supportsSpeechRecognition() ? <button className="icon-text-button" type="button" onClick={() => setKeyboardFallback(false)} disabled={disabled}><Mic size={15} /> Use voice</button> : null}
+          <button
+            className="icon-text-button"
+            type="button"
+            onClick={() => setKeyboardFallback(false)}
+            disabled={disabled || !speechSupported}
+            title={speechSupported ? undefined : "Voice recognition is not available in this browser."}
+          >
+            <Mic size={15} /> Use voice
+          </button>
+          {!speechSupported ? <p className="speaking-status">Voice recognition is not available in this browser. Continue with the keyboard.</p> : null}
         </>
       )}
     </div>

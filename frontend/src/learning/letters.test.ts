@@ -7,6 +7,7 @@ import {
   getLettersLanguageProgress,
   loadLettersProgress,
   matchesCharacterQuery,
+  normalizeLettersPracticeQuestionCount,
   normalizeLettersProgressStore,
   normalizeStrokeTolerance,
   saveLettersProgress,
@@ -45,6 +46,8 @@ describe("letters progress", () => {
           Japanese: {
             requireStrokeOrder: false,
             strokeTolerance: 1.36,
+            showStrokeGuide: false,
+            practiceQuestionCount: 9.7,
             characters: { "水": "mastered", "日": "practicing", word: "mastered", "火": "unknown" },
           },
         },
@@ -53,11 +56,15 @@ describe("letters progress", () => {
     expect(getLettersLanguageProgress(normalized, "collectionA", "Japanese")).toEqual({
       requireStrokeOrder: false,
       strokeTolerance: 1.4,
+      showStrokeGuide: false,
+      practiceQuestionCount: 10,
       characters: { "水": "mastered", "日": "practicing" },
     });
     expect(getLettersLanguageProgress(normalized, "collectionB", "Japanese")).toEqual({
       requireStrokeOrder: true,
       strokeTolerance: 1,
+      showStrokeGuide: true,
+      practiceQuestionCount: 5,
       characters: {},
     });
 
@@ -78,6 +85,10 @@ describe("letters progress", () => {
     expect(normalizeStrokeTolerance(0.1)).toBe(0.5);
     expect(normalizeStrokeTolerance(1.26)).toBe(1.3);
     expect(normalizeStrokeTolerance(4)).toBe(2);
+    expect(normalizeLettersPracticeQuestionCount(undefined)).toBe(5);
+    expect(normalizeLettersPracticeQuestionCount(0)).toBe(1);
+    expect(normalizeLettersPracticeQuestionCount(7.6)).toBe(8);
+    expect(normalizeLettersPracticeQuestionCount(99)).toBe(20);
 
     const legacy = normalizeLettersProgressStore({
       version: 1,
@@ -92,6 +103,8 @@ describe("letters progress", () => {
     });
     expect(legacy.version).toBe(1);
     expect(legacy.collections.collectionA.Japanese.strokeTolerance).toBe(1);
+    expect(legacy.collections.collectionA.Japanese.showStrokeGuide).toBe(true);
+    expect(legacy.collections.collectionA.Japanese.practiceQuestionCount).toBe(5);
   });
 
   it("falls back safely for invalid or future storage", () => {
@@ -163,5 +176,50 @@ describe("letters catalog helpers", () => {
     const jamo = await loadStrokeCharacterData("Korean", "ㄱ");
     expect(jamo.strokes.length).toBeGreaterThan(0);
     expect(jamo.medians).toHaveLength(jamo.strokes.length);
+  });
+
+  it("merges Japanese animation paths into logical handwriting strokes", async () => {
+    const canonicalMedian = [[570, 460], [610, 416], [460, 173], [200, 64], [181, 218]];
+    const splitMedian = [[-170, 458], [-210, 416], [460, 173], [200, 64], [181, 218]];
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        "\u3042": {
+          strokes: ["first", "second", "third-a", "third-b"],
+          medians: [
+            [[174, 642], [697, 659]],
+            [[331, 763], [431, 123]],
+            canonicalMedian,
+            splitMedian,
+          ],
+        },
+        "0": {
+          strokes: ["digit-main", "digit-animation-tail"],
+          medians: [
+            [[210, 720], [520, 810], [760, 500], [510, 80], [210, 280]],
+            [[2_140, -900], [2_400, -1_200]],
+          ],
+        },
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const data = await loadStrokeCharacterData("Japanese", "\u3042");
+
+    expect(data.strokes).toEqual(["first", "second", "third-a third-b"]);
+    expect(data.medians).toEqual([
+      [[174, 642], [697, 659]],
+      [[331, 763], [431, 123]],
+      canonicalMedian,
+    ]);
+    expect(fetchMock).toHaveBeenCalledWith("/stroke-data/ja/30.json", {
+      credentials: "same-origin",
+    });
+
+    const digit = await loadStrokeCharacterData("Japanese", "0");
+    expect(digit.strokes).toEqual(["digit-main digit-animation-tail"]);
+    expect(digit.medians).toEqual([
+      [[210, 720], [520, 810], [760, 500], [510, 80], [210, 280]],
+    ]);
   });
 });

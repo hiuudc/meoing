@@ -125,8 +125,10 @@ describe("QuestionRenderer interactions", () => {
       }));
       await Promise.resolve();
     });
+    await act(async () => new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve())));
     expect(document.querySelectorAll(".pair-grid-row > button.is-locked")).toHaveLength(2);
     expect(onComplete).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(group);
 
     await act(async () => group.dispatchEvent(
       new KeyboardEvent("keydown", { bubbles: true, code: "Digit2", key: "2" }),
@@ -144,6 +146,66 @@ describe("QuestionRenderer interactions", () => {
     expect(document.querySelectorAll(".pair-grid-row > button.is-locked")).toHaveLength(4);
     expect(onComplete).toHaveBeenCalledTimes(1);
     expect(onComplete).toHaveBeenCalledWith({ one: "uno", two: "dos" });
+  });
+
+  it("shows numeric badges and selects choice formats from number keys", async () => {
+    const cases: Array<{ question: LessonQuestion; key: string; expected: string }> = [
+      {
+        question: {
+          id: "single-numeric",
+          type: "singleChoice",
+          prompt: "Choose one",
+          explanation: "One choice",
+          evaluationMode: "local",
+          options: [{ id: "one", label: "one" }, { id: "two", label: "two" }],
+          correctOptionId: "two",
+        },
+        key: "2",
+        expected: '"two"',
+      },
+      {
+        question: {
+          id: "multiple-numeric",
+          type: "multipleChoice",
+          prompt: "Choose several",
+          explanation: "Several choices",
+          evaluationMode: "local",
+          options: [{ id: "one", label: "one" }, { id: "two", label: "two" }, { id: "three", label: "three" }],
+          correctOptionIds: ["one", "three"],
+        },
+        key: "3",
+        expected: '["three"]',
+      },
+      {
+        question: {
+          id: "true-false-numeric",
+          type: "trueFalse",
+          prompt: "True or false",
+          explanation: "False",
+          evaluationMode: "local",
+          statement: "The statement is false.",
+          correct: false,
+        },
+        key: "2",
+        expected: "false",
+      },
+    ];
+
+    await render(createElement(Harness, { key: cases[0].question.id, question: cases[0].question }));
+    for (const [index, { question, key, expected }] of cases.entries()) {
+      if (index > 0) {
+        await act(async () => root!.render(createElement(Harness, { key: question.id, question })));
+      }
+      const choices = document.querySelector<HTMLFieldSetElement>(".choice-list")!;
+      expect(Array.from(choices.querySelectorAll(".choice-index")).map((item) => item.textContent))
+        .toEqual(Array.from({ length: choices.querySelectorAll("label").length }, (_, index) => String(index + 1)));
+      await act(async () => choices.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true,
+        code: `Numpad${key}`,
+        key,
+      })));
+      expect(document.querySelector("#answer-value")?.textContent).toBe(expected);
+    }
   });
 
   it("keeps duplicate-label bank tokens distinct and supports keyboard reordering", async () => {
@@ -281,6 +343,71 @@ describe("QuestionRenderer interactions", () => {
     expect(document.querySelector("#answer-value")?.textContent).toBe('"America"');
   });
 
+  it("uses the visual wrapped row when reordering a dragged answer token", async () => {
+    Object.defineProperty(HTMLElement.prototype, "setPointerCapture", {
+      configurable: true,
+      value: vi.fn(),
+    });
+    const question: LessonQuestion = {
+      id: "wrapped-reorder",
+      type: "reorderTokens",
+      prompt: "Order the words",
+      explanation: "Visual order",
+      evaluationMode: "local",
+      tokens: [
+        { id: "a", label: "A" },
+        { id: "b", label: "B" },
+        { id: "c", label: "C" },
+        { id: "d", label: "D" },
+      ],
+      correctOrderIds: ["b", "c", "a", "d"],
+    };
+    await render(createElement(Harness, { question }));
+    for (const label of ["A", "B", "C", "D"]) await act(async () => button(label).click());
+    const tray = document.querySelector<HTMLElement>(".answer-tray")!;
+    const bank = document.querySelector<HTMLElement>(".token-bank")!;
+    const tokens = Object.fromEntries(
+      Array.from(tray.querySelectorAll<HTMLButtonElement>("[data-answer-token-id]"))
+        .map((token) => [token.dataset.answerTokenId!, token]),
+    );
+    const rect = (left: number, top: number, width = 60, height = 36) => ({
+      bottom: top + height,
+      height,
+      left,
+      right: left + width,
+      top,
+      width,
+      x: left,
+      y: top,
+      toJSON: () => ({}),
+    }) as DOMRect;
+    tray.getBoundingClientRect = () => rect(0, 0, 220, 180);
+    bank.getBoundingClientRect = () => rect(0, 260, 220, 40);
+    tokens.a.getBoundingClientRect = () => rect(0, 0);
+    tokens.b.getBoundingClientRect = () => rect(80, 0);
+    tokens.c.getBoundingClientRect = () => rect(0, 100);
+    tokens.d.getBoundingClientRect = () => rect(80, 100);
+
+    await act(async () => tokens.a.dispatchEvent(new MouseEvent("pointerdown", {
+      bubbles: true,
+      clientX: 20,
+      clientY: 20,
+    })));
+    await act(async () => tokens.a.dispatchEvent(new MouseEvent("pointermove", {
+      bubbles: true,
+      clientX: 75,
+      clientY: 115,
+    })));
+    expect(document.querySelector(".answer-insertion-gap")).not.toBeNull();
+    await act(async () => tokens.a.dispatchEvent(new MouseEvent("pointerup", {
+      bubbles: true,
+      clientX: 75,
+      clientY: 115,
+    })));
+
+    expect(document.querySelector("#answer-value")?.textContent).toBe('["b","c","a","d"]');
+  });
+
   it("marks answer text interactive only after evaluation", async () => {
     const question: LessonQuestion = {
       id: "choice",
@@ -323,6 +450,36 @@ describe("QuestionRenderer interactions", () => {
     expect(document.querySelector(".select-blank-slot.is-filled")).toBeNull();
     expect(document.querySelectorAll(".select-blank-options button")).toHaveLength(2);
     expect(document.querySelector("#answer-value")?.textContent).toBe('""');
+  });
+
+  it("places a Fill Blank bank token directly inside its inline marker", async () => {
+    const question: LessonQuestion = {
+      id: "fill-inline",
+      type: "fillBlank",
+      prompt: "Complete the sentence",
+      targetPrompt: "I drink {{blank:object}} daily.",
+      explanation: "Water is the object.",
+      evaluationMode: "local",
+      template: "I drink {{blank:object}} daily.",
+      acceptedAnswers: ["water"],
+      answerBank: {
+        tokens: [{ id: "water", label: "water" }, { id: "tea", label: "tea" }],
+        separator: "space",
+        defaultMode: "bank",
+      },
+    };
+    await render(createElement(Harness, { question, inputMode: "bank" }));
+    const blank = document.querySelector<HTMLElement>(".multi-cloze-inline-blank")!;
+    expect(blank.style.width).toBe("7ch");
+
+    await act(async () => button("water").click());
+    expect(blank.textContent).toContain("water");
+    expect(document.querySelector("#answer-value")?.textContent).toBe('"water"');
+    expect(document.querySelectorAll(".multi-cloze-bank .token-bank-placeholder")).toHaveLength(1);
+
+    await act(async () => blank.querySelector<HTMLButtonElement>("button")!.click());
+    expect(document.querySelector("#answer-value")?.textContent).toBe('""');
+    expect(document.querySelectorAll(".multi-cloze-bank button")).toHaveLength(2);
   });
 
   it("fills explicit multi-blank markers in active order and returns a selected token", async () => {
@@ -400,6 +557,47 @@ describe("QuestionRenderer interactions", () => {
     expect(document.querySelectorAll(".categorize-items button.is-locked")).toHaveLength(3);
     expect(onComplete).toHaveBeenCalledTimes(1);
     expect(onComplete).toHaveBeenCalledWith({ red: "warm", orange: "warm", blue: "cool" });
+  });
+
+  it("renders reordered dialogue as speaker-labelled chat and speaks only the utterance", async () => {
+    const onAnswerActivate = vi.fn();
+    const question: LessonQuestion = {
+      id: "dialogue",
+      type: "reorderDialogue",
+      prompt: "Order the dialogue",
+      explanation: "A short exchange.",
+      evaluationMode: "local",
+      turns: [
+        { id: "hello", speaker: "Aki", label: "Good morning." },
+        { id: "reply", speaker: "Mina", label: "Good morning, Aki." },
+      ],
+      correctOrderIds: ["hello", "reply"],
+    };
+    await render(createElement(Harness, { question, onAnswerActivate }));
+
+    await act(async () => button("Good morning.").click());
+    await act(async () => button("Good morning, Aki.").click());
+    expect(document.querySelector(".dialogue-turn.is-left small")?.textContent).toBe("Aki");
+    expect(document.querySelector(".dialogue-turn.is-right small")?.textContent).toBe("Mina");
+    expect(onAnswerActivate).toHaveBeenNthCalledWith(1, "Good morning.");
+    expect(onAnswerActivate).toHaveBeenNthCalledWith(2, "Good morning, Aki.");
+  });
+
+  it("keeps the Flashcard Recall voice control visible when recognition is unavailable", async () => {
+    const question: LessonQuestion = {
+      id: "flashcard",
+      type: "flashcardRecall",
+      prompt: "Recall the word",
+      explanation: "Water.",
+      evaluationMode: "local",
+      cue: "water",
+      acceptedAnswers: ["水"],
+    };
+    await render(createElement(Harness, { question }));
+    const voiceButton = button("Use voice");
+    expect(voiceButton.disabled).toBe(true);
+    expect(voiceButton.title).toContain("not available");
+    expect(document.body.textContent).toContain("Continue with the keyboard");
   });
 
   it("renders stable but content-specific audio waveforms", async () => {

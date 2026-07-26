@@ -484,7 +484,7 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
   const copy = sourceCopyFor(profile.sourceLanguage);
   const explanation = copy.explanation;
   const hint = copy.hint;
-  const blankWater = replaceFirst(target.drinkWater, target.water, "___");
+  const blankWater = replaceFirst(target.drinkWater, target.water, "{{blank}}");
   const selectWater = replaceFirst(target.drinkWater, target.water, "{{blank}}");
   const clozeBlanks = target.tokens.slice(1).map((token, index) => ({
     id: `blank-${target.tokenConcepts[index + 1]}`,
@@ -791,7 +791,7 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
       candidate.type !== primary.type
       && (!listeningFormats.has(primary.type) || !listeningFormats.has(candidate.type))
     )) ?? questions[(index + 1) % questions.length];
-    const { templateId: _templateId, presentation: _presentation, ...alternate } = sourceQuestion;
+    const { presentation: _presentation, ...alternate } = sourceQuestion;
     return {
       questionId: primary.id,
       question: { ...alternate, id: `${primary.id}-alternate` } as LessonQuestion,
@@ -799,7 +799,7 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
   });
 
   return decorateLessonPresentation({
-    schemaVersion: 6,
+    schemaVersion: 7,
     id: `${prefix}-lesson`,
     unitId,
     title: `${copy.title}: ${profile.sourceLanguage} → ${profile.targetLanguage}`,

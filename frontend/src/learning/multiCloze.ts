@@ -1,11 +1,9 @@
 export interface MultiClozeTemplateParts {
   markerIds: string[];
   segments: string[];
-  legacy: boolean;
 }
 
-const EXPLICIT_MARKER = /\{\{blank:([^{}]+)\}\}/g;
-const LEGACY_MARKER = /_{2,}/g;
+const EXPLICIT_MARKER = /\{\{blank(?::([^{}]+))?\}\}/g;
 
 function splitTemplate(
   template: string,
@@ -23,26 +21,24 @@ function splitTemplate(
     cursor = match.index + match[0].length;
   }
   segments.push(template.slice(cursor));
-  return { markerIds, segments, legacy: pattern === LEGACY_MARKER };
+  return { markerIds, segments };
 }
 
 export function parseMultiClozeTemplate(
   template: string,
   blankIds: string[],
-  allowLegacy = true,
 ): MultiClozeTemplateParts | null {
-  const explicit = splitTemplate(template, EXPLICIT_MARKER, (match) => match[1]);
-  if (explicit.markerIds.length) return explicit;
-  if (!allowLegacy) return null;
-  const legacy = splitTemplate(template, LEGACY_MARKER, (_match, index) => blankIds[index] ?? "");
-  return legacy.markerIds.length === blankIds.length && legacy.markerIds.every(Boolean)
-    ? legacy
-    : null;
+  const explicit = splitTemplate(
+    template,
+    EXPLICIT_MARKER,
+    (match, index) => match[1] || (blankIds.length === 1 ? blankIds[0] : blankIds[index] ?? ""),
+  );
+  return explicit.markerIds.length && explicit.markerIds.every(Boolean) ? explicit : null;
 }
 
 export function validateMultiClozeMarkers(template: string, blankIds: string[]): string[] {
-  const parsed = parseMultiClozeTemplate(template, blankIds, false);
-  if (!parsed) return ["Multi-blank templates need explicit {{blank:<id>}} markers."];
+  const parsed = parseMultiClozeTemplate(template, blankIds);
+  if (!parsed) return ["Blank templates need {{blank}} or {{blank:<id>}} markers."];
   const expected = new Set(blankIds);
   const seen = new Set<string>();
   const errors: string[] = [];
@@ -61,7 +57,6 @@ export function validateMultiClozeMarkers(template: string, blankIds: string[]):
 export function stripBlankMarkers(text: string): string {
   return text
     .replace(/\{\{blank(?::[^{}]+)?\}\}/g, " ")
-    .replace(/_{2,}/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }

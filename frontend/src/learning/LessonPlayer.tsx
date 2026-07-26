@@ -55,6 +55,8 @@ import type {
   Lesson,
   LessonProgressSnapshot,
   LessonQuestion,
+  PlayableLesson,
+  PlayableQuestion,
   QuestionAnswer,
   SpeakingSubmission,
 } from "./types";
@@ -71,7 +73,7 @@ export interface CoachChatMessage {
 }
 
 interface LessonPlayerProps {
-  lesson: Lesson;
+  lesson: PlayableLesson;
   coachingAvailable: boolean;
   onEvaluate?: (question: LessonQuestion, answer: QuestionAnswer, speaking?: SpeakingSubmission | null) => Promise<Evaluation>;
   onProgressBatch?: (attempts: AttemptRecord[], snapshot: LessonProgressSnapshot) => void | Promise<void>;
@@ -82,6 +84,11 @@ interface LessonPlayerProps {
     history: CoachChatMessage[],
   ) => Promise<string>;
   onExit: () => void;
+  returnLabel?: string;
+  tracingOptions?: {
+    strokeTolerance?: number;
+    showStrokeGuide?: boolean;
+  };
 }
 
 const FOCUSABLE_SELECTOR = [
@@ -93,13 +100,13 @@ const FOCUSABLE_SELECTOR = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(", ");
 
-function initialAnswer(question: LessonQuestion): QuestionAnswer {
+function initialAnswer(question: PlayableQuestion): QuestionAnswer {
   if (["multipleChoice", "wordBank", "reorderTokens", "reorderDialogue"].includes(question.type)) return [];
   if (["multiCloze", "matching", "audioMatching", "categorize"].includes(question.type)) return {};
   return "";
 }
 
-function buildSnapshot(lesson: Lesson, state: RetryState): LessonProgressSnapshot {
+function buildSnapshot(lesson: PlayableLesson, state: RetryState): LessonProgressSnapshot {
   return {
     lessonId: lesson.id,
     completedQuestionIds: [...state.completed],
@@ -143,7 +150,7 @@ function isEditableTarget(target: HTMLElement | null): boolean {
   return Boolean(target?.closest("input, textarea, select, [contenteditable='true']"));
 }
 
-function separatedQuestionPrompts(question: LessonQuestion): { source: string; target: string } {
+function separatedQuestionPrompts(question: PlayableQuestion): { source: string; target: string } {
   if (question.targetPrompt?.trim()) {
     return { source: question.prompt, target: question.targetPrompt.trim() };
   }
@@ -166,6 +173,8 @@ export function LessonPlayer({
   onProgressBatch,
   onAskCoach,
   onExit,
+  returnLabel = "Return to lessons",
+  tracingOptions,
 }: LessonPlayerProps) {
   const questionMap = useMemo(() => new Map(lesson.questions.map((question) => [question.id, question])), [lesson.questions]);
   const alternateMap = useMemo(
@@ -213,7 +222,7 @@ export function LessonPlayer({
   const autoSpokenQuestionRef = useRef<string | null>(null);
   const focusKeyboardInputRef = useRef(false);
 
-  function questionForState(state: RetryState): LessonQuestion | undefined {
+  function questionForState(state: RetryState): PlayableQuestion | undefined {
     const slotId = state.queue[0];
     const primary = questionMap.get(slotId);
     return state.alternateQuestionIds.includes(slotId) ? alternateMap.get(slotId) ?? primary : primary;
@@ -532,8 +541,6 @@ export function LessonPlayer({
         ? "Complete every matching pair before checking the answer."
         : currentQuestion.type === "categorize"
           ? "Categorize every item before checking the answer."
-        : currentQuestion.type === "characterTracing"
-          ? "Complete the character trace before checking the answer."
           : "Enter or select an answer before checking it.");
       if (currentQuestion.type === "multiCloze") {
         const values = candidateAnswer && typeof candidateAnswer === "object" && !Array.isArray(candidateAnswer)
@@ -551,6 +558,8 @@ export function LessonPlayer({
       const local = gradeAnswer(currentQuestion, candidateAnswer);
       if (!local.requiresAi) {
         setEvaluation(local);
+      } else if (currentQuestion.type === "characterTracing") {
+        setError("Character tracing could not be graded locally.");
       } else if (!onEvaluate) {
         setError("This question needs ChatGPT evaluation and is unavailable in local-only mode.");
       } else {
@@ -637,6 +646,7 @@ export function LessonPlayer({
   async function sendCoachMessage(event?: React.FormEvent) {
     event?.preventDefault();
     if (!currentQuestion || !evaluation || !onAskCoach || !coachingAvailable || coachSending) return;
+    if (currentQuestion.type === "characterTracing") return;
     const message = coachDraft.trim();
     if (!message) return;
     const chatKey = currentSlotId ?? currentQuestion.id;
@@ -715,7 +725,7 @@ export function LessonPlayer({
   const speechRateLabel = `${Number(speechPreference.rate.toFixed(2))}x`;
   const listeningPaused = playerPreference.listeningDisabledUntil > now;
   const automaticallyGraded = currentQuestion
-    ? ["matching", "audioMatching", "categorize"].includes(currentQuestion.type)
+    ? ["matching", "audioMatching", "categorize", "characterTracing"].includes(currentQuestion.type)
     : false;
   const renderGlossaryText = Boolean(presentation?.wordTooltips || playerPreference.showPronunciation);
   const portalTarget = document.querySelector<HTMLElement>(".app-shell") ?? document.body;
@@ -896,6 +906,7 @@ export function LessonPlayer({
                 onRequireAlternate={() => useCurrentAlternate("This exercise is not supported on this device.")}
                 onComplete={completeInteractiveQuestion}
                 renderText={renderLessonText}
+                tracingOptions={tracingOptions}
               />
               {error ? <p className="inline-error" role="alert">{error}</p> : null}
             </article>
@@ -908,7 +919,7 @@ export function LessonPlayer({
             <p>First-try accuracy: {Math.round((retryState.firstTryCorrect / Math.max(1, total)) * 100)}%. Missed questions were repeated until correct.</p>
             <div>
               <button className="secondary-button" type="button" onClick={() => void restartLesson()}><RotateCcw size={16} /> Restart</button>
-              <button className="primary-button" type="button" onClick={() => void requestExit()} disabled={exiting}>Return to lessons</button>
+              <button className="primary-button" type="button" onClick={() => void requestExit()} disabled={exiting}>{returnLabel}</button>
             </div>
           </main>
         )}
@@ -941,7 +952,13 @@ export function LessonPlayer({
               <p>{currentQuestion.hint ? `Hint: ${currentQuestion.hint}` : "Answer the question, then check your response."}</p>
             ) : <span aria-hidden="true" />}
             {automaticallyGraded ? (
-              <p className="lesson-auto-grade-status">{submitting ? "Checking completed matches..." : "Complete all matches to continue."}</p>
+              <p className="lesson-auto-grade-status">
+                {submitting
+                  ? "Checking..."
+                  : currentQuestion.type === "characterTracing"
+                    ? "Complete the trace to continue."
+                    : "Complete all matches to continue."}
+              </p>
             ) : (
               <button className="primary-button" type="button" onClick={() => void submitAnswer()} disabled={submitting}>
                 {submitting ? <LoaderCircle className="spin" size={17} /> : null}

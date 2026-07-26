@@ -41,17 +41,8 @@ export interface QuestionPresentationSettings {
   wordTooltips: boolean;
 }
 
-export interface CustomQuestionTemplate {
-  id: string;
-  name: string;
-  baseFormat: LessonQuestionFormat;
-  guidance: string;
-  enabled: boolean;
-}
-
 export interface CollectionQuestionSettings {
   enabledFormats: QuestionFormat[];
-  customTemplates: CustomQuestionTemplate[];
   characterTracing: CharacterTracingSettings;
 }
 
@@ -98,7 +89,6 @@ export interface BaseQuestion {
   supplementalHint?: string;
   sourceReferenceIds?: string[];
   evaluationMode: EvaluationMode;
-  templateId?: string;
   presentation?: QuestionPresentationSettings;
   glossaryTargets?: string[];
   answerBank?: AnswerBank;
@@ -319,8 +309,7 @@ export type LessonQuestion =
   | ListenSelectQuestion
   | AudioMatchingQuestion
   | SoundDiscriminationQuestion
-  | FlashcardRecallQuestion
-  | CharacterTracingQuestion;
+  | FlashcardRecallQuestion;
 
 export type QuestionAnswer = string | boolean | string[] | Record<string, string>;
 
@@ -365,13 +354,13 @@ export interface SourceReference {
 }
 
 export interface Lesson {
-  schemaVersion: 1 | 2 | 3 | 4 | 5 | 6;
+  schemaVersion: 7;
   id: string;
   unitId: string;
   title: string;
   summary: string;
   targetLanguage: string;
-  sourceLanguage?: string;
+  sourceLanguage: string;
   level: LearningProfile["level"];
   objectives: string[];
   theory: TheoryBlock[];
@@ -379,8 +368,20 @@ export interface Lesson {
   glossary: GlossaryEntry[];
   sourceReferences: SourceReference[];
   questions: LessonQuestion[];
-  questionAlternates?: QuestionAlternate[];
+  questionAlternates: QuestionAlternate[];
   createdAt: string;
+}
+
+export type PlayableQuestion = LessonQuestion | CharacterTracingQuestion;
+
+export interface PlayableQuestionAlternate {
+  questionId: string;
+  question: PlayableQuestion;
+}
+
+export interface PlayableLesson extends Omit<Lesson, "questions" | "questionAlternates"> {
+  questions: PlayableQuestion[];
+  questionAlternates: PlayableQuestionAlternate[];
 }
 
 export interface EvaluationError {

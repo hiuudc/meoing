@@ -22,7 +22,6 @@ const collection: Collection = {
   accent: "#655BF5",
   questionSettings: {
     enabledFormats: [...enabledFormatIds],
-    customTemplates: [],
     characterTracing: { requireStrokeOrder: true },
   },
 };
@@ -93,7 +92,7 @@ describe("collection question format settings", () => {
       LESSON_QUESTION_FORMAT_DEFINITIONS.length,
     );
     expect(document.body.textContent).not.toContain("Preview");
-    expect(document.body.textContent).toContain("Custom blueprints");
+    expect(document.body.textContent).not.toContain("Custom blueprints");
   });
 
   it("moves toggled cards between groups and restores focus to their checkbox", async () => {
@@ -130,32 +129,17 @@ describe("collection question format settings", () => {
     expect(card.textContent).toContain("Collection speaking is disabled.");
   });
 
-  it("creates and saves a Collection-owned custom blueprint", async () => {
+  it("saves only the collection's enabled built-in formats", async () => {
     const onSave = await renderModal();
-    const addBlueprint = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
-      .find((candidate) => candidate.textContent?.includes("Add blueprint"));
-    if (!addBlueprint) throw new Error("Add blueprint button not found.");
-
-    await act(async () => addBlueprint.click());
-    expect(document.querySelectorAll("[data-question-blueprint]")).toHaveLength(1);
-    expect(document.querySelector(".question-blueprint-card input")?.getAttribute("type")).toBe("checkbox");
-    expect(document.querySelector(".question-blueprint-card textarea")?.getAttribute("maxlength")).toBe("2000");
-    expect(document.querySelector(".question-blueprint-card .collection-question-preview")).not.toBeNull();
-
     const save = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
       .find((candidate) => candidate.textContent?.includes("Save changes"));
     if (!save) throw new Error("Save button not found.");
     await act(async () => save.click());
 
     expect(onSave).toHaveBeenCalledTimes(1);
-    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
-      customTemplates: [
-        expect.objectContaining({
-          name: "Custom blueprint 1",
-          baseFormat: "singleChoice",
-          enabled: true,
-        }),
-      ],
-    }));
+    expect(onSave).toHaveBeenCalledWith({
+      enabledFormats: [...enabledFormatIds],
+      characterTracing: { requireStrokeOrder: true },
+    });
   });
 });

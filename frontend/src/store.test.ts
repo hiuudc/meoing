@@ -220,13 +220,7 @@ describe("persistence", () => {
     expect(loaded.version).toBe(1);
     const collectionId = state.units[unitId].collectionId;
     expect(loaded.collections[collectionId].questionSettings?.enabledFormats).toEqual(["singleChoice", "selectBlank", "translation"]);
-    expect(loaded.collections[collectionId].questionSettings?.customTemplates).toEqual([{
-      id: "daily-greeting",
-      name: "Daily greeting",
-      baseFormat: "selectBlank",
-      guidance: "Use one greeting.",
-      enabled: true,
-    }]);
+    expect(loaded.collections[collectionId].questionSettings).not.toHaveProperty("customTemplates");
     expect("questionSettings" in loaded.units[unitId]).toBe(false);
 
     const legacyStorage = { getItem: () => JSON.stringify(state) };

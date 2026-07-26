@@ -3,7 +3,6 @@ import { createLocalPreviewLesson } from "./demoLesson";
 import { detectBrowserLanguage } from "./languages";
 import { gradeAnswer, normalizeAnswer } from "./grader";
 import { segmentGlossaryText } from "./glossary";
-import { loadStrokeCharacterData } from "./strokeData";
 import { parseMultiClozeTemplate, validateMultiClozeMarkers } from "./multiCloze";
 import {
   DEFAULT_SKIP_SHORTCUT,
@@ -30,6 +29,7 @@ import {
 import { applyAttempt, createRetryState, masteryPercent, scheduleRetry, skipQuestion, useListeningAlternate } from "./retry";
 import {
   jsonByteLength,
+  lessonQuestionSchema,
   lessonSchema,
   parseEvaluation,
   parseLessonProgressSnapshot,
@@ -46,7 +46,6 @@ import {
   LESSON_QUESTION_FORMATS,
   QUESTION_FORMATS,
   type AttemptRecord,
-  type Lesson,
   type LessonQuestion,
   type QuestionAnswer,
 } from "./types";
@@ -61,9 +60,9 @@ const questions: LessonQuestion[] = [
   { ...common, id: "single", type: "singleChoice", prompt: "Chọn A", options: [{ id: "a", label: "A" }, { id: "b", label: "B" }], correctOptionId: "a" },
   { ...common, id: "multiple", type: "multipleChoice", prompt: "Chọn A và B", options: [{ id: "a", label: "A" }, { id: "b", label: "B" }, { id: "c", label: "C" }], correctOptionIds: ["a", "b"] },
   { ...common, id: "tf", type: "trueFalse", prompt: "Đúng hay sai?", statement: "A là A", correct: true },
-  { ...common, id: "blank", type: "fillBlank", prompt: "Điền từ", template: "Good ___", acceptedAnswers: ["morning"], match: { ignorePunctuation: true } },
+  { ...common, id: "blank", type: "fillBlank", prompt: "Điền từ", template: "Good {{blank}}", acceptedAnswers: ["morning"], match: { ignorePunctuation: true } },
   { ...common, id: "select-blank", type: "selectBlank", prompt: "Chọn từ", template: "Good {{blank}}", options: [{ id: "morning", label: "morning" }, { id: "night", label: "night" }], correctOptionId: "morning" },
-  { ...common, id: "cloze", type: "multiCloze", prompt: "Điền hai từ", template: "__ __", blanks: [{ id: "one", acceptedAnswers: ["good"] }, { id: "two", acceptedAnswers: ["morning"] }] },
+  { ...common, id: "cloze", type: "multiCloze", prompt: "Điền hai từ", template: "{{blank:one}} {{blank:two}}", blanks: [{ id: "one", acceptedAnswers: ["good"] }, { id: "two", acceptedAnswers: ["morning"] }] },
   { ...common, id: "bank", type: "wordBank", prompt: "Xếp từ", tokens: [{ id: "good", label: "Good" }, { id: "morning", label: "morning" }], correctOrderIds: ["good", "morning"] },
   { ...common, id: "match", type: "matching", prompt: "Ghép", pairs: [{ leftId: "l1", left: "Hello", rightId: "r1", right: "Xin chào" }, { leftId: "l2", left: "Bye", rightId: "r2", right: "Tạm biệt" }] },
   { ...common, id: "tokens", type: "reorderTokens", prompt: "Xếp câu", tokens: [{ id: "i", label: "I" }, { id: "learn", label: "learn" }], correctOrderIds: ["i", "learn"] },
@@ -81,7 +80,6 @@ const questions: LessonQuestion[] = [
   { ...common, id: "audio-match", type: "audioMatching", prompt: "Match the audio", pairs: [{ audioId: "audioOne", audioText: "water", matchId: "meaningOne", label: "nước" }, { audioId: "audioTwo", audioText: "tea", matchId: "meaningTwo", label: "trà" }] },
   { ...common, id: "sound", type: "soundDiscrimination", prompt: "Choose the sound", audioText: "ship", options: [{ id: "sound-correct", label: "ship" }, { id: "sound-wrong", label: "sheep" }], correctOptionId: "sound-correct" },
   { ...common, id: "flashcard", type: "flashcardRecall", prompt: "Recall water", cue: "nước", acceptedAnswers: ["water"], match: { ignorePunctuation: true } },
-  { ...common, id: "tracing", type: "characterTracing", prompt: "Trace water", character: "水", requireStrokeOrder: true },
 ];
 
 const correctAnswers: Record<LessonQuestion["type"], QuestionAnswer> = {
@@ -108,7 +106,6 @@ const correctAnswers: Record<LessonQuestion["type"], QuestionAnswer> = {
   audioMatching: { audioOne: "meaningOne", audioTwo: "meaningTwo" },
   soundDiscrimination: "sound-correct",
   flashcardRecall: "water",
-  characterTracing: "passed",
 };
 
 describe("the question graders", () => {
@@ -136,147 +133,65 @@ describe("the question graders", () => {
     expect(normalizeAnswer("  HÉLLO,   bạn!  ", { ignorePunctuation: true, ignoreDiacritics: true })).toBe("hello ban");
   });
 
-  it("generates local Hangul tracing data without a network request", async () => {
-    const data = await loadStrokeCharacterData("Korean", "물");
-    expect(data.strokes.length).toBeGreaterThan(2);
-    expect(data.medians).toHaveLength(data.strokes.length);
-  });
 });
 
 describe("lesson schema", () => {
-  const lesson: Lesson = {
-    schemaVersion: 1,
-    id: "lesson-1",
-    unitId: "unit-1",
-    title: "A varied lesson",
-    summary: "A compact lesson used by tests.",
+  const lesson = createLocalPreviewLesson("unit-1", "Schema", {
+    ...DEFAULT_LEARNING_PROFILE,
+    speakingEnabled: false,
+    sourceLanguage: "Vietnamese",
     targetLanguage: "English",
-    level: "elementary",
-    objectives: ["Use greetings"],
-    theory: [{ id: "theory-1", kind: "concept", title: "Greetings", body: "Use greetings to open a conversation." }],
-    examples: [{ id: "example-1", source: "Good morning", translation: "Chào buổi sáng" }],
-    glossary: [{ term: "morning", meaning: "buổi sáng" }],
-    sourceReferences: [{ id: "source-1", kind: "unit", title: "Unit context" }],
-    questions: questions.slice(0, 10),
-    createdAt: "2026-07-16T00:00:00.000Z",
-  };
+    lessonQuestionCount: 15,
+  });
 
-  it("accepts 8–15 questions with at least five formats", () => {
-    expect(lessonSchema.parse(lesson).questions).toHaveLength(10);
+  it("accepts only strict schema v7 lessons", () => {
+    expect(lessonSchema.parse(lesson).questions).toHaveLength(23);
     expect(jsonByteLength(lesson)).toBeGreaterThan(100);
-  });
-
-  it("requires a speaking question when the profile enables speaking", () => {
-    expect(validateLessonForProfile(lesson, DEFAULT_LEARNING_PROFILE)).toContain(
-      "Speaking is enabled, so the lesson needs at least one speaking question.",
-    );
-    const speakingQuestion = questions.find((question) => question.type === "speakingRepeat")!;
-    const withSpeaking = { ...lesson, questions: [...lesson.questions.slice(0, 9), speakingQuestion] };
-    expect(validateLessonForProfile(withSpeaking, DEFAULT_LEARNING_PROFILE)).toEqual([]);
-  });
-
-  it("matches the unit, language, level, exact count, and both grading modes", () => {
-    const translationQuestion = questions.find((question) => question.type === "translation")!;
-    const writtenFormats = new Set([
-      "fillBlank", "multiCloze", "translation", "shortAnswer",
-      "errorCorrection", "sentenceTransformation", "dictation", "freeWriting",
-    ]);
-    const generatedQuestions: LessonQuestion[] = [...lesson.questions.slice(0, 9), translationQuestion].map((question, index) => ({
-      ...question,
-      prompt: `Lesson: ${question.prompt}`,
-      glossaryTargets: ["Lesson"],
-      ...(index === 0 ? { templateId: "collection-template" } : {}),
-      ...(question.type === "multiCloze"
-        ? { template: "{{blank:one}} {{blank:two}}" }
-        : {}),
-      ...(writtenFormats.has(question.type) ? {
-        answerBank: {
-          tokens: [{ id: `${question.id}-one`, label: "Lesson" }, { id: `${question.id}-two`, label: "answer" }],
-          separator: "space" as const,
-          defaultMode: "bank" as const,
-        },
-      } : {}),
-    }));
-    const expectedLesson: Lesson = {
-      ...lesson,
-      schemaVersion: 6,
-      sourceLanguage: "Vietnamese",
-      glossary: [...lesson.glossary, { term: "Lesson", meaning: "a period of learning" }],
-      questions: generatedQuestions,
-      questionAlternates: generatedQuestions.map((question, index) => ({
-        questionId: question.id,
-        question: {
-          ...generatedQuestions[(index + 1) % generatedQuestions.length],
-          id: `${question.id}-alternate`,
-          templateId: undefined,
-        } as LessonQuestion,
-      })),
-    };
-    const expectation = {
-      unitId: "unit-1",
-      targetLanguage: "English",
-      sourceLanguage: "Vietnamese",
-      level: "elementary" as const,
-      questionCount: 10,
-      speaking: false,
-      allowedFormats: [...LESSON_QUESTION_FORMATS],
-      requiredTemplates: [{ id: "collection-template", format: "singleChoice" as const }],
-    };
-    expect(validateLessonForExpectation(expectedLesson, expectation)).toEqual([]);
-    expect(validateLessonForExpectation({ ...expectedLesson, unitId: "wrong" }, expectation)).toContain("lesson.unitId must equal unit-1.");
-    expect(validateLessonForExpectation({ ...expectedLesson, sourceLanguage: "German" }, expectation))
-      .toContain("lesson.sourceLanguage must equal Vietnamese.");
-    expect(validateLessonForExpectation({ ...expectedLesson, questions: expectedLesson.questions.slice(0, 9) }, expectation))
-      .toContain("lesson.questions must contain exactly 10 items.");
-    expect(validateLessonForExpectation({
-      ...expectedLesson,
-      questions: expectedLesson.questions.map((question, index) => (
-        index === 0 ? { ...question, templateId: "unknown-template" } : question
-      )),
-    }, expectation)).toContain(`Question ${expectedLesson.questions[0].id} contains unknown templateId unknown-template.`);
-    expect(validateLessonForExpectation({
-      ...expectedLesson,
-      questions: expectedLesson.questions.map((question) => (
-        question.id === expectedLesson.questions[0].id
-          ? { ...question, templateId: undefined }
-          : question
-      )),
-    }, expectation)).toContain("Lesson is missing required template collection-template.");
-    const unavailableTracing = {
-      ...expectedLesson.questions[0],
-      type: "characterTracing" as const,
-      character: "水",
-      requireStrokeOrder: true,
-      unavailableReason: "Unavailable",
-      evaluationMode: "local" as const,
-    };
-    expect(validateLessonForExpectation({
-      ...expectedLesson,
-      targetLanguage: "Japanese",
-      questions: [unavailableTracing, ...expectedLesson.questions.slice(1)],
-    }, {
-      ...expectation,
-      targetLanguage: "Japanese",
-    })).toContain(`Generated character tracing question ${unavailableTracing.id} cannot be unavailable.`);
-    expect(() => lessonSchema.parse(expectedLesson)).not.toThrow();
+    expect(() => lessonSchema.parse({ ...lesson, schemaVersion: 6 })).toThrow();
     expect(() => lessonSchema.parse({
       ...lesson,
       questions: lesson.questions.map((question, index) => (
-        index === 0 ? { ...question, templateId: "legacy-template" } : question
+        index === 0 ? { ...question, templateId: "removed-blueprint" } : question
       )),
-    })).not.toThrow();
+    })).toThrow();
   });
 
-  it("validates one inline selectBlank marker and its answer key", () => {
-    const valid = questions.find((question) => question.type === "selectBlank")!;
-    expect(() => lessonSchema.parse({ ...lesson, questions: [...lesson.questions.slice(0, 7), { ...valid, id: "select-valid" }] })).not.toThrow();
-    expect(() => lessonSchema.parse({
+  it("matches the v7 lesson expectation without blueprint fields", () => {
+    const generatedLesson = {
       ...lesson,
-      questions: [...lesson.questions.slice(0, 7), { ...valid, id: "select-invalid", template: "No blank here" }],
-    })).toThrow(/exactly one/);
+      questions: lesson.questions.map(({ presentation: _presentation, ...question }) => question),
+      questionAlternates: lesson.questionAlternates.map((alternate) => {
+        const { presentation: _presentation, ...question } = alternate.question;
+        return { ...alternate, question };
+      }),
+    };
+    const expectation = {
+      unitId: lesson.unitId,
+      targetLanguage: lesson.targetLanguage,
+      sourceLanguage: lesson.sourceLanguage,
+      level: lesson.level,
+      questionCount: lesson.questions.length,
+      speaking: false,
+      allowedFormats: [...LESSON_QUESTION_FORMATS],
+    };
+    expect(validateLessonForExpectation(generatedLesson, expectation)).toEqual([]);
+    expect(validateLessonForExpectation({ ...generatedLesson, unitId: "wrong" }, expectation))
+      .toContain(`lesson.unitId must equal ${lesson.unitId}.`);
+    expect(validateLessonForExpectation({ ...generatedLesson, sourceLanguage: "German" }, expectation))
+      .toContain(`lesson.sourceLanguage must equal ${lesson.sourceLanguage}.`);
+    expect(validateLessonForExpectation({ ...generatedLesson, questions: generatedLesson.questions.slice(0, 22) }, expectation))
+      .toContain(`lesson.questions must contain exactly ${lesson.questions.length} items.`);
+    expect(validateLessonForProfile(lesson, { ...DEFAULT_LEARNING_PROFILE, speakingEnabled: false })).toContain(
+      "Lesson must have 8-15 questions.",
+    );
   });
 
-  it("validates named multi-blank markers and maps exact legacy blanks by order", () => {
+  it("accepts only inline blank markers and validates named multi-blank IDs", () => {
+    const fill = questions.find((question) => question.type === "fillBlank")!;
+    expect(() => lessonQuestionSchema.parse(fill)).not.toThrow();
+    expect(() => lessonQuestionSchema.parse({ ...fill, template: "Good ___" })).toThrow(/exactly one/);
+    expect(() => lessonQuestionSchema.parse({ ...fill, template: "Good {{blank:word}}" })).not.toThrow();
+
     expect(validateMultiClozeMarkers(
       "{{blank:subject}} drinks {{blank:object}}.",
       ["subject", "object"],
@@ -296,12 +211,11 @@ describe("lesson schema", () => {
       "Multi-blank marker object is missing.",
     ]));
 
-    expect(parseMultiClozeTemplate("__ drinks __.", ["subject", "object"])).toEqual({
+    expect(parseMultiClozeTemplate("{{blank:subject}} drinks {{blank:object}}.", ["subject", "object"])).toEqual({
       markerIds: ["subject", "object"],
       segments: ["", " drinks ", "."],
-      legacy: true,
     });
-    expect(parseMultiClozeTemplate("__ drinks.", ["subject", "object"])).toBeNull();
+    expect(parseMultiClozeTemplate("__ drinks __.", ["subject", "object"])).toBeNull();
   });
 });
 
@@ -398,7 +312,7 @@ describe("profile and progress normalization", () => {
 });
 
 describe("collection question settings", () => {
-  it("normalizes legacy settings and adds selectBlank when a collection inherits profile defaults", () => {
+  it("drops removed blueprint data and adds selectBlank when a collection inherits profile defaults", () => {
     const profile = normalizeLearningProfile({ preferredFormats: QUESTION_FORMATS.filter((format) => format !== "selectBlank") });
     const effective = getEffectiveCollectionQuestionSettings(undefined, profile);
     expect(effective.enabledFormats).toContain("selectBlank");
@@ -409,51 +323,23 @@ describe("collection question settings", () => {
       customTemplates: [{ id: "template-1", name: "  My prompt  ", baseFormat: "singleChoice", guidance: "  Keep it short.  " }],
     });
     expect(normalized.enabledFormats).toEqual(["singleChoice", "translation"]);
-    expect(normalized.customTemplates).toEqual([{
-      id: "template-1",
-      name: "My prompt",
-      baseFormat: "singleChoice",
-      guidance: "Keep it short.",
-      enabled: true,
-    }]);
+    expect("customTemplates" in normalized).toBe(false);
     expect(normalizeCollectionQuestionSettings({
       enabledFormats: ["characterTracing", "singleChoice"],
       customTemplates: [{ id: "legacy-tracing", name: "Legacy", baseFormat: "characterTracing", guidance: "Trace." }],
     })).toMatchObject({
       enabledFormats: ["singleChoice"],
-      customTemplates: [{ id: "legacy-tracing", baseFormat: "singleChoice" }],
     });
   });
 
-  it("validates Collection blueprints and builds generation constraints from enabled entries", () => {
+  it("validates enabled formats and builds generation constraints without blueprints", () => {
     const settings = normalizeCollectionQuestionSettings({
       enabledFormats: ["singleChoice", "trueFalse", "fillBlank", "translation", "shortAnswer"],
-      customTemplates: [{
-        id: "template-1",
-        name: "Workplace choice",
-        baseFormat: "singleChoice",
-        guidance: "Use unit vocabulary.",
-        enabled: true,
-      }],
     });
     expect(validateCollectionQuestionSettings(settings, { ...DEFAULT_LEARNING_PROFILE, lessonQuestionCount: 8 })).toEqual([]);
     expect(buildQuestionGenerationConstraints(settings, DEFAULT_LEARNING_PROFILE)).toEqual({
       allowedFormats: ["singleChoice", "trueFalse", "fillBlank", "translation", "shortAnswer"],
-      requiredTemplates: [{ id: "template-1", format: "singleChoice" }],
     });
-
-    const infeasible = {
-      ...settings,
-      customTemplates: Array.from({ length: 6 }, (_, index) => ({
-        id: `template-${index}`,
-        name: `Template ${index}`,
-        baseFormat: "singleChoice" as const,
-        guidance: "Use unit vocabulary.",
-        enabled: true,
-      })),
-    };
-    expect(validateCollectionQuestionSettings(infeasible, { ...DEFAULT_LEARNING_PROFILE, lessonQuestionCount: 8 }))
-      .toContain("Enabled blueprints leave too few lesson slots to use five distinct formats.");
   });
 
   it("uses trusted format defaults instead of persisted presentation overrides", () => {
@@ -462,24 +348,12 @@ describe("collection question settings", () => {
       formatPresentation: { singleChoice: { readQuestion: true, readAnswers: true, wordTooltips: false } },
     });
     expect("formatPresentation" in settings).toBe(false);
-    const lesson: Lesson = {
-      schemaVersion: 1,
-      id: "decorate-lesson",
-      unitId: "unit-1",
-      title: "Presentation",
-      summary: "Presentation copy test.",
-      targetLanguage: "English",
-      level: "elementary",
-      objectives: ["Test presentation"],
-      theory: [{ id: "theory", kind: "concept", title: "Theory", body: "Body" }],
-      examples: [],
-      glossary: [],
-      sourceReferences: [],
-      questions: questions.slice(0, 8),
-      createdAt: "2026-07-16T00:00:00.000Z",
-    };
+    const lesson = createLocalPreviewLesson("decorate-unit", "Presentation", {
+      ...DEFAULT_LEARNING_PROFILE,
+      speakingEnabled: false,
+    });
     const decorated = decorateLessonPresentation(lesson, settings, DEFAULT_LEARNING_PROFILE);
-    expect(decorated.schemaVersion).toBe(2);
+    expect(decorated.schemaVersion).toBe(7);
     expect(decorated.questions[0].presentation).toEqual({ readQuestion: false, readAnswers: false, wordTooltips: true });
   });
 });
@@ -651,13 +525,13 @@ describe("glossary and speech preferences", () => {
     });
   });
 
-  it("builds a schema-v6 language-pair demo with every active format and one alternate per slot", () => {
+  it("builds a schema-v7 language-pair demo with every active format and one alternate per slot", () => {
     const demo = createLocalPreviewLesson("unit-demo", "Demo", {
       ...DEFAULT_LEARNING_PROFILE,
       sourceLanguage: "Vietnamese",
       targetLanguage: "Japanese",
     });
-    expect(demo.schemaVersion).toBe(6);
+    expect(demo.schemaVersion).toBe(7);
     expect(demo.sourceLanguage).toBe("Vietnamese");
     expect(demo.targetLanguage).toBe("Japanese");
     expect(demo.title).toContain("Bài học mẫu");
@@ -668,8 +542,7 @@ describe("glossary and speech preferences", () => {
     expect(new Set(demo.questions.map((question) => question.type))).toEqual(new Set(LESSON_QUESTION_FORMATS));
     expect(demo.questionAlternates).toHaveLength(23);
     expect(() => lessonSchema.parse(demo)).not.toThrow();
-    const { sourceLanguage: _sourceLanguage, ...legacyDemo } = demo;
-    expect(() => lessonSchema.parse({ ...legacyDemo, schemaVersion: 3 })).not.toThrow();
+    expect(() => lessonSchema.parse({ ...demo, schemaVersion: 6 })).toThrow();
     expect(parseLessonProgressSnapshot({
       lessonId: demo.id,
       completedQuestionIds: demo.questions.map((question) => question.id),
@@ -679,14 +552,14 @@ describe("glossary and speech preferences", () => {
       masteryPercent: 100,
       updatedAt: "2026-07-22T00:00:00.000Z",
     }).totalQuestions).toBe(23);
-    expect(parseLessonProgressSnapshot({
-      lessonId: "legacy-24",
-      completedQuestionIds: Array.from({ length: 24 }, (_, index) => `legacy-${index}`),
-      attemptsByQuestion: Object.fromEntries(Array.from({ length: 24 }, (_, index) => [`legacy-${index}`, 1])),
+    expect(() => parseLessonProgressSnapshot({
+      lessonId: "too-many",
+      completedQuestionIds: Array.from({ length: 24 }, (_, index) => `old-${index}`),
+      attemptsByQuestion: Object.fromEntries(Array.from({ length: 24 }, (_, index) => [`old-${index}`, 1])),
       firstTryCorrect: 24,
       totalQuestions: 24,
       masteryPercent: 100,
       updatedAt: "2026-07-22T00:00:00.000Z",
-    }).totalQuestions).toBe(24);
+    })).toThrow();
   });
 });

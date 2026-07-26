@@ -34,10 +34,8 @@ function validRequest(value: unknown): value is ExtensionRequest<Record<string, 
     if (
       !isRecord(expectation)
       || !Array.isArray(expectation.allowedFormats)
-      || !Array.isArray(expectation.requiredTemplates)
     ) return false;
     const allowedFormats = expectation.allowedFormats;
-    const requiredTemplates = expectation.requiredTemplates;
     if (
       typeof payload.unitId !== "string"
       || typeof payload.operationId !== "string"
@@ -51,16 +49,6 @@ function validRequest(value: unknown): value is ExtensionRequest<Record<string, 
       || typeof expectation.speaking !== "boolean"
       || allowedFormats.length < 5
       || allowedFormats.some((format) => !LESSON_QUESTION_FORMATS.includes(format as (typeof LESSON_QUESTION_FORMATS)[number]))
-      || requiredTemplates.length > 20
-      || requiredTemplates.some((template) => (
-        !isRecord(template)
-        || typeof template.id !== "string"
-        || template.id.length < 1
-        || template.id.length > 120
-        || typeof template.format !== "string"
-        || !allowedFormats.includes(template.format)
-      ))
-      || new Set(requiredTemplates.map((template) => isRecord(template) ? template.id : null)).size !== requiredTemplates.length
       || !["create_lesson", "evaluate_answer", "coaching"].includes(String(payload.kind))
     ) return false;
   }

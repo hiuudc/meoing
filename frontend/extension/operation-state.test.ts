@@ -31,7 +31,6 @@ function operation(operationId = "op-1", unitId = "unit-1"): QueuedOperation {
       questionCount: 10,
       speaking: true,
       allowedFormats: [...LESSON_QUESTION_FORMATS],
-      requiredTemplates: [],
     },
     queuedAt: "2026-07-17T00:00:00.000Z",
   };

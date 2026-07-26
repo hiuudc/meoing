@@ -115,24 +115,11 @@ function validExpectation(value: unknown, unitId: string): value is OperationExp
     "questionCount",
     "speaking",
     "allowedFormats",
-    "requiredTemplates",
   ])) return false;
-  if (!Array.isArray(value.allowedFormats) || !Array.isArray(value.requiredTemplates)) return false;
+  if (!Array.isArray(value.allowedFormats)) return false;
   const formatSet = new Set<string>(LESSON_QUESTION_FORMATS);
   const allowedFormats = value.allowedFormats.filter((format): format is QuestionFormat => typeof format === "string" && formatSet.has(format));
   if (allowedFormats.length !== value.allowedFormats.length || new Set(allowedFormats).size !== allowedFormats.length || allowedFormats.length < 5) return false;
-  const requiredTemplates = value.requiredTemplates.filter((template): template is { id: string; format: QuestionFormat } => (
-    isRecord(template)
-    && exactKeys(template, ["id", "format"])
-    && validId(template.id)
-    && typeof template.format === "string"
-    && allowedFormats.includes(template.format as QuestionFormat)
-  ));
-  if (
-    requiredTemplates.length !== value.requiredTemplates.length
-    || requiredTemplates.length > 20
-    || new Set(requiredTemplates.map((template) => template.id)).size !== requiredTemplates.length
-  ) return false;
   const aiFormats = new Set<QuestionFormat>(["translation", "shortAnswer", "freeWriting", "speakingRepeat", "speakingRoleplay"]);
   if (!allowedFormats.some((format) => aiFormats.has(format)) || !allowedFormats.some((format) => !aiFormats.has(format))) return false;
   return value.unitId === unitId

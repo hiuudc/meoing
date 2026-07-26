@@ -2,8 +2,8 @@ import type {
   AiGradeRequest,
   EvaluationStatus,
   GradeResult,
-  LessonQuestion,
   LocalGradeResult,
+  PlayableQuestion,
   QuestionAnswer,
   TextMatchOptions,
 } from "./types";
@@ -42,7 +42,7 @@ function statusFromScore(score: number): EvaluationStatus {
 }
 
 function localResult(
-  question: LessonQuestion,
+  question: PlayableQuestion,
   score: number,
   correction: string,
   errorMessage = "The answer does not match the answer key.",
@@ -82,7 +82,7 @@ function ai(reason: AiGradeRequest["reason"]): AiGradeRequest {
   return { requiresAi: true, reason };
 }
 
-export function gradeAnswer(question: LessonQuestion, answer: QuestionAnswer): GradeResult {
+export function gradeAnswer(question: PlayableQuestion, answer: QuestionAnswer): GradeResult {
   switch (question.type) {
     case "singleChoice": {
       const actual = asString(answer);
@@ -189,7 +189,7 @@ export function isAnswerEmpty(answer: QuestionAnswer): boolean {
   return Object.keys(answer).length === 0 || Object.values(answer).some((value) => !value.trim());
 }
 
-export function isAnswerComplete(question: LessonQuestion, answer: QuestionAnswer): boolean {
+export function isAnswerComplete(question: PlayableQuestion, answer: QuestionAnswer): boolean {
   if (isAnswerEmpty(answer)) return false;
   if (question.type === "multiCloze") {
     const values = asMap(answer);

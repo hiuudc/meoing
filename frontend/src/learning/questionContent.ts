@@ -1,24 +1,23 @@
-import type { Evaluation, LessonQuestion } from "./types";
+import type { Evaluation, PlayableQuestion } from "./types";
 import { stripBlankMarkers } from "./multiCloze";
 
 function uniqueSpeechParts(parts: string[]): string[] {
   return [...new Set(parts.map((part) => (
     part
       .replace(/\{\{blank(?::[^{}]+)?\}\}/g, " ")
-      .replace(/_{2,}/g, " ")
       .replace(/\s+/g, " ")
       .trim()
   )).filter(Boolean))];
 }
 
-function targetPartsIn(question: LessonQuestion, candidates: string[]): string[] {
+function targetPartsIn(question: PlayableQuestion, candidates: string[]): string[] {
   if (!question.glossaryTargets?.length) return [];
   return uniqueSpeechParts(question.glossaryTargets.filter((target) => (
     candidates.some((candidate) => candidate.includes(target))
   )));
 }
 
-function questionTextCandidates(question: LessonQuestion): string[] {
+function questionTextCandidates(question: PlayableQuestion): string[] {
   const parts = [question.prompt];
   if (question.targetPrompt) parts.push(question.targetPrompt);
   switch (question.type) {
@@ -41,7 +40,7 @@ function questionTextCandidates(question: LessonQuestion): string[] {
   return parts;
 }
 
-function answerTextCandidates(question: LessonQuestion, evaluation?: Evaluation | null): string[] {
+function answerTextCandidates(question: PlayableQuestion, evaluation?: Evaluation | null): string[] {
   const parts: string[] = [];
   switch (question.type) {
     case "singleChoice":
@@ -81,7 +80,7 @@ function answerTextCandidates(question: LessonQuestion, evaluation?: Evaluation 
   return parts;
 }
 
-export function questionVisibleTexts(question: LessonQuestion): string[] {
+export function questionVisibleTexts(question: PlayableQuestion): string[] {
   const parts = [question.prompt];
   if (question.targetPrompt) parts.push(question.targetPrompt);
   switch (question.type) {
@@ -128,24 +127,22 @@ export function questionVisibleTexts(question: LessonQuestion): string[] {
   return parts.filter((part) => part.trim().length > 0);
 }
 
-export function questionSpeechText(question: LessonQuestion): string {
+export function questionSpeechText(question: PlayableQuestion): string {
   if (question.targetPrompt?.trim()) return stripBlankMarkers(question.targetPrompt);
   const targetParts = targetPartsIn(question, questionTextCandidates(question));
   if (targetParts.length) return targetParts.join(". ");
 
-  // Legacy lessons do not identify target-language spans. Only use fields whose
-  // format guarantees that the stored text is in the language being learned.
   if (question.type === "dictation") return question.transcript;
   if (question.type === "listenSelect" || question.type === "soundDiscrimination") return question.audioText;
   if (question.type === "speakingRepeat") return question.modelText;
   return "";
 }
 
-export function targetPromptSpeechText(question: LessonQuestion): string {
+export function targetPromptSpeechText(question: PlayableQuestion): string {
   return question.targetPrompt ? stripBlankMarkers(question.targetPrompt) : "";
 }
 
-export function answerSpeechText(question: LessonQuestion, evaluation?: Evaluation | null): string {
+export function answerSpeechText(question: PlayableQuestion, evaluation?: Evaluation | null): string {
   const targetParts = targetPartsIn(question, answerTextCandidates(question, evaluation));
   if (targetParts.length) return targetParts.join(". ");
 
@@ -157,6 +154,6 @@ export function answerSpeechText(question: LessonQuestion, evaluation?: Evaluati
   return "";
 }
 
-export function answerActivationSpeechText(question: LessonQuestion, activatedText: string): string {
+export function answerActivationSpeechText(question: PlayableQuestion, activatedText: string): string {
   return targetPartsIn(question, [activatedText]).join(". ");
 }

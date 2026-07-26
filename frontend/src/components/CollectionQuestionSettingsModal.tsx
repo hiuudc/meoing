@@ -1,8 +1,7 @@
-import { Plus, Trash2, X } from "lucide-react";
+import { X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { LESSON_QUESTION_FORMAT_DEFINITIONS, QUESTION_FORMAT_REGISTRY } from "../learning/questionRegistry";
 import {
-  MAX_CUSTOM_QUESTION_TEMPLATES,
   getEffectiveCollectionQuestionSettings,
   supportsQuestionFormatForLanguage,
   validateCollectionQuestionSettings,
@@ -10,14 +9,11 @@ import {
 import { QuestionRenderer } from "../learning/QuestionRenderer";
 import type {
   CollectionQuestionSettings,
-  CustomQuestionTemplate,
   LearningProfile,
   LessonQuestion,
-  LessonQuestionFormat,
   QuestionAnswer,
   QuestionFormat,
 } from "../learning/types";
-import { makeId } from "../store";
 import type { Collection } from "../types";
 import { AnimatedModal } from "./AnimatedModal";
 
@@ -45,7 +41,7 @@ function QuestionPreview({
   language: string;
   previewId: string;
 }) {
-  const sample: LessonQuestion = { ...QUESTION_FORMAT_REGISTRY[format].sample, id: previewId };
+  const sample = { ...QUESTION_FORMAT_REGISTRY[format].sample, id: previewId } as LessonQuestion;
   const [answer, setAnswer] = useState<QuestionAnswer>(() => initialAnswer(sample));
 
   return (
@@ -141,105 +137,6 @@ function QuestionFormatCard({
   );
 }
 
-function BlueprintEditor({
-  template,
-  language,
-  speakingEnabled,
-  onChange,
-  onDelete,
-}: {
-  template: CustomQuestionTemplate;
-  language: string;
-  speakingEnabled: boolean;
-  onChange: (template: CustomQuestionTemplate) => void;
-  onDelete: () => void;
-}) {
-  const definition = QUESTION_FORMAT_REGISTRY[template.baseFormat];
-  const speakingUnavailable = !speakingEnabled && definition.badge === "speaking";
-  const languageUnavailable = !supportsQuestionFormatForLanguage(template.baseFormat, language);
-  const available = !speakingUnavailable && !languageUnavailable;
-  const enabled = template.enabled && available;
-
-  return (
-    <article
-      className={`question-blueprint-card ${enabled ? "is-enabled" : "is-disabled"}`}
-      data-question-blueprint={template.id}
-    >
-      <div className="question-blueprint-settings">
-        <div className="question-blueprint-heading">
-          <label className="format-enable-control">
-            <input
-              type="checkbox"
-              checked={enabled}
-              disabled={!available}
-              onChange={(event) => onChange({ ...template, enabled: event.target.checked })}
-            />
-            <span>Enabled</span>
-          </label>
-          <button className="icon-button" type="button" aria-label={`Delete ${template.name}`} onClick={onDelete}>
-            <Trash2 size={16} />
-          </button>
-        </div>
-        <div className="question-blueprint-fields">
-          <label>
-            <span>Name</span>
-            <input
-              value={template.name}
-              maxLength={80}
-              onChange={(event) => onChange({ ...template, name: event.target.value })}
-            />
-            <small>{template.name.length}/80</small>
-          </label>
-          <label>
-            <span>Base format</span>
-            <select
-              value={template.baseFormat}
-              onChange={(event) => onChange({
-                ...template,
-                baseFormat: event.target.value as LessonQuestionFormat,
-              })}
-            >
-              {LESSON_QUESTION_FORMAT_DEFINITIONS.map((formatDefinition) => (
-                <option
-                  key={formatDefinition.id}
-                  value={formatDefinition.id}
-                  disabled={(!speakingEnabled && formatDefinition.badge === "speaking")
-                    || !supportsQuestionFormatForLanguage(formatDefinition.id, language)}
-                >
-                  {formatDefinition.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="question-blueprint-guidance">
-            <span>AI generation guidance</span>
-            <textarea
-              rows={6}
-              maxLength={2_000}
-              value={template.guidance}
-              onChange={(event) => onChange({ ...template, guidance: event.target.value })}
-              placeholder="Example: Use a short workplace exchange and include one distractor from this collection."
-            />
-            <small>{template.guidance.length}/2,000. Treated as untrusted learning data.</small>
-          </label>
-        </div>
-        {speakingUnavailable ? (
-          <p className="settings-inline-warning">Enable speaking in the collection learning profile to use this blueprint.</p>
-        ) : null}
-        {languageUnavailable ? (
-          <p className="settings-inline-warning">This blueprint format is unavailable for the collection language.</p>
-        ) : null}
-      </div>
-      <PreviewColumn
-        disabled={!enabled}
-        format={template.baseFormat}
-        language={language}
-        previewId={`blueprint-preview-${template.id}`}
-      />
-    </article>
-  );
-}
-
 export function CollectionQuestionSettingsModal({
   collection,
   profile,
@@ -285,8 +182,6 @@ export function CollectionQuestionSettingsModal({
   });
   const enabledFormats = formatStates.filter((formatState) => formatState.enabled);
   const disabledFormats = formatStates.filter((formatState) => !formatState.enabled);
-  const canAddBlueprint = questionSettings.customTemplates.length < MAX_CUSTOM_QUESTION_TEMPLATES;
-
   function updateFormatEnabled(format: QuestionFormat, enabled: boolean) {
     pendingFormatFocusRef.current = format;
     setQuestionSettings((current) => ({
@@ -294,30 +189,6 @@ export function CollectionQuestionSettingsModal({
       enabledFormats: enabled
         ? [...current.enabledFormats, format]
         : current.enabledFormats.filter((candidate) => candidate !== format),
-    }));
-  }
-
-  function addBlueprint() {
-    if (!canAddBlueprint) return;
-    const template: CustomQuestionTemplate = {
-      id: makeId("question-template"),
-      name: `Custom blueprint ${questionSettings.customTemplates.length + 1}`,
-      baseFormat: enabledFormats[0]?.definition.id ?? "singleChoice",
-      guidance: "",
-      enabled: true,
-    };
-    setQuestionSettings((current) => ({
-      ...current,
-      customTemplates: [...current.customTemplates, template],
-    }));
-  }
-
-  function updateBlueprint(index: number, template: CustomQuestionTemplate) {
-    setQuestionSettings((current) => ({
-      ...current,
-      customTemplates: current.customTemplates.map((candidate, candidateIndex) => (
-        candidateIndex === index ? template : candidate
-      )),
     }));
   }
 
@@ -351,7 +222,6 @@ export function CollectionQuestionSettingsModal({
             <div className="question-settings-summary">
               <div><span>Lesson size</span><strong>{profile.lessonQuestionCount} questions</strong></div>
               <div><span>Enabled formats</span><strong>{enabledFormats.length}/{LESSON_QUESTION_FORMAT_DEFINITIONS.length}</strong></div>
-              <div><span>Enabled blueprints</span><strong>{questionSettings.customTemplates.filter((template) => template.enabled).length}/{profile.lessonQuestionCount}</strong></div>
             </div>
 
             <div className="settings-section-heading">
@@ -396,33 +266,6 @@ export function CollectionQuestionSettingsModal({
                   )}
                 </section>
               ))}
-            </div>
-
-            <div className="settings-section-heading question-blueprint-section-heading">
-              <div>
-                <h3>Custom blueprints</h3>
-                <p>Each enabled blueprint must appear in every newly generated lesson.</p>
-              </div>
-              <button className="secondary-button" type="button" onClick={addBlueprint} disabled={!canAddBlueprint}>
-                <Plus size={16} /> Add blueprint
-              </button>
-            </div>
-            <div className="question-blueprint-list">
-              {questionSettings.customTemplates.length ? questionSettings.customTemplates.map((template, index) => (
-                <BlueprintEditor
-                  key={template.id}
-                  template={template}
-                  language={profile.targetLanguage}
-                  speakingEnabled={profile.speakingEnabled}
-                  onChange={(nextTemplate) => updateBlueprint(index, nextTemplate)}
-                  onDelete={() => setQuestionSettings((current) => ({
-                    ...current,
-                    customTemplates: current.customTemplates.filter((candidate) => candidate.id !== template.id),
-                  }))}
-                />
-              )) : (
-                <p className="question-blueprint-empty">No custom blueprints yet. Built-in formats remain available.</p>
-              )}
             </div>
 
             {errors.length ? (

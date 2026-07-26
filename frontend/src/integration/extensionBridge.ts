@@ -14,8 +14,15 @@ import {
 } from "./protocol";
 
 const REQUEST_TIMEOUT_MS = 20_000;
+const COMPATIBILITY_TIMEOUT_MS = 2_000;
 const OPERATION_TIMEOUT_MS = 10 * 60_000;
 const OPERATION_POLL_MS = 1_000;
+const SUPPORTED_STATUS_PROTOCOLS = [MEOI_EXTENSION_PROTOCOL_VERSION, 7, 6, 5, 4] as const;
+
+export type ExtensionCompatibility =
+  | { state: "ready"; version: typeof MEOI_EXTENSION_PROTOCOL_VERSION; integration: IntegrationStatus }
+  | { state: "outdated"; version: 4 | 5 | 6 | 7; integration: IntegrationStatus }
+  | { state: "unavailable" };
 
 export interface WaitForOperationOptions {
   signal?: AbortSignal;
@@ -36,11 +43,15 @@ export class ExtensionBridgeError extends Error {
   }
 }
 
-function isExtensionResponse(value: unknown, nonce: string): value is ExtensionResponse {
+function isExtensionResponse(
+  value: unknown,
+  nonce: string,
+  version: number,
+): value is ExtensionResponse & { version: number } {
   if (!value || typeof value !== "object") return false;
   const response = value as Partial<ExtensionResponse>;
   return response.source === MEOI_EXTENSION_SOURCE
-    && response.version === MEOI_EXTENSION_PROTOCOL_VERSION
+    && response.version === version
     && response.nonce === nonce
     && typeof response.requestId === "string"
     && typeof response.ok === "boolean";
@@ -91,18 +102,25 @@ function withAbort<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
 
 export class ExtensionBridge {
   private readonly nonce = crypto.randomUUID();
-  private readonly pending = new Map<string, { resolve: (value: unknown) => void; reject: (reason: Error) => void; timeout: number }>();
+  private readonly pending = new Map<string, {
+    resolve: (value: unknown) => void;
+    reject: (reason: Error) => void;
+    timeout: number;
+    version: number;
+  }>();
   private listening = false;
 
   private listen() {
     if (this.listening) return;
     this.listening = true;
     window.addEventListener("message", (event) => {
-      if (event.source !== window || event.origin !== window.location.origin || !isExtensionResponse(event.data, this.nonce)) return;
-      const pending = this.pending.get(event.data.requestId);
-      if (!pending) return;
+      if (event.source !== window || event.origin !== window.location.origin || !event.data || typeof event.data !== "object") return;
+      const requestId = (event.data as { requestId?: unknown }).requestId;
+      if (typeof requestId !== "string") return;
+      const pending = this.pending.get(requestId);
+      if (!pending || !isExtensionResponse(event.data, this.nonce, pending.version)) return;
       window.clearTimeout(pending.timeout);
-      this.pending.delete(event.data.requestId);
+      this.pending.delete(requestId);
       if (event.data.ok) pending.resolve(event.data.data);
       else pending.reject(new ExtensionBridgeError(
         event.data.error?.code ?? "SEND_FAILED",
@@ -111,29 +129,74 @@ export class ExtensionBridge {
     });
   }
 
-  async send<TResponse = unknown, TPayload = unknown>(command: ExtensionCommand, payload: TPayload): Promise<TResponse> {
+  private async sendVersioned<TResponse = unknown, TPayload = unknown>(
+    command: ExtensionCommand,
+    payload: TPayload,
+    version: number,
+    timeoutMs: number,
+  ): Promise<TResponse> {
     this.listen();
     const requestId = crypto.randomUUID();
-    const request: ExtensionRequest<TPayload> = {
+    const request = {
       source: MEOI_PAGE_SOURCE,
-      version: MEOI_EXTENSION_PROTOCOL_VERSION,
+      version,
       nonce: this.nonce,
       requestId,
       command,
       payload,
-    };
+    } satisfies Omit<ExtensionRequest<TPayload>, "version"> & { version: number };
     return new Promise<TResponse>((resolve, reject) => {
       const timeout = window.setTimeout(() => {
         this.pending.delete(requestId);
         reject(new ExtensionBridgeError("EXTENSION_NOT_READY", "Meoi Bridge was not found or did not respond."));
-      }, REQUEST_TIMEOUT_MS);
-      this.pending.set(requestId, { resolve: (value) => resolve(value as TResponse), reject, timeout });
+      }, timeoutMs);
+      this.pending.set(requestId, {
+        resolve: (value) => resolve(value as TResponse),
+        reject,
+        timeout,
+        version,
+      });
       window.postMessage(request, window.location.origin);
     });
   }
 
+  async send<TResponse = unknown, TPayload = unknown>(command: ExtensionCommand, payload: TPayload): Promise<TResponse> {
+    return this.sendVersioned(command, payload, MEOI_EXTENSION_PROTOCOL_VERSION, REQUEST_TIMEOUT_MS);
+  }
+
   getStatus(unitId?: string): Promise<IntegrationStatus> {
     return this.send<IntegrationStatus>("GET_INTEGRATION_STATUS", { unitId });
+  }
+
+  async detectCompatibility(unitId?: string): Promise<ExtensionCompatibility> {
+    const probes = await Promise.all(SUPPORTED_STATUS_PROTOCOLS.map(async (version) => {
+      try {
+        const integration = await this.sendVersioned<IntegrationStatus>(
+          "GET_INTEGRATION_STATUS",
+          { unitId },
+          version,
+          COMPATIBILITY_TIMEOUT_MS,
+        );
+        return integration.installed ? { version, integration } : null;
+      } catch {
+        return null;
+      }
+    }));
+    const detected = probes.find((probe) => probe?.version === MEOI_EXTENSION_PROTOCOL_VERSION)
+      ?? probes.find((probe) => probe !== null);
+    if (!detected) return { state: "unavailable" };
+    if (detected.version === MEOI_EXTENSION_PROTOCOL_VERSION) {
+      return {
+        state: "ready",
+        version: MEOI_EXTENSION_PROTOCOL_VERSION,
+        integration: detected.integration,
+      };
+    }
+    return {
+      state: "outdated",
+      version: detected.version as 4 | 5 | 6 | 7,
+      integration: detected.integration,
+    };
   }
 
   getOperationState(operationId: string): Promise<ChatOperationState> {

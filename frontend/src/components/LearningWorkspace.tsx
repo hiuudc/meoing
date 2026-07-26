@@ -37,7 +37,11 @@ import type {
   QuestionAnswer,
   SpeakingSubmission,
 } from "../learning/types";
-import { ExtensionBridgeError, extensionBridge } from "../integration/extensionBridge";
+import {
+  ExtensionBridgeError,
+  extensionBridge,
+  type ExtensionCompatibility,
+} from "../integration/extensionBridge";
 import {
   createLearningSession,
   putSessionLesson,
@@ -56,6 +60,7 @@ import {
 } from "../integration/learningStorage";
 import {
   buildOperationPrompt,
+  MEOI_EXTENSION_PROTOCOL_VERSION,
   MEOI_TEXT_FIELD_MAX_BYTES,
   MEOI_TRANSCRIPT_MAX_BYTES,
   type ChatOperationKind,
@@ -88,6 +93,7 @@ interface RetryAttempt {
 }
 
 type LearningView = "choose" | "new" | "lesson";
+type BridgeGateState = ExtensionCompatibility | { state: "checking" };
 
 interface UnitLearningView {
   unitId?: string;
@@ -227,7 +233,7 @@ export function LearningWorkspace({
     view: "new",
     playerRunId: "inactive",
   });
-  const [extensionConnected, setExtensionConnected] = useState(false);
+  const [bridgeGate, setBridgeGate] = useState<BridgeGateState>({ state: "checking" });
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState(INITIAL_STATUS);
   const [error, setError] = useState("");
@@ -249,6 +255,7 @@ export function LearningWorkspace({
   const playerRunId = unitView.unitId === unit?.id ? unitView.playerRunId : "inactive";
   const embedUrl = youtubeUrl ? youtubeNoCookieEmbedUrl(youtubeUrl) : null;
   const currentProgress = lesson ? session.progressByLesson[lesson.id] : undefined;
+  const extensionConnected = bridgeGate.state === "ready";
 
   useEffect(() => () => activeAbortRef.current?.abort(), []);
 
@@ -268,10 +275,9 @@ export function LearningWorkspace({
 
   useEffect(() => {
     let active = true;
-    void extensionBridge.getStatus(unit?.id).then((integration) => {
-      if (active) setExtensionConnected(integration.installed);
-    }).catch(() => {
-      if (active) setExtensionConnected(false);
+    setBridgeGate({ state: "checking" });
+    void extensionBridge.detectCompatibility(unit?.id).then((compatibility) => {
+      if (active) setBridgeGate(compatibility);
     });
     return () => { active = false; };
   }, [unit?.id]);
@@ -279,12 +285,15 @@ export function LearningWorkspace({
   async function refreshConnection() {
     setBusy(true);
     setError("");
+    setBridgeGate({ state: "checking" });
     try {
-      const integration = await extensionBridge.getStatus(unit?.id);
-      setExtensionConnected(integration.installed);
-      setStatus("Meoi Bridge is ready. It uses ChatGPT Web directly, with no API, MCP, OAuth, Worker, or database.");
+      const compatibility = await extensionBridge.detectCompatibility(unit?.id);
+      setBridgeGate(compatibility);
+      if (compatibility.state === "ready") {
+        setStatus("Meoi Bridge v8 is ready. It uses ChatGPT Web directly, with no API, MCP, OAuth, Worker, or database.");
+      }
     } catch (caught) {
-      setExtensionConnected(false);
+      setBridgeGate({ state: "unavailable" });
       setError(publicError(caught));
     } finally {
       setBusy(false);
@@ -387,6 +396,7 @@ export function LearningWorkspace({
 
   async function sendOperation(kind: ChatOperationKind, input: unknown): Promise<ChatOperationResult> {
     if (!unit) throw new Error("Select a unit first.");
+    if (bridgeGate.state !== "ready") throw new Error("Meoi Bridge v8 is required before Learn can run.");
     const expectation = currentExpectation();
     const fingerprint = JSON.stringify({ unitId: unit.id, kind, expectation, input });
     const previous = retryAttemptsRef.current[kind];
@@ -410,7 +420,15 @@ export function LearningWorkspace({
           return extensionBridge.retryAndWait(operationId, options);
         },
       );
-      setExtensionConnected(true);
+      setBridgeGate((current) => current.state === "ready" ? current : {
+        state: "ready",
+        version: MEOI_EXTENSION_PROTOCOL_VERSION,
+        integration: {
+          installed: true,
+          pausedForQuota: false,
+          queueLength: 0,
+        },
+      });
       delete retryAttemptsRef.current[kind];
       if (!state.result) throw new Error("The extension completed without a ChatGPT result.");
       if (state.result.outcome === "failed") {
@@ -540,7 +558,7 @@ export function LearningWorkspace({
     history: CoachChatMessage[],
   ): Promise<string> {
     if (!unit || !lesson) throw new Error("No active lesson was found.");
-    if (!extensionConnected) throw new Error("Meoi Bridge is offline. Check the extension and try again.");
+    if (bridgeGate.state !== "ready") throw new Error("Meoi Bridge v8 is unavailable. Check the extension and try again.");
     const text = message.trim();
     if (textByteLength(text) > MEOI_TEXT_FIELD_MAX_BYTES) {
       throw new Error("The coaching message must be 16 KiB or smaller.");
@@ -590,6 +608,14 @@ export function LearningWorkspace({
     );
   }
 
+  const bridgeLabel = bridgeGate.state === "ready"
+    ? "Bridge v8 ready"
+    : bridgeGate.state === "outdated"
+      ? `Bridge v${bridgeGate.version} outdated`
+      : bridgeGate.state === "checking"
+        ? "Checking Bridge"
+        : "Bridge unavailable";
+
   return (
     <>
       <main className="workspace-main learning-workspace">
@@ -597,11 +623,42 @@ export function LearningWorkspace({
           <button className="mobile-nav-trigger" type="button" onClick={onOpenMobileNavigation} aria-label="Open navigation"><Menu size={19} /></button>
           <WorkspaceModeSwitch mode={mode} onChange={onModeChange} />
           <div className="learning-connection-pill" data-connected={extensionConnected ? "true" : "false"}>
-            <span /> {extensionConnected ? "ChatGPT bridge" : "Extension offline"}
+            <span /> {bridgeLabel}
           </div>
         </header>
 
         <div className="content-scroll learning-scroll" ref={learningScrollRef}>
+          {bridgeGate.state !== "ready" ? (
+            <section className="learning-bridge-gate" aria-live="polite">
+              <span className="learning-bridge-gate-icon">
+                {bridgeGate.state === "checking"
+                  ? <LoaderCircle className="spin" size={28} />
+                  : <ShieldCheck size={28} />}
+              </span>
+              <p className="section-kicker">Meoi Bridge v8 required</p>
+              <h1>
+                {bridgeGate.state === "checking"
+                  ? "Checking the browser extension..."
+                  : bridgeGate.state === "outdated"
+                    ? `Update Meoi Bridge v${bridgeGate.version}`
+                    : "Meoi Bridge is not available"}
+              </h1>
+              <p>
+                {bridgeGate.state === "outdated"
+                  ? `Learn is locked because protocol v${bridgeGate.version} was detected. Install Meoi Bridge 8.0.0, reload the extension, then reload this page.`
+                  : bridgeGate.state === "unavailable"
+                    ? "Install or enable Meoi Bridge 8.0.0, reload the extension, then reload this page. Library and Letters remain available."
+                    : "Meoi is checking protocol v8 and older v4-v7 status channels. Older versions are detected only for upgrade guidance and cannot run operations."}
+              </p>
+              {bridgeGate.state !== "checking" ? (
+                <button className="primary-button" type="button" onClick={() => void refreshConnection()} disabled={busy}>
+                  {busy ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}
+                  Check again
+                </button>
+              ) : null}
+            </section>
+          ) : (
+            <>
           <section className="learn-hero">
             <div>
               <p className="section-kicker">ChatGPT lesson studio</p>
@@ -712,15 +769,21 @@ export function LearningWorkspace({
               <p>Return to saved lessons or create a new lesson for this unit.</p>
             </section>
           ) : null}
+            </>
+          )}
         </div>
       </main>
 
       <aside className="overview-panel learning-control-panel" aria-label="Learning and integration settings">
         <section>
           <div className="overview-title-row"><h2>ChatGPT Web</h2><ShieldCheck size={17} /></div>
-          <p className="control-copy">Sign in at chatgpt.com and enable the extension. No Meoi app connection, Developer Mode, OAuth, or API key is required.</p>
+          <p className="control-copy">
+            {bridgeGate.state === "ready"
+              ? "Meoi Bridge v8 is ready. Sign in at chatgpt.com to create lessons and use coaching."
+              : "Install Meoi Bridge 8.0.0, reload the extension, then reload this page. Learn remains locked until protocol v8 responds."}
+          </p>
           <button className="primary-button wide-button" type="button" onClick={() => void refreshConnection()} disabled={busy}>
-            {busy ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />} Check extension
+            {busy ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />} Check again
           </button>
         </section>
 
@@ -728,20 +791,23 @@ export function LearningWorkspace({
           <h3><ShieldCheck size={15} /> Local bridge status</h3>
           <ul className="integration-checklist">
             <li data-ready="true"><span /> Website · 127.0.0.1</li>
-            <li data-ready={extensionConnected ? "true" : "false"}><span /> Extension · {extensionConnected ? "ready" : "not responding"}</li>
+            <li data-ready={extensionConnected ? "true" : "false"}><span /> Extension · {bridgeLabel}</li>
             <li data-ready="true"><span /> API / MCP / OAuth · not used</li>
             <li data-ready="true"><span /> Database · no writes</li>
           </ul>
           <p className="quota-note">The extension keeps queued prompts and validated results in browser session storage and removes each result after use. Meoi stores only validated lessons and their latest progress in this site's local storage.</p>
         </section>
 
-        <ProfileEditor profile={profile} onChange={onUpdateProfile} />
-
-        <section className="control-section voice-controls">
-          <h3><Mic size={15} /> Live speaking</h3>
-          <button className="secondary-button wide-button" type="button" disabled={!unit || !extensionConnected} onClick={() => void extensionBridge.send("OPEN_VOICE", { unitId: unit?.id })}><Mic size={15} /> Open Voice for this unit</button>
-          <p className="quota-note">Meoi only opens the unit's conversation for Voice. Voice syncing and audio upload remain disabled, and saved lesson history never includes audio or voice transcripts.</p>
-        </section>
+        {bridgeGate.state === "ready" ? (
+          <>
+            <ProfileEditor profile={profile} onChange={onUpdateProfile} />
+            <section className="control-section voice-controls">
+              <h3><Mic size={15} /> Live speaking</h3>
+              <button className="secondary-button wide-button" type="button" disabled={!unit} onClick={() => void extensionBridge.send("OPEN_VOICE", { unitId: unit?.id })}><Mic size={15} /> Open Voice for this unit</button>
+              <p className="quota-note">Meoi only opens the unit's conversation for Voice. Voice syncing and audio upload remain disabled, and saved lesson history never includes audio or voice transcripts.</p>
+            </section>
+          </>
+        ) : null}
       </aside>
     </>
   );

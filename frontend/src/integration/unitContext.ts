@@ -1,5 +1,5 @@
 import { getEffectiveCollectionQuestionSettings } from "../learning/questionSettings";
-import type { LearningProfile, LessonProgressSnapshot, LessonQuestionFormat } from "../learning/types";
+import type { LearningProfile, LessonProgressSnapshot } from "../learning/types";
 import type { Collection, Document, StudyItem, Unit } from "../types";
 
 export interface UnitContextPayload {
@@ -7,7 +7,7 @@ export interface UnitContextPayload {
   unit: Pick<Unit, "id" | "name" | "description" | "instructionOverride">;
   collection: Pick<Collection, "id" | "name"> & {
     learningProfile: LearningProfile;
-    questionBlueprints: Array<{ id: string; name: string; baseFormat: LessonQuestionFormat; guidance: string }>;
+    enabledQuestionFormats: string[];
   };
   documents: Array<Pick<Document, "id" | "title" | "type" | "body" | "updatedAt">>;
   studyItems: Array<Pick<StudyItem, "id" | "kind" | "text" | "translation" | "notes" | "updatedAt">>;
@@ -39,9 +39,7 @@ export function buildUnitContext(
       id: collection.id,
       name: collection.name,
       learningProfile: profile,
-      questionBlueprints: questionSettings.customTemplates
-        .filter((template) => template.enabled)
-        .map(({ id, name, baseFormat, guidance }) => ({ id, name, baseFormat, guidance })),
+      enabledQuestionFormats: questionSettings.enabledFormats,
     },
     documents: documents.map(({ id, title, type, body, updatedAt }) => ({ id, title, type, body, updatedAt })),
     studyItems: studyItems.map(({ id, kind, text, translation, notes, updatedAt }) => ({ id, kind, text, translation, notes, updatedAt })),
