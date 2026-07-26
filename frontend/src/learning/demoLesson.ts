@@ -22,6 +22,7 @@ interface DemoLanguageContent {
   askWater: string;
   tokens: [string, string, string];
   tokenConcepts: ["subject" | "drink" | "water", "subject" | "drink" | "water", "subject" | "drink" | "water"];
+  tokenPronunciations?: Array<{ native?: string; romanized?: string }>;
   separator: "space" | "none";
   pronunciation?: Partial<Record<keyof DemoLanguageContent, { native?: string; romanized?: string }>>;
 }
@@ -87,6 +88,11 @@ const TARGET_CONTENT: Record<SupportedLanguage, DemoLanguageContent> = {
     askWater: "水を飲みますか。",
     tokens: ["私は", "水を", "飲みます"],
     tokenConcepts: ["subject", "water", "drink"],
+    tokenPronunciations: [
+      { native: "わたしは", romanized: "watashi wa" },
+      { native: "みずを", romanized: "mizu o" },
+      { native: "のみます", romanized: "nomimasu" },
+    ],
     separator: "none",
     pronunciation: {
       nativeName: { native: "にほんご", romanized: "nihongo" },
@@ -116,6 +122,11 @@ const TARGET_CONTENT: Record<SupportedLanguage, DemoLanguageContent> = {
     askWater: "¿Bebes agua?",
     tokens: ["Yo", "bebo", "agua"],
     tokenConcepts: ["subject", "drink", "water"],
+    tokenPronunciations: [
+      { native: "wǒ", romanized: "wo" },
+      { native: "hē", romanized: "he" },
+      { native: "shuǐ", romanized: "shui" },
+    ],
     separator: "space",
   },
   Chinese: {
@@ -161,6 +172,11 @@ const TARGET_CONTENT: Record<SupportedLanguage, DemoLanguageContent> = {
     askWater: "물을 마셔요?",
     tokens: ["저는", "물을", "마셔요"],
     tokenConcepts: ["subject", "water", "drink"],
+    tokenPronunciations: [
+      { native: "저는", romanized: "jeoneun" },
+      { native: "물을", romanized: "mureul" },
+      { native: "마셔요", romanized: "masyeoyo" },
+    ],
     separator: "space",
     pronunciation: {
       nativeName: { native: "한국어", romanized: "hangugeo" },
@@ -450,6 +466,7 @@ function uniqueGlossary(target: DemoLanguageContent, source: DemoLanguageContent
     entries.push({
       term,
       meaning: sourceTokensByConcept.get(target.tokenConcepts[index]) ?? term,
+      pronunciation: target.tokenPronunciations?.[index],
     });
   });
   return entries;
@@ -469,7 +486,13 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
   const hint = copy.hint;
   const blankWater = replaceFirst(target.drinkWater, target.water, "___");
   const selectWater = replaceFirst(target.drinkWater, target.water, "{{blank}}");
-  const clozeSentence = target.tokens.map((token, index) => index === 0 ? token : "___").join(target.separator === "none" ? "" : " ");
+  const clozeBlanks = target.tokens.slice(1).map((token, index) => ({
+    id: `blank-${target.tokenConcepts[index + 1]}`,
+    acceptedAnswers: [token],
+  }));
+  const clozeSentence = target.tokens.map((token, index) => (
+    index === 0 ? token : `{{blank:${clozeBlanks[index - 1].id}}}`
+  )).join(target.separator === "none" ? "" : " ");
   const glossary = uniqueGlossary(target, source);
   const answerBank = (
     values: string[],
@@ -519,6 +542,7 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
       type: "trueFalse",
       evaluationMode: "local",
       prompt: copy.prompts.trueFalse,
+      targetPrompt: target.drinkWater,
       statement: target.drinkWater,
       correct: true,
       glossaryTargets: [target.drinkWater],
@@ -551,10 +575,7 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
       evaluationMode: "local",
       prompt: copy.prompts.multiCloze,
       template: clozeSentence,
-      blanks: [
-        { id: "verb", acceptedAnswers: [target.tokens[1]] },
-        { id: "object", acceptedAnswers: [target.tokens[2]] },
-      ],
+      blanks: clozeBlanks,
       match: { ignorePunctuation: true },
       answerBank: answerBank([...target.tokens, target.tea, target.teacher], "cloze"),
       glossaryTargets: [...target.tokens, target.tea, target.teacher],
@@ -628,7 +649,8 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
     question({
       type: "shortAnswer",
       evaluationMode: "ai",
-      prompt: `${copy.prompts.shortAnswer} ${target.drinkWater}`,
+      prompt: copy.prompts.shortAnswer,
+      targetPrompt: target.drinkWater,
       referenceAnswer: source.drinkWater,
       requiredIdeas: [source.water],
       rubric: [copy.objective],
@@ -644,6 +666,7 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
       type: "errorCorrection",
       evaluationMode: "local",
       prompt: copy.prompts.errorCorrection,
+      targetPrompt: target.drinkTea,
       incorrectText: target.drinkTea,
       acceptedAnswers: [target.drinkTea],
       match: { ignorePunctuation: true },
@@ -654,6 +677,7 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
       type: "sentenceTransformation",
       evaluationMode: "local",
       prompt: copy.prompts.sentenceTransformation,
+      targetPrompt: target.drinkWater,
       sourceText: target.drinkWater,
       constraint: copy.prompts.sentenceTransformation,
       acceptedAnswers: [target.askWater],
@@ -696,6 +720,7 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
       type: "speakingRepeat",
       evaluationMode: "ai",
       prompt: copy.prompts.speakingRepeat,
+      targetPrompt: target.drinkWater,
       modelText: target.drinkWater,
       rubric: [copy.objective],
       glossaryTargets: [target.drinkWater],
@@ -774,7 +799,7 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
   });
 
   return decorateLessonPresentation({
-    schemaVersion: 5,
+    schemaVersion: 6,
     id: `${prefix}-lesson`,
     unitId,
     title: `${copy.title}: ${profile.sourceLanguage} → ${profile.targetLanguage}`,

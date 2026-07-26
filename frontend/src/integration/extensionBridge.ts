@@ -175,6 +175,11 @@ export class ExtensionBridge {
     return this.waitForOperation(operationId, options);
   }
 
+  async resetUnitChat(unitId: string): Promise<boolean> {
+    const result = await this.send<{ reset: boolean }, { unitId: string }>("RESET_UNIT_CHAT", { unitId });
+    return result.reset;
+  }
+
   async acknowledgeOperation(operationId: string): Promise<boolean> {
     const result = await this.send<{ acknowledged: boolean }, OperationStatePayload>("ACK_OPERATION_RESULT", { operationId });
     return result.acknowledged;

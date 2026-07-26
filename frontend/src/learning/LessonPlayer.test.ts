@@ -232,6 +232,36 @@ describe("fullscreen lesson player", () => {
     expect(document.querySelector("#lesson-player-title")?.textContent).toContain("second answer");
   });
 
+  it("focuses Continue after an auto-graded matching question and advances with Enter", async () => {
+    const matching: LessonQuestion = {
+      id: "auto-matching",
+      type: "matching",
+      prompt: "Match the pair",
+      explanation: "The pair matches.",
+      evaluationMode: "local",
+      pairs: [{ leftId: "water", left: "water", rightId: "mizu", right: "mizu" }],
+    };
+    await renderPlayer({
+      lesson: lessonWithQuestions("auto-matching-test", [matching, lesson.questions[1]]),
+    });
+
+    await act(async () => button("water").click());
+    await act(async () => {
+      button("mizu").click();
+      await Promise.resolve();
+    });
+
+    const continueButton = button("Continue");
+    expect(document.querySelector(".lesson-feedback-tray.is-correct")).not.toBeNull();
+    expect(document.activeElement).toBe(continueButton);
+    expect(Array.from(document.querySelectorAll("button")).some((candidate) => candidate.textContent?.includes("Check answer"))).toBe(false);
+
+    await act(async () => document.querySelector<HTMLElement>(".lesson-fullscreen-dialog")!.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }),
+    ));
+    expect(document.querySelector("#lesson-player-title")?.textContent).toContain("second answer");
+  });
+
   it("checks an answer textarea with Enter and preserves Shift+Enter for a newline", async () => {
     const writing: LessonQuestion = {
       id: "enter-writing",
@@ -281,6 +311,62 @@ describe("fullscreen lesson player", () => {
     expect(enter.defaultPrevented).toBe(true);
     expect(onEvaluate).toHaveBeenCalledTimes(1);
     expect(document.querySelector(".lesson-feedback-tray.is-correct")).not.toBeNull();
+  });
+
+  it("focuses the answer field at the end when switching from word bank to keyboard", async () => {
+    const writing: LessonQuestion = {
+      id: "focus-writing",
+      type: "freeWriting",
+      prompt: "Write an answer",
+      explanation: "Use a complete sentence.",
+      evaluationMode: "ai",
+      minWords: 1,
+      maxWords: 20,
+      rubric: ["Clarity"],
+      answerBank: {
+        tokens: [{ id: "hello", label: "hello" }, { id: "world", label: "world" }],
+        separator: "space",
+        defaultMode: "bank",
+      },
+    };
+    await renderPlayer({ lesson: lessonWithQuestions("focus-writing-test", [writing]) });
+    const toggle = button("Use keyboard");
+    expect(toggle.querySelector("svg")).not.toBeNull();
+
+    await act(async () => {
+      toggle.click();
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+    });
+    const textarea = document.querySelector<HTMLTextAreaElement>(".free-writing-response textarea")!;
+    expect(document.activeElement).toBe(textarea);
+    expect(textarea.selectionStart).toBe(textarea.value.length);
+    expect(button("Use word bank").querySelector("svg")).not.toBeNull();
+  });
+
+  it("records and persists a modified Skip shortcut that works from an answer field", async () => {
+    await renderPlayer();
+    await act(async () => button("Lesson settings").click());
+    const recorder = button("Alt+S");
+    await act(async () => recorder.click());
+    await act(async () => recorder.dispatchEvent(new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "k",
+      shiftKey: true,
+    })));
+    expect(document.querySelector(".lesson-shortcut-status")?.textContent).toContain("Shift+K");
+    expect(JSON.parse(window.localStorage.getItem(LESSON_PLAYER_PREFERENCE_KEY) ?? "{}").skipShortcut)
+      .toEqual({ key: "k", altKey: false, ctrlKey: false, metaKey: false, shiftKey: true });
+
+    await act(async () => button("Close lesson settings").click());
+    const answer = document.querySelector<HTMLInputElement>('input[value="a"]')!;
+    await act(async () => answer.dispatchEvent(new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "K",
+      shiftKey: true,
+    })));
+    expect(document.querySelector("#lesson-player-title")?.textContent).toContain("second answer");
   });
 
   it("flushes pending progress before calling the explicit exit callback", async () => {
@@ -500,6 +586,38 @@ describe("fullscreen lesson player", () => {
     });
   });
 
+  it("renders source and target prompts separately and speaks only the target row on demand", async () => {
+    speechVoices = [speechVoice("Japanese", "ja-JP", "voice-ja", true)];
+    const question = {
+      ...lesson.questions[0],
+      id: "target-prompt-question",
+      prompt: "Choose the natural model sentence.",
+      targetPrompt: "\u6c34\u3092\u98f2\u307f\u307e\u3059\u3002",
+      glossaryTargets: ["\u6c34", "\u98f2\u307f\u307e\u3059"],
+      presentation: { readQuestion: false, readAnswers: false, wordTooltips: false },
+    } as LessonQuestion;
+    await renderPlayer({
+      lesson: {
+        ...lessonWithQuestions("target-prompt-test", [question], undefined, [
+          { term: "\u6c34", meaning: "water", pronunciation: { native: "\u307f\u305a", romanized: "mizu" } },
+          { term: "\u98f2\u307f\u307e\u3059", meaning: "drink", pronunciation: { native: "\u306e\u307f\u307e\u3059", romanized: "nomimasu" } },
+        ]),
+        targetLanguage: "Japanese",
+      },
+    });
+    expect(document.querySelector("#lesson-player-title")?.textContent).toBe("Choose the natural model sentence.");
+    const targetRow = document.querySelector(".lesson-target-prompt-row")!;
+    expect(targetRow.querySelectorAll("ruby")).toHaveLength(2);
+    expect(Array.from(targetRow.querySelectorAll("ruby")).map((ruby) => ruby.childNodes[0]?.textContent))
+      .toEqual(["\u6c34", "\u98f2\u307f\u307e\u3059"]);
+    expect(spokenUtterances).toHaveLength(0);
+    const cancelCount = vi.mocked(window.speechSynthesis.cancel).mock.calls.length;
+
+    await act(async () => button("Play Japanese prompt").click());
+    expect(spokenUtterances.map((utterance) => utterance.text)).toEqual(["\u6c34\u3092\u98f2\u307f\u307e\u3059\u3002"]);
+    expect(window.speechSynthesis.cancel).toHaveBeenCalledTimes(cancelCount + 1);
+  });
+
   it("auto-reads each new target-language question and interrupts speech for the next selected answer", async () => {
     speechVoices = [speechVoice("Japanese", "ja-JP", "voice-ja", true)];
     const question = {
@@ -611,7 +729,7 @@ describe("fullscreen lesson player", () => {
       },
     });
     const cancelCount = vi.mocked(window.speechSynthesis.cancel).mock.calls.length;
-    const term = document.querySelector<HTMLElement>("#lesson-player-title .glossary-term")!;
+    const term = document.querySelector<HTMLElement>(".lesson-target-prompt-row .glossary-term")!;
 
     await act(async () => term.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
 

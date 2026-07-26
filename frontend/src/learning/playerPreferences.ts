@@ -4,6 +4,14 @@ export const LESSON_PLAYER_PREFERENCE_KEY = "meoi.lessonPlayerPreferences.v1";
 export const LESSON_PLAYER_PREFERENCE_VERSION = 1;
 export const LISTENING_PAUSE_DURATION_MS = 15 * 60 * 1_000;
 
+export interface LessonShortcut {
+  key: string;
+  altKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+}
+
 export interface LessonPlayerPreference {
   version: 1;
   readQuestion?: boolean;
@@ -12,13 +20,23 @@ export interface LessonPlayerPreference {
   showPronunciation: boolean;
   pronunciationMode: "romanized" | "native";
   listeningDisabledUntil: number;
+  skipShortcut: LessonShortcut;
 }
+
+export const DEFAULT_SKIP_SHORTCUT: LessonShortcut = {
+  key: "s",
+  altKey: true,
+  ctrlKey: false,
+  metaKey: false,
+  shiftKey: false,
+};
 
 export const DEFAULT_LESSON_PLAYER_PREFERENCE: LessonPlayerPreference = {
   version: LESSON_PLAYER_PREFERENCE_VERSION,
   showPronunciation: true,
   pronunciationMode: "romanized",
   listeningDisabledUntil: 0,
+  skipShortcut: DEFAULT_SKIP_SHORTCUT,
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -43,7 +61,63 @@ export function normalizeLessonPlayerPreference(value: unknown, now = Date.now()
       : DEFAULT_LESSON_PLAYER_PREFERENCE.showPronunciation,
     pronunciationMode: source.pronunciationMode === "native" ? "native" : "romanized",
     listeningDisabledUntil,
+    skipShortcut: normalizeLessonShortcut(source.skipShortcut),
   };
+}
+
+export function isForbiddenLessonShortcut(shortcut: LessonShortcut): boolean {
+  const key = shortcut.key.toLocaleLowerCase();
+  if (["enter", "escape", "tab", "backspace"].includes(key)) return true;
+  if (shortcut.ctrlKey || shortcut.metaKey) return true;
+  if (/^f(?:[1-9]|1[0-2])$/i.test(key)) return true;
+  if (shortcut.altKey && ["arrowleft", "arrowright", "home"].includes(key)) return true;
+  return !key || ["shift", "alt", "control", "meta"].includes(key);
+}
+
+export function normalizeLessonShortcut(value: unknown): LessonShortcut {
+  if (!isRecord(value) || typeof value.key !== "string") return { ...DEFAULT_SKIP_SHORTCUT };
+  const shortcut: LessonShortcut = {
+    key: value.key.length === 1 ? value.key.toLocaleLowerCase() : value.key.toLocaleLowerCase(),
+    altKey: value.altKey === true,
+    ctrlKey: value.ctrlKey === true,
+    metaKey: value.metaKey === true,
+    shiftKey: value.shiftKey === true,
+  };
+  return isForbiddenLessonShortcut(shortcut) ? { ...DEFAULT_SKIP_SHORTCUT } : shortcut;
+}
+
+export function lessonShortcutFromKeyboardEvent(
+  event: Pick<KeyboardEvent, "key" | "altKey" | "ctrlKey" | "metaKey" | "shiftKey">,
+): LessonShortcut {
+  return {
+    key: event.key.length === 1 ? event.key.toLocaleLowerCase() : event.key.toLocaleLowerCase(),
+    altKey: event.altKey,
+    ctrlKey: event.ctrlKey,
+    metaKey: event.metaKey,
+    shiftKey: event.shiftKey,
+  };
+}
+
+export function lessonShortcutMatches(
+  event: Pick<KeyboardEvent, "key" | "altKey" | "ctrlKey" | "metaKey" | "shiftKey">,
+  shortcut: LessonShortcut,
+): boolean {
+  const candidate = lessonShortcutFromKeyboardEvent(event);
+  return candidate.key === shortcut.key
+    && candidate.altKey === shortcut.altKey
+    && candidate.ctrlKey === shortcut.ctrlKey
+    && candidate.metaKey === shortcut.metaKey
+    && candidate.shiftKey === shortcut.shiftKey;
+}
+
+export function lessonShortcutLabel(shortcut: LessonShortcut): string {
+  return [
+    shortcut.ctrlKey ? "Ctrl" : "",
+    shortcut.altKey ? "Alt" : "",
+    shortcut.shiftKey ? "Shift" : "",
+    shortcut.metaKey ? "Meta" : "",
+    shortcut.key.length === 1 ? shortcut.key.toLocaleUpperCase() : shortcut.key,
+  ].filter(Boolean).join("+");
 }
 
 export function loadLessonPlayerPreference(

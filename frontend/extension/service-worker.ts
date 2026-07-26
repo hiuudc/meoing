@@ -107,30 +107,34 @@ function validOperationId(value: unknown): value is string {
 }
 
 function validExpectation(value: unknown, unitId: string): value is OperationExpectation {
-  if (!isRecord(value) || !exactKeys(value, ["unitId", "targetLanguage", "sourceLanguage", "level", "questionCount", "speaking", "allowedFormats", "requiredTemplates"])) return false;
+  if (!isRecord(value) || !exactKeys(value, [
+    "unitId",
+    "targetLanguage",
+    "sourceLanguage",
+    "level",
+    "questionCount",
+    "speaking",
+    "allowedFormats",
+    "requiredTemplates",
+  ])) return false;
   if (!Array.isArray(value.allowedFormats) || !Array.isArray(value.requiredTemplates)) return false;
   const formatSet = new Set<string>(LESSON_QUESTION_FORMATS);
   const allowedFormats = value.allowedFormats.filter((format): format is QuestionFormat => typeof format === "string" && formatSet.has(format));
   if (allowedFormats.length !== value.allowedFormats.length || new Set(allowedFormats).size !== allowedFormats.length || allowedFormats.length < 5) return false;
+  const requiredTemplates = value.requiredTemplates.filter((template): template is { id: string; format: QuestionFormat } => (
+    isRecord(template)
+    && exactKeys(template, ["id", "format"])
+    && validId(template.id)
+    && typeof template.format === "string"
+    && allowedFormats.includes(template.format as QuestionFormat)
+  ));
+  if (
+    requiredTemplates.length !== value.requiredTemplates.length
+    || requiredTemplates.length > 20
+    || new Set(requiredTemplates.map((template) => template.id)).size !== requiredTemplates.length
+  ) return false;
   const aiFormats = new Set<QuestionFormat>(["translation", "shortAnswer", "freeWriting", "speakingRepeat", "speakingRoleplay"]);
   if (!allowedFormats.some((format) => aiFormats.has(format)) || !allowedFormats.some((format) => !aiFormats.has(format))) return false;
-  const allowedSet = new Set(allowedFormats);
-  const templateIds = new Set<string>();
-  const requiredTemplatesValid = value.requiredTemplates.length <= 20
-    && value.requiredTemplates.length <= Number(value.questionCount)
-    && value.requiredTemplates.every((template) => {
-      if (!isRecord(template) || !exactKeys(template, ["id", "format"]) || !validId(template.id) || !allowedSet.has(template.format as QuestionFormat)) return false;
-      if (templateIds.has(template.id)) return false;
-      templateIds.add(template.id);
-      return true;
-    });
-  if (!requiredTemplatesValid) return false;
-  const requiredFormats = new Set(value.requiredTemplates.map((template) => (template as { format: QuestionFormat }).format));
-  const distinctCapacity = requiredFormats.size + Math.min(
-    Number(value.questionCount) - value.requiredTemplates.length,
-    allowedFormats.filter((format) => !requiredFormats.has(format)).length,
-  );
-  if (distinctCapacity < 5) return false;
   return value.unitId === unitId
     && validId(value.unitId)
     && typeof value.targetLanguage === "string"
@@ -178,13 +182,13 @@ function validatePageRequest(value: unknown): ExtensionRequest<Record<string, un
     || typeof value.requestId !== "string"
     || !validOperationId(value.requestId)
     || typeof value.command !== "string"
-    || !["SEND_OPERATION", "OPEN_VOICE", "GET_INTEGRATION_STATUS", "GET_OPERATION_STATE", "RETRY_OPERATION", "ACK_OPERATION_RESULT"].includes(value.command)
+    || !["SEND_OPERATION", "OPEN_VOICE", "GET_INTEGRATION_STATUS", "GET_OPERATION_STATE", "RETRY_OPERATION", "ACK_OPERATION_RESULT", "RESET_UNIT_CHAT"].includes(value.command)
     || !isRecord(value.payload)) {
     throw new RequestFailure(extensionError("INVALID_COMMAND", "The page request is invalid."));
   }
   if (value.command === "SEND_OPERATION") validateSendPayload(value.payload);
-  if (value.command === "OPEN_VOICE" && !validId(value.payload.unitId)) {
-    throw new RequestFailure(extensionError("INVALID_COMMAND", "OPEN_VOICE requires a valid unit ID."));
+  if (["OPEN_VOICE", "RESET_UNIT_CHAT"].includes(value.command) && !validId(value.payload.unitId)) {
+    throw new RequestFailure(extensionError("INVALID_COMMAND", `${value.command} requires a valid unit ID.`));
   }
   if (["GET_OPERATION_STATE", "RETRY_OPERATION", "ACK_OPERATION_RESULT"].includes(value.command)
     && !validOperationId(value.payload.operationId)) {
@@ -327,6 +331,20 @@ async function storeUnitChat(unitId: string, url?: string): Promise<void> {
   }
   await setLocal(STORAGE_KEYS.unitChats, { ...next, [unitId]: canonicalUrl });
   await clearProvisionalUnitTab(unitId);
+}
+
+async function resetUnitChat(unitId: string): Promise<void> {
+  await withStorageMutation(async () => {
+    const chats = await getLocal<UnitChatMap>(STORAGE_KEYS.unitChats, {});
+    const provisionalTabs = await getSession<UnitTabMap>(STORAGE_KEYS.provisionalTabs, {});
+    const nextChats = { ...chats };
+    const nextProvisionalTabs = { ...provisionalTabs };
+    delete nextChats[unitId];
+    delete nextProvisionalTabs[unitId];
+    await chrome.storage.local.set({ [STORAGE_KEYS.unitChats]: nextChats });
+    await chrome.storage.session.set({ [STORAGE_KEYS.provisionalTabs]: nextProvisionalTabs });
+    await chrome.storage.session.remove(STORAGE_KEYS.lastError);
+  });
 }
 
 async function captureCreatedChat(unitId: string, tabId: number): Promise<void> {
@@ -513,8 +531,8 @@ async function retryOperation(operationId: string): Promise<ChatOperationState> 
       [STORAGE_KEYS.queues]: queues,
       [STORAGE_KEYS.operationStates]: { ...states, [operationId]: queued },
       [STORAGE_KEYS.paused]: false,
-      [STORAGE_KEYS.lastError]: null,
     });
+    await chrome.storage.session.remove(STORAGE_KEYS.lastError);
     return publicOperationState(queued);
   });
   void dispatchUnit(state.unitId);
@@ -711,6 +729,9 @@ async function handlePageRequest(request: ExtensionRequest<Record<string, unknow
       return { ok: true, data: await retryOperation(String(payload.operationId)) };
     case "ACK_OPERATION_RESULT":
       return { ok: true, data: { acknowledged: await acknowledgeOperation(String(payload.operationId)) } };
+    case "RESET_UNIT_CHAT":
+      await resetUnitChat(String(payload.unitId));
+      return { ok: true, data: { reset: true } };
     case "OPEN_VOICE": {
       const opened = await openUnitChat(String(payload.unitId));
       const response = await chrome.tabs.sendMessage(opened.tab.id!, { kind: "MEOI_OPEN_VOICE" }) as ChatCommandResponse;

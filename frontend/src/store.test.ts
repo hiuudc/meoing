@@ -220,11 +220,13 @@ describe("persistence", () => {
     expect(loaded.version).toBe(1);
     const collectionId = state.units[unitId].collectionId;
     expect(loaded.collections[collectionId].questionSettings?.enabledFormats).toEqual(["singleChoice", "selectBlank", "translation"]);
-    expect(loaded.collections[collectionId].questionSettings?.customTemplates[0]).toMatchObject({
+    expect(loaded.collections[collectionId].questionSettings?.customTemplates).toEqual([{
+      id: "daily-greeting",
       name: "Daily greeting",
+      baseFormat: "selectBlank",
       guidance: "Use one greeting.",
       enabled: true,
-    });
+    }]);
     expect("questionSettings" in loaded.units[unitId]).toBe(false);
 
     const legacyStorage = { getItem: () => JSON.stringify(state) };
@@ -244,7 +246,6 @@ describe("persistence", () => {
             ...state.collections[collectionId],
             questionSettings: {
               enabledFormats: ["singleChoice", "multipleChoice", "trueFalse", "fillBlank", "translation"],
-              customTemplates: [],
             },
           },
         },
@@ -254,7 +255,6 @@ describe("persistence", () => {
             ...state.units[unitId],
             questionSettings: {
               enabledFormats: ["shortAnswer", "freeWriting"],
-              customTemplates: [],
             },
           },
         },

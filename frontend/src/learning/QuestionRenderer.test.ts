@@ -20,11 +20,13 @@ function Harness({
   evaluated = false,
   inputMode,
   onAnswerActivate,
+  onComplete,
 }: {
   question: LessonQuestion;
   evaluated?: boolean;
   inputMode?: AnswerInputMode;
   onAnswerActivate?: (text: string) => void;
+  onComplete?: (answer: QuestionAnswer) => void;
 }) {
   const [answer, setAnswer] = useState<QuestionAnswer>("");
   return createElement(
@@ -38,6 +40,7 @@ function Harness({
       answerInputMode: inputMode,
       onChange: setAnswer,
       onAnswerActivate,
+      onComplete,
       renderText: (text, interactive) => createElement("span", { "data-answer-interactive": String(Boolean(interactive)) }, text),
     }),
     createElement("output", { id: "answer-value" }, JSON.stringify(answer)),
@@ -86,7 +89,61 @@ describe("QuestionRenderer interactions", () => {
     await act(async () => button("water").click());
     await act(async () => button("nước").click());
     expect(document.querySelector("#answer-value")?.textContent).toContain('"water":"nuoc"');
-    expect(document.querySelectorAll(".pair-column > button.is-locked")).toHaveLength(2);
+    expect(document.querySelectorAll(".pair-grid-row > button.is-locked")).toHaveLength(2);
+  });
+
+  it("selects matching badges from number and numpad keys and completes after the final pair", async () => {
+    const onComplete = vi.fn();
+    const question: LessonQuestion = {
+      id: "number-matching",
+      type: "matching",
+      prompt: "Match",
+      explanation: "Pairs",
+      evaluationMode: "local",
+      pairs: [
+        { leftId: "one", left: "one", rightId: "uno", right: "uno" },
+        { leftId: "two", left: "two", rightId: "dos", right: "dos" },
+      ],
+    };
+    await render(createElement(Harness, { question, onComplete }));
+    const group = document.querySelector<HTMLElement>(".pair-matching")!;
+    const rightBadge = (label: string) => Number(
+      Array.from(group.querySelectorAll<HTMLButtonElement>("button"))
+        .find((candidate) => candidate.textContent?.includes(label))
+        ?.querySelector(".pair-index")?.textContent,
+    );
+
+    await act(async () => group.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, code: "Digit1", key: "1" }),
+    ));
+    await act(async () => {
+      const badge = rightBadge("uno");
+      group.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true,
+        code: `Numpad${badge}`,
+        key: String(badge),
+      }));
+      await Promise.resolve();
+    });
+    expect(document.querySelectorAll(".pair-grid-row > button.is-locked")).toHaveLength(2);
+    expect(onComplete).not.toHaveBeenCalled();
+
+    await act(async () => group.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, code: "Digit2", key: "2" }),
+    ));
+    await act(async () => {
+      const badge = rightBadge("dos");
+      group.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true,
+        code: `Numpad${badge}`,
+        key: String(badge),
+      }));
+      await Promise.resolve();
+    });
+    expect(document.querySelectorAll(".pair-grid-row")).toHaveLength(2);
+    expect(document.querySelectorAll(".pair-grid-row > button.is-locked")).toHaveLength(4);
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(onComplete).toHaveBeenCalledWith({ one: "uno", two: "dos" });
   });
 
   it("keeps duplicate-label bank tokens distinct and supports keyboard reordering", async () => {
@@ -160,6 +217,11 @@ describe("QuestionRenderer interactions", () => {
     expect(document.querySelector("#answer-value")?.textContent).toBe('"America"');
     expect(onAnswerActivate).toHaveBeenCalledTimes(1);
     expect(onAnswerActivate).toHaveBeenLastCalledWith("America");
+
+    await act(async () => composer.dispatchEvent(new KeyboardEvent("keydown", { key: "z", bubbles: true })));
+    expect(document.querySelector("#answer-value")?.textContent).toBe('"America"');
+    expect(document.querySelector(".answer-composer")?.getAttribute("data-typeahead-active")).toBe("true");
+    await act(async () => vi.advanceTimersByTime(1_500));
 
     await act(async () => composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true })));
     expect(document.querySelector("#answer-value")?.textContent).toBe('""');
@@ -261,6 +323,83 @@ describe("QuestionRenderer interactions", () => {
     expect(document.querySelector(".select-blank-slot.is-filled")).toBeNull();
     expect(document.querySelectorAll(".select-blank-options button")).toHaveLength(2);
     expect(document.querySelector("#answer-value")?.textContent).toBe('""');
+  });
+
+  it("fills explicit multi-blank markers in active order and returns a selected token", async () => {
+    const question: LessonQuestion = {
+      id: "multi-bank",
+      type: "multiCloze",
+      prompt: "Complete both blanks",
+      targetPrompt: "{{blank:subject}} drinks {{blank:object}}.",
+      template: "{{blank:subject}} drinks {{blank:object}}.",
+      explanation: "A complete sentence.",
+      evaluationMode: "local",
+      blanks: [
+        { id: "subject", acceptedAnswers: ["I"] },
+        { id: "object", acceptedAnswers: ["water"] },
+      ],
+      answerBank: {
+        tokens: [
+          { id: "i", label: "I" },
+          { id: "water", label: "water" },
+          { id: "tea", label: "tea" },
+        ],
+        separator: "space",
+        defaultMode: "bank",
+      },
+    };
+    await render(createElement(Harness, { question, inputMode: "bank" }));
+
+    await act(async () => button("I").click());
+    expect(document.querySelector("#answer-value")?.textContent).toBe('{"subject":"I","object":""}');
+    expect(document.querySelectorAll(".multi-cloze-inline-blank.is-filled")).toHaveLength(1);
+    expect(document.querySelectorAll(".token-bank-placeholder")).toHaveLength(1);
+
+    await act(async () => button("water").click());
+    expect(document.querySelector("#answer-value")?.textContent).toBe('{"subject":"I","object":"water"}');
+    expect(document.querySelectorAll(".multi-cloze-inline-blank.is-filled")).toHaveLength(2);
+
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-multi-cloze-token="i"]')!.click());
+    expect(document.querySelector("#answer-value")?.textContent).toBe('{"subject":"","object":"water"}');
+    expect(document.querySelectorAll(".multi-cloze-inline-blank.is-filled")).toHaveLength(1);
+  });
+
+  it("keeps categories reusable and completes after every item is locked", async () => {
+    const onComplete = vi.fn();
+    const question: LessonQuestion = {
+      id: "categorize",
+      type: "categorize",
+      prompt: "Categorize",
+      explanation: "Group the words.",
+      evaluationMode: "local",
+      categories: [
+        { id: "warm", label: "Warm colors" },
+        { id: "cool", label: "Cool colors" },
+      ],
+      items: [
+        { id: "red", label: "red", categoryId: "warm" },
+        { id: "orange", label: "orange", categoryId: "warm" },
+        { id: "blue", label: "blue", categoryId: "cool" },
+      ],
+    };
+    await render(createElement(Harness, { question, onComplete }));
+
+    await act(async () => button("red").click());
+    await act(async () => button("Warm colors").click());
+    expect(button("Warm colors").disabled).toBe(false);
+    await act(async () => button("orange").click());
+    await act(async () => button("Warm colors").click());
+    expect(button("Warm colors").disabled).toBe(false);
+    expect(onComplete).not.toHaveBeenCalled();
+    await act(async () => button("blue").click());
+    await act(async () => {
+      button("Cool colors").click();
+      await Promise.resolve();
+    });
+
+    expect(document.querySelectorAll(".categorize-items button.is-locked")).toHaveLength(3);
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(onComplete).toHaveBeenCalledWith({ red: "warm", orange: "warm", blue: "cool" });
   });
 
   it("renders stable but content-specific audio waveforms", async () => {

@@ -1,5 +1,5 @@
 import { getEffectiveCollectionQuestionSettings } from "../learning/questionSettings";
-import type { LearningProfile, LessonProgressSnapshot, QuestionFormat } from "../learning/types";
+import type { LearningProfile, LessonProgressSnapshot, LessonQuestionFormat } from "../learning/types";
 import type { Collection, Document, StudyItem, Unit } from "../types";
 
 export interface UnitContextPayload {
@@ -7,7 +7,7 @@ export interface UnitContextPayload {
   unit: Pick<Unit, "id" | "name" | "description" | "instructionOverride">;
   collection: Pick<Collection, "id" | "name"> & {
     learningProfile: LearningProfile;
-    questionBlueprints: Array<{ id: string; name: string; baseFormat: QuestionFormat; guidance: string }>;
+    questionBlueprints: Array<{ id: string; name: string; baseFormat: LessonQuestionFormat; guidance: string }>;
   };
   documents: Array<Pick<Document, "id" | "title" | "type" | "body" | "updatedAt">>;
   studyItems: Array<Pick<StudyItem, "id" | "kind" | "text" | "translation" | "notes" | "updatedAt">>;

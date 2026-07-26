@@ -16,6 +16,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { CharacterTracingResponse } from "./CharacterTracingResponse";
+import { parseMultiClozeTemplate, stripBlankMarkers } from "./multiCloze";
 import { SpeakingRecorder, supportsSpeechRecognition } from "./SpeakingRecorder";
 import { languageTagForSpeech } from "./speech";
 import type {
@@ -37,12 +38,37 @@ interface QuestionRendererProps {
   onSpeakTarget?: (text: string) => void;
   onSpeakingChange?: (submission: SpeakingSubmission | null) => void;
   onRequireAlternate?: () => void;
+  onComplete?: (answer: QuestionAnswer) => void;
   renderText?: (text: string, interactive?: boolean) => ReactNode;
   answerInputMode?: AnswerInputMode;
 }
 
 type TextRenderer = (text: string, interactive?: boolean) => ReactNode;
 export type AnswerInputMode = "keyboard" | "bank";
+
+function TargetStimulusRow({
+  children,
+  speechText,
+  onSpeak,
+}: {
+  children: ReactNode;
+  speechText: string;
+  onSpeak?: (text: string) => void;
+}) {
+  return (
+    <div className="question-target-stimulus-row">
+      <button
+        type="button"
+        aria-label="Play target-language prompt"
+        onClick={() => onSpeak?.(stripBlankMarkers(speechText))}
+        disabled={!onSpeak}
+      >
+        <Volume2 size={20} />
+      </button>
+      <div>{children}</div>
+    </div>
+  );
+}
 
 export function answerBankForQuestion(question: LessonQuestion): AnswerBank | undefined {
   if (question.answerBank) return question.answerBank;
@@ -83,9 +109,9 @@ function TextResponse({
     <label className="question-text-response">
       <span>{label}</span>
       {multiline ? (
-        <textarea rows={5} value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled} />
+        <textarea data-question-answer-input rows={5} value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled} />
       ) : (
-        <input value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled} autoComplete="off" />
+        <input data-question-answer-input value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled} autoComplete="off" />
       )}
     </label>
   );
@@ -399,6 +425,7 @@ export function OrderedAnswerComposer({
       ref={composerRef}
       tabIndex={0}
       onKeyDownCapture={handleComposerKey}
+      data-typeahead-active={typeahead ? "true" : undefined}
       aria-label="Word bank composer. Type a word prefix to select it."
     >
       <p className="sr-only">Selected order</p>
@@ -579,6 +606,7 @@ function MultiClozeResponse({
   disabled,
   evaluated,
   onAnswerActivate,
+  onSpeakTarget,
   renderText,
 }: {
   question: Extract<LessonQuestion, { type: "multiCloze" }>;
@@ -588,14 +616,51 @@ function MultiClozeResponse({
   disabled?: boolean;
   evaluated?: boolean;
   onAnswerActivate?: (text: string) => void;
+  onSpeakTarget?: (text: string) => void;
   renderText: TextRenderer;
 }) {
   const values = mapAnswer(answer);
   const bank = question.answerBank;
   const mode = inputMode ?? bank?.defaultMode ?? "keyboard";
   const [keyboardValues, setKeyboardValues] = useState(values);
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [assignments, setAssignments] = useState<Record<string, string>>(() => {
+    if (!bank) return {};
+    const used = new Set<string>();
+    return Object.fromEntries(question.blanks.flatMap((blank) => {
+      const token = bank.tokens.find((candidate) => !used.has(candidate.id) && candidate.label === values[blank.id]);
+      if (!token) return [];
+      used.add(token.id);
+      return [[blank.id, token.id]];
+    }));
+  });
+  const [activeBlankId, setActiveBlankId] = useState(question.blanks[0]?.id ?? "");
+  const [drag, setDrag] = useState<{
+    tokenId: string;
+    label: string;
+    originBlankId?: string;
+    pointerId: number;
+    startX: number;
+    startY: number;
+    offsetX: number;
+    offsetY: number;
+    width: number;
+    height: number;
+    moved: boolean;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [announcement, setAnnouncement] = useState("");
+  const blankRefs = useRef(new Map<string, HTMLElement>());
+  const bankRef = useRef<HTMLDivElement>(null);
+  const suppressClickRef = useRef("");
+  const typeaheadTimerRef = useRef<number | null>(null);
   const previousModeRef = useRef(mode);
+  const [typeahead, setTypeahead] = useState("");
+  const labels = useMemo(() => new Map(bank?.tokens.map((token) => [token.id, token.label]) ?? []), [bank]);
+  const parsedTemplate = useMemo(
+    () => parseMultiClozeTemplate(question.template, question.blanks.map((blank) => blank.id)),
+    [question.blanks, question.template],
+  );
 
   useEffect(() => {
     if (!bank || previousModeRef.current === mode) return;
@@ -604,48 +669,331 @@ function MultiClozeResponse({
       onChange(keyboardValues);
       return;
     }
-    const labels = new Map(bank.tokens.map((token) => [token.id, token.label]));
-    onChange(Object.fromEntries(question.blanks.map((blank, index) => [blank.id, labels.get(selectedIds[index]) ?? ""])));
-  }, [bank, keyboardValues, mode, onChange, question.blanks, selectedIds]);
+    onChange(Object.fromEntries(question.blanks.map((blank) => [blank.id, labels.get(assignments[blank.id]) ?? ""])));
+  }, [assignments, bank, keyboardValues, labels, mode, onChange, question.blanks]);
 
-  function updateBank(ids: string[]) {
-    if (!bank) return;
-    setSelectedIds(ids);
-    const labels = new Map(bank.tokens.map((token) => [token.id, token.label]));
-    onChange(Object.fromEntries(question.blanks.map((blank, index) => [blank.id, labels.get(ids[index]) ?? ""])));
+  useEffect(() => () => {
+    if (typeaheadTimerRef.current !== null) window.clearTimeout(typeaheadTimerRef.current);
+  }, []);
+
+  function announce(message: string) {
+    setAnnouncement("");
+    window.requestAnimationFrame(() => setAnnouncement(message));
   }
 
+  function clearTypeahead() {
+    if (typeaheadTimerRef.current !== null) window.clearTimeout(typeaheadTimerRef.current);
+    typeaheadTimerRef.current = null;
+    setTypeahead("");
+  }
+
+  function scheduleTypeaheadReset() {
+    if (typeaheadTimerRef.current !== null) window.clearTimeout(typeaheadTimerRef.current);
+    typeaheadTimerRef.current = window.setTimeout(() => {
+      typeaheadTimerRef.current = null;
+      setTypeahead("");
+    }, TYPEAHEAD_RESET_MS);
+  }
+
+  function nextEmptyBlank(currentId: string, nextAssignments: Record<string, string>): string {
+    const currentIndex = question.blanks.findIndex((blank) => blank.id === currentId);
+    const ordered = [
+      ...question.blanks.slice(currentIndex + 1),
+      ...question.blanks.slice(0, Math.max(0, currentIndex + 1)),
+    ];
+    return ordered.find((blank) => !nextAssignments[blank.id])?.id ?? currentId;
+  }
+
+  function publishAssignments(nextAssignments: Record<string, string>) {
+    setAssignments(nextAssignments);
+    onChange(Object.fromEntries(question.blanks.map((blank) => [
+      blank.id,
+      labels.get(nextAssignments[blank.id]) ?? "",
+    ])));
+  }
+
+  function assignToken(tokenId: string, blankId: string, speakToken: boolean) {
+    if (!bank || !blankId) return;
+    const sourceBlankId = Object.entries(assignments).find(([, assignedId]) => assignedId === tokenId)?.[0];
+    const replacedTokenId = assignments[blankId];
+    const next = { ...assignments };
+    if (sourceBlankId) delete next[sourceBlankId];
+    if (sourceBlankId && replacedTokenId && sourceBlankId !== blankId) next[sourceBlankId] = replacedTokenId;
+    next[blankId] = tokenId;
+    publishAssignments(next);
+    setActiveBlankId(nextEmptyBlank(blankId, next));
+    const label = labels.get(tokenId) ?? tokenId;
+    if (speakToken && !sourceBlankId) onAnswerActivate?.(label);
+    announce(`${label} placed in ${blankId}.`);
+  }
+
+  function removeToken(blankId: string) {
+    const tokenId = assignments[blankId];
+    if (!tokenId) return;
+    const next = { ...assignments };
+    delete next[blankId];
+    publishAssignments(next);
+    setActiveBlankId(blankId);
+    announce(`${labels.get(tokenId) ?? tokenId} returned to the word bank.`);
+  }
+
+  function startDrag(
+    event: ReactPointerEvent<HTMLButtonElement>,
+    tokenId: string,
+    label: string,
+    originBlankId?: string,
+  ) {
+    if (disabled) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setDrag({
+      tokenId,
+      label,
+      originBlankId,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top,
+      width: rect.width,
+      height: rect.height,
+      moved: false,
+      x: rect.left,
+      y: rect.top,
+    });
+  }
+
+  function moveDrag(event: ReactPointerEvent<HTMLButtonElement>) {
+    setDrag((current) => {
+      if (!current || current.pointerId !== event.pointerId) return current;
+      const moved = current.moved || Math.hypot(event.clientX - current.startX, event.clientY - current.startY) > 7;
+      return {
+        ...current,
+        moved,
+        x: event.clientX - current.offsetX,
+        y: event.clientY - current.offsetY,
+      };
+    });
+  }
+
+  function finishDrag(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const completedDrag = drag;
+    setDrag(null);
+    if (!completedDrag.moved) return;
+    const targetBlank = question.blanks.find((blank) => (
+      pointInRect(blankRefs.current.get(blank.id)?.getBoundingClientRect(), event.clientX, event.clientY, DRAG_DROP_MARGIN)
+    ));
+    const overBank = pointInRect(bankRef.current?.getBoundingClientRect(), event.clientX, event.clientY, DRAG_DROP_MARGIN);
+    if (targetBlank) {
+      assignToken(completedDrag.tokenId, targetBlank.id, !completedDrag.originBlankId);
+    } else if (completedDrag.originBlankId && overBank) {
+      removeToken(completedDrag.originBlankId);
+    }
+    suppressClickRef.current = completedDrag.tokenId;
+  }
+
+  function cancelDrag() {
+    setDrag(null);
+  }
+
+  function handleTypeahead(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (mode !== "bank" || !bank || disabled || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    if (event.key === "Escape" && typeahead) {
+      event.preventDefault();
+      clearTypeahead();
+      announce("Word bank filter cleared.");
+      return;
+    }
+    if (event.key === "Backspace") {
+      if (target?.closest("[data-multi-cloze-token]")) return;
+      event.preventDefault();
+      if (typeahead) {
+        const next = typeahead.slice(0, -1);
+        setTypeahead(next);
+        if (next) scheduleTypeaheadReset();
+        else clearTypeahead();
+        announce(next ? `Word bank prefix ${next}.` : "Word bank filter cleared.");
+        return;
+      }
+      const lastFilled = [...question.blanks].reverse().find((blank) => assignments[blank.id]);
+      if (lastFilled) removeToken(lastFilled.id);
+      return;
+    }
+    if (event.altKey || event.ctrlKey || event.metaKey || event.key.length !== 1 || !/[\p{L}\p{N}]/u.test(event.key)) return;
+    event.preventDefault();
+    const next = `${typeahead}${normalizeTypeahead(event.key)}`;
+    const used = new Set(Object.values(assignments));
+    const matches = bank.tokens.filter((token) => (
+      !used.has(token.id) && normalizeTypeahead(token.label).startsWith(next)
+    ));
+    setTypeahead(next);
+    if (matches.length === 1) {
+      clearTypeahead();
+      const targetBlank = assignments[activeBlankId]
+        ? question.blanks.find((blank) => !assignments[blank.id])?.id ?? activeBlankId
+        : activeBlankId;
+      assignToken(matches[0].id, targetBlank, true);
+      return;
+    }
+    scheduleTypeaheadReset();
+    announce(matches.length
+      ? `${matches.length} words match ${next}: ${matches.map((token) => token.label).join(", ")}.`
+      : `No available word matches ${next}.`);
+  }
+
+  function renderBlank(blankId: string, index: number) {
+    if (mode === "keyboard" || !bank) {
+      return (
+        <label
+          className={`multi-cloze-inline-blank${activeBlankId === blankId ? " is-active" : ""}`}
+          key={`${blankId}-${index}`}
+          ref={(element) => {
+            if (element) blankRefs.current.set(blankId, element);
+            else blankRefs.current.delete(blankId);
+          }}
+        >
+          <span className="sr-only">Blank {index + 1}</span>
+          <input
+            data-question-answer-input
+            data-multi-cloze-input={blankId}
+            value={keyboardValues[blankId] ?? ""}
+            onFocus={() => setActiveBlankId(blankId)}
+            onChange={(event) => {
+              const next = { ...keyboardValues, [blankId]: event.target.value };
+              setKeyboardValues(next);
+              onChange(next);
+            }}
+            disabled={disabled}
+            autoComplete="off"
+          />
+        </label>
+      );
+    }
+    const tokenId = assignments[blankId];
+    const label = tokenId ? labels.get(tokenId) ?? tokenId : "";
+    return (
+      <span
+        className={`multi-cloze-inline-blank is-bank${activeBlankId === blankId ? " is-active" : ""}${tokenId ? " is-filled" : ""}`}
+        key={`${blankId}-${index}`}
+        ref={(element) => {
+          if (element) blankRefs.current.set(blankId, element);
+          else blankRefs.current.delete(blankId);
+        }}
+      >
+        {tokenId ? (
+          <button
+            type="button"
+            data-multi-cloze-token={tokenId}
+            onPointerDown={(event) => startDrag(event, tokenId, label, blankId)}
+            onPointerMove={moveDrag}
+            onPointerUp={finishDrag}
+            onPointerCancel={cancelDrag}
+            onClick={() => {
+              if (suppressClickRef.current === tokenId) {
+                suppressClickRef.current = "";
+                return;
+              }
+              removeToken(blankId);
+            }}
+            disabled={disabled}
+          >
+            {renderText(label, Boolean(evaluated))}
+          </button>
+        ) : (
+          <button type="button" aria-label={`Select blank ${index + 1}`} onClick={() => setActiveBlankId(blankId)} disabled={disabled} />
+        )}
+      </span>
+    );
+  }
+
+  const markerIndexById = new Map(question.blanks.map((blank, index) => [blank.id, index]));
+  const markerIds = parsedTemplate?.markerIds ?? question.blanks.map((blank) => blank.id);
+  const segments = parsedTemplate?.segments ?? [question.template, ...question.blanks.map(() => "")];
+  const usedTokenIds = new Set(Object.values(assignments));
+  const portalTarget = document.querySelector<HTMLElement>(".app-shell") ?? document.body;
+
   return (
-    <div className="multi-cloze-response">
-      <p>{renderText(question.template)}</p>
-      {mode === "keyboard" || !bank ? (
-        <div className="cloze-input-grid">
-          {question.blanks.map((blank, index) => (
-            <TextResponse
-              key={blank.id}
-              label={`Blank ${index + 1}`}
-              value={keyboardValues[blank.id] ?? ""}
-              onChange={(value) => {
-                const next = { ...keyboardValues, [blank.id]: value };
-                setKeyboardValues(next);
-                onChange(next);
+    <div
+      className="multi-cloze-response"
+      onKeyDownCapture={handleTypeahead}
+      data-typeahead-active={typeahead ? "true" : undefined}
+    >
+      {question.targetPrompt || onSpeakTarget ? (
+        <TargetStimulusRow speechText={question.targetPrompt ?? question.template} onSpeak={onSpeakTarget}>
+          <p className="multi-cloze-template" data-question-primary-focus tabIndex={-1}>
+            {segments.map((segment, index) => (
+              <span className="multi-cloze-template-part" key={`${index}-${markerIds[index] ?? "tail"}`}>
+                {renderText(segment)}
+                {markerIds[index]
+                  ? renderBlank(markerIds[index], markerIndexById.get(markerIds[index]) ?? index)
+                  : null}
+              </span>
+            ))}
+          </p>
+        </TargetStimulusRow>
+      ) : (
+        <p className="multi-cloze-template" data-question-primary-focus tabIndex={-1}>
+          {segments.map((segment, index) => (
+            <span className="multi-cloze-template-part" key={`${index}-${markerIds[index] ?? "tail"}`}>
+              {renderText(segment)}
+              {markerIds[index]
+                ? renderBlank(markerIds[index], markerIndexById.get(markerIds[index]) ?? index)
+                : null}
+            </span>
+          ))}
+        </p>
+      )}
+      {mode === "bank" && bank ? (
+        <div className="multi-cloze-bank" ref={bankRef} aria-label="Available words">
+          {bank.tokens.map((token) => usedTokenIds.has(token.id) ? (
+            <span className="token-bank-placeholder" key={token.id} aria-hidden="true">
+              {renderText(token.label, false)}
+            </span>
+          ) : (
+            <button
+              type="button"
+              key={token.id}
+              onPointerDown={(event) => startDrag(event, token.id, token.label)}
+              onPointerMove={moveDrag}
+              onPointerUp={finishDrag}
+              onPointerCancel={cancelDrag}
+              onClick={() => {
+                if (suppressClickRef.current === token.id) {
+                  suppressClickRef.current = "";
+                  return;
+                }
+                const target = assignments[activeBlankId]
+                  ? question.blanks.find((blank) => !assignments[blank.id])?.id ?? activeBlankId
+                  : activeBlankId;
+                assignToken(token.id, target, true);
               }}
+              className={typeahead
+                ? normalizeTypeahead(token.label).startsWith(typeahead) ? "is-typeahead-match" : "is-typeahead-dimmed"
+                : undefined}
               disabled={disabled}
-            />
+            >
+              {renderText(token.label, Boolean(evaluated))}
+            </button>
           ))}
         </div>
-      ) : (
-        <OrderedAnswerComposer
-          options={bank.tokens}
-          value={selectedIds}
-          onChange={updateBank}
-          onAnswerActivate={onAnswerActivate}
-          disabled={disabled}
-          evaluated={evaluated}
-          renderText={renderText}
-          maxSelections={question.blanks.length}
-        />
-      )}
+      ) : null}
+      <p className="sr-only" aria-live="polite">{announcement}</p>
+      {drag?.moved ? createPortal(
+        <div
+          className="answer-token-drag-preview"
+          aria-hidden="true"
+          style={{
+            width: drag.width,
+            height: drag.height,
+            transform: `translate3d(${drag.x}px, ${drag.y}px, 0)`,
+          }}
+        >
+          {renderText(drag.label, false)}
+        </div>,
+        portalTarget,
+      ) : null}
     </div>
   );
 }
@@ -673,6 +1021,7 @@ export function PairMatchingResponse({
   onSpeakLeft,
   onSpeakRight,
   audioLeft = false,
+  onComplete,
 }: {
   id: string;
   pairs: PairItem[];
@@ -684,24 +1033,32 @@ export function PairMatchingResponse({
   onSpeakLeft?: (text: string) => void;
   onSpeakRight?: (text: string) => void;
   audioLeft?: boolean;
+  onComplete?: (value: Record<string, string>) => void;
 }) {
   const [selectedLeft, setSelectedLeft] = useState("");
   const [selectedRight, setSelectedRight] = useState("");
   const [wrong, setWrong] = useState<string[]>([]);
   const timeoutRef = useRef<number | null>(null);
+  const numberTimerRef = useRef<number | null>(null);
+  const numberBufferRef = useRef("");
   const rightItems = useMemo(() => stableShuffle(pairs, id), [id, pairs]);
   const lockedRightIds = new Set(Object.values(value));
 
   useEffect(() => () => {
     if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
+    if (numberTimerRef.current !== null) window.clearTimeout(numberTimerRef.current);
   }, []);
 
   function tryPair(leftId: string, rightId: string) {
     const pair = pairs.find((candidate) => candidate.leftId === leftId);
     if (pair?.rightId === rightId) {
-      onChange({ ...value, [leftId]: rightId });
+      const next = { ...value, [leftId]: rightId };
+      onChange(next);
       setSelectedLeft("");
       setSelectedRight("");
+      if (pairs.every((candidate) => next[candidate.leftId] === candidate.rightId)) {
+        window.queueMicrotask(() => onComplete?.(next));
+      }
       return;
     }
     setWrong([leftId, rightId]);
@@ -727,50 +1084,186 @@ export function PairMatchingResponse({
     else setSelectedRight(pair.rightId);
   }
 
+  function activateNumber(index: number) {
+    if (index < 1 || index > pairs.length + rightItems.length) return;
+    if (index <= pairs.length) chooseLeft(pairs[index - 1]);
+    else chooseRight(rightItems[index - pairs.length - 1]);
+  }
+
+  function handleNumberKey(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (disabled || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+    const digit = event.code.startsWith("Numpad") ? event.code.slice(6) : event.key;
+    if (!/^\d$/.test(digit)) return;
+    event.preventDefault();
+    if (numberTimerRef.current !== null) window.clearTimeout(numberTimerRef.current);
+    const nextBuffer = `${numberBufferRef.current}${digit}`.replace(/^0+/, "");
+    numberBufferRef.current = nextBuffer;
+    const maxIndex = pairs.length + rightItems.length;
+    const numeric = Number(nextBuffer);
+    const hasLongerCandidate = nextBuffer.length === 1
+      && Array.from({ length: maxIndex }, (_, index) => String(index + 1)).some((label) => (
+        label.length > nextBuffer.length && label.startsWith(nextBuffer)
+      ));
+    if (numeric >= 1 && numeric <= maxIndex && !hasLongerCandidate) {
+      numberBufferRef.current = "";
+      activateNumber(numeric);
+      return;
+    }
+    numberTimerRef.current = window.setTimeout(() => {
+      const pending = Number(numberBufferRef.current);
+      numberBufferRef.current = "";
+      numberTimerRef.current = null;
+      if (pending >= 1 && pending <= maxIndex) activateNumber(pending);
+    }, 420);
+  }
+
   return (
-    <div className="pair-matching" role="group" aria-label="Select matching pairs">
-      <div className="pair-column">
+    <div
+      className="pair-matching"
+      role="group"
+      aria-label="Select matching pairs"
+      tabIndex={0}
+      data-question-primary-focus
+      onKeyDownCapture={handleNumberKey}
+    >
+      <div className="pair-grid">
         {pairs.map((pair, index) => {
           const locked = Boolean(value[pair.leftId]);
+          const rightPair = rightItems[index];
+          const rightLocked = lockedRightIds.has(rightPair.rightId);
           return (
-            <button
-              type="button"
-              key={pair.leftId}
-              className={`${selectedLeft === pair.leftId ? "is-selected " : ""}${wrong.includes(pair.leftId) ? "is-wrong " : ""}${locked ? "is-locked" : ""}`}
-              aria-pressed={selectedLeft === pair.leftId}
-              onClick={() => chooseLeft(pair)}
-              disabled={disabled || locked}
-            >
-              <span className="pair-index">{index + 1}</span>
-              {audioLeft ? (
-                <span className="pair-audio-content">
-                  <Volume2 size={19} />
-                  <AudioWaveform text={pair.leftText} />
-                </span>
-              ) : renderText(pair.leftText, Boolean(evaluated))}
-            </button>
-          );
-        })}
-      </div>
-      <div className="pair-column">
-        {rightItems.map((pair, index) => {
-          const locked = lockedRightIds.has(pair.rightId);
-          return (
-            <button
-              type="button"
-              key={pair.rightId}
-              className={`${selectedRight === pair.rightId ? "is-selected " : ""}${wrong.includes(pair.rightId) ? "is-wrong " : ""}${locked ? "is-locked" : ""}`}
-              aria-pressed={selectedRight === pair.rightId}
-              onClick={() => chooseRight(pair)}
-              disabled={disabled || locked}
-            >
-              <span className="pair-index">{pairs.length + index + 1}</span>
-              {renderText(pair.rightText, Boolean(evaluated))}
-            </button>
+            <div className="pair-grid-row" key={`${pair.leftId}-${rightPair.rightId}`}>
+              <button
+                type="button"
+                className={`${selectedLeft === pair.leftId ? "is-selected " : ""}${wrong.includes(pair.leftId) ? "is-wrong " : ""}${locked ? "is-locked" : ""}`}
+                aria-pressed={selectedLeft === pair.leftId}
+                onClick={() => chooseLeft(pair)}
+                disabled={disabled || locked}
+              >
+                <span className="pair-index">{index + 1}</span>
+                {audioLeft ? (
+                  <span className="pair-audio-content">
+                    <Volume2 size={19} />
+                    <AudioWaveform text={pair.leftText} />
+                  </span>
+                ) : renderText(pair.leftText, Boolean(evaluated))}
+              </button>
+              <button
+                type="button"
+                className={`${selectedRight === rightPair.rightId ? "is-selected " : ""}${wrong.includes(rightPair.rightId) ? "is-wrong " : ""}${rightLocked ? "is-locked" : ""}`}
+                aria-pressed={selectedRight === rightPair.rightId}
+                onClick={() => chooseRight(rightPair)}
+                disabled={disabled || rightLocked}
+              >
+                <span className="pair-index">{pairs.length + index + 1}</span>
+                {renderText(rightPair.rightText, Boolean(evaluated))}
+              </button>
+            </div>
           );
         })}
       </div>
       <p className="sr-only" aria-live="polite">{wrong.length ? "Those items do not match. Try again." : ""}</p>
+    </div>
+  );
+}
+
+function CategorizeResponse({
+  question,
+  value,
+  onChange,
+  disabled,
+  evaluated,
+  renderText,
+  onAnswerActivate,
+  onComplete,
+}: {
+  question: Extract<LessonQuestion, { type: "categorize" }>;
+  value: Record<string, string>;
+  onChange: (value: Record<string, string>) => void;
+  disabled?: boolean;
+  evaluated?: boolean;
+  renderText: TextRenderer;
+  onAnswerActivate?: (text: string) => void;
+  onComplete?: (value: Record<string, string>) => void;
+}) {
+  const [selectedItemId, setSelectedItemId] = useState("");
+  const [selectedCategoryId, setSelectedCategoryId] = useState("");
+  const [wrong, setWrong] = useState<string[]>([]);
+  const timeoutRef = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
+  }, []);
+
+  function tryCategory(itemId: string, categoryId: string) {
+    const item = question.items.find((candidate) => candidate.id === itemId);
+    if (item?.categoryId === categoryId) {
+      const next = { ...value, [itemId]: categoryId };
+      onChange(next);
+      setSelectedItemId("");
+      setSelectedCategoryId("");
+      if (question.items.every((candidate) => next[candidate.id] === candidate.categoryId)) {
+        window.queueMicrotask(() => onComplete?.(next));
+      }
+      return;
+    }
+    setWrong([itemId, categoryId]);
+    if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
+    timeoutRef.current = window.setTimeout(() => {
+      setWrong([]);
+      setSelectedItemId("");
+      setSelectedCategoryId("");
+    }, 420);
+  }
+
+  function chooseItem(item: Extract<LessonQuestion, { type: "categorize" }>["items"][number]) {
+    if (value[item.id]) return;
+    onAnswerActivate?.(item.label);
+    if (selectedCategoryId) tryCategory(item.id, selectedCategoryId);
+    else setSelectedItemId(item.id);
+  }
+
+  function chooseCategory(category: Extract<LessonQuestion, { type: "categorize" }>["categories"][number]) {
+    onAnswerActivate?.(category.label);
+    if (selectedItemId) tryCategory(selectedItemId, category.id);
+    else setSelectedCategoryId(category.id);
+  }
+
+  return (
+    <div className="categorize-matching" role="group" aria-label="Select an item, then its category" tabIndex={0} data-question-primary-focus>
+      <div className="categorize-items">
+        {question.items.map((item, index) => {
+          const locked = Boolean(value[item.id]);
+          return (
+            <button
+              type="button"
+              key={item.id}
+              className={`${selectedItemId === item.id ? "is-selected " : ""}${wrong.includes(item.id) ? "is-wrong " : ""}${locked ? "is-locked" : ""}`}
+              aria-pressed={selectedItemId === item.id}
+              onClick={() => chooseItem(item)}
+              disabled={disabled || locked}
+            >
+              <span className="pair-index">{index + 1}</span>
+              {renderText(item.label, Boolean(evaluated))}
+            </button>
+          );
+        })}
+      </div>
+      <div className="categorize-categories" aria-label="Categories">
+        {question.categories.map((category) => (
+          <button
+            type="button"
+            key={category.id}
+            className={`${selectedCategoryId === category.id ? "is-selected " : ""}${wrong.includes(category.id) ? "is-wrong" : ""}`}
+            aria-pressed={selectedCategoryId === category.id}
+            onClick={() => chooseCategory(category)}
+            disabled={disabled}
+          >
+            {category.label}
+          </button>
+        ))}
+      </div>
+      <p className="sr-only" aria-live="polite">{wrong.length ? "That item does not belong in this category. Try again." : ""}</p>
     </div>
   );
 }
@@ -865,6 +1358,7 @@ export function QuestionRenderer({
   onSpeakTarget,
   onSpeakingChange,
   onRequireAlternate,
+  onComplete,
   renderText,
   answerInputMode,
 }: QuestionRendererProps) {
@@ -916,7 +1410,9 @@ export function QuestionRenderer({
     case "trueFalse":
       return (
         <fieldset className="choice-list choice-list-inline" disabled={disabled}>
-          <legend>{render(question.statement)}</legend>
+          <legend className={question.targetPrompt ? "sr-only" : undefined}>
+            {question.targetPrompt ? "Choose true or false" : render(question.statement)}
+          </legend>
           {[{ value: true, label: "True" }, { value: false, label: "False" }].map((option) => (
             <label key={String(option.value)} className={answer === option.value ? "is-selected" : ""}>
               <input
@@ -934,7 +1430,11 @@ export function QuestionRenderer({
     case "fillBlank":
       return (
         <div className="blank-response">
-          <p>{render(question.template)}</p>
+          {question.targetPrompt || onSpeakTarget ? (
+            <TargetStimulusRow speechText={question.targetPrompt ?? question.template} onSpeak={onSpeakTarget}>
+              <p>{render(question.template)}</p>
+            </TargetStimulusRow>
+          ) : <p>{render(question.template)}</p>}
           <AnswerBankResponse bank={question.answerBank} value={stringAnswer(answer)} onChange={onChange} inputMode={answerInputMode} label="Missing word or phrase" disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} renderText={render} />
         </div>
       );
@@ -944,21 +1444,41 @@ export function QuestionRenderer({
       const [before, after] = question.template.split("{{blank}}");
       return (
         <div className="select-blank-response">
-          <p className="select-blank-sentence">
-            <span>{render(before)}</span>
-            {selectedOption ? (
-              <button
-                type="button"
-                className="select-blank-slot is-filled"
-                aria-label={`Remove ${selectedOption.label} from the blank`}
-                onClick={() => onChange("")}
-                disabled={disabled}
-              >
-                {render(selectedOption.label, answerInteractive)}
-              </button>
-            ) : <span className="select-blank-slot" aria-label="Empty answer" />}
-            <span>{render(after)}</span>
-          </p>
+          {question.targetPrompt || onSpeakTarget ? (
+            <TargetStimulusRow speechText={question.targetPrompt ?? question.template} onSpeak={onSpeakTarget}>
+              <p className="select-blank-sentence">
+                <span>{render(before)}</span>
+                {selectedOption ? (
+                  <button
+                    type="button"
+                    className="select-blank-slot is-filled"
+                    aria-label={`Remove ${selectedOption.label} from the blank`}
+                    onClick={() => onChange("")}
+                    disabled={disabled}
+                  >
+                    {render(selectedOption.label, answerInteractive)}
+                  </button>
+                ) : <span className="select-blank-slot" aria-label="Empty answer" />}
+                <span>{render(after)}</span>
+              </p>
+            </TargetStimulusRow>
+          ) : (
+            <p className="select-blank-sentence">
+              <span>{render(before)}</span>
+              {selectedOption ? (
+                <button
+                  type="button"
+                  className="select-blank-slot is-filled"
+                  aria-label={`Remove ${selectedOption.label} from the blank`}
+                  onClick={() => onChange("")}
+                  disabled={disabled}
+                >
+                  {render(selectedOption.label, answerInteractive)}
+                </button>
+              ) : <span className="select-blank-slot" aria-label="Empty answer" />}
+              <span>{render(after)}</span>
+            </p>
+          )}
           <div className="select-blank-options" role="group" aria-label="Blank choices">
             {question.options.map((option) => selectedId === option.id ? (
               <span className="select-blank-option-placeholder" key={option.id} aria-hidden="true">
@@ -982,7 +1502,7 @@ export function QuestionRenderer({
       );
     }
     case "multiCloze":
-      return <MultiClozeResponse question={question} answer={answer} onChange={onChange} inputMode={answerInputMode} disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} renderText={render} />;
+      return <MultiClozeResponse question={question} answer={answer} onChange={onChange} inputMode={answerInputMode} disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} onSpeakTarget={onSpeakTarget} renderText={render} />;
     case "wordBank":
     case "reorderTokens":
       return <OrderedAnswerComposer options={question.tokens} value={stringArrayAnswer(answer)} onChange={onChange} onAnswerActivate={onAnswerActivate} disabled={disabled} evaluated={evaluated} renderText={render} />;
@@ -998,6 +1518,7 @@ export function QuestionRenderer({
           renderText={render}
           onSpeakLeft={onAnswerActivate}
           onSpeakRight={onAnswerActivate}
+          onComplete={onComplete}
         />
       );
     case "reorderDialogue":
@@ -1013,24 +1534,7 @@ export function QuestionRenderer({
         />
       );
     case "categorize": {
-      const values = mapAnswer(answer);
-      return (
-        <div className="mapping-response" role="group" aria-label="Categorize items">
-          {question.items.map((item) => (
-            <label key={item.id}>
-              <span>{render(item.label, answerInteractive)}</span>
-              <select value={values[item.id] ?? ""} onChange={(event) => {
-                const selected = question.categories.find((category) => category.id === event.target.value);
-                if (selected) onAnswerActivate?.(selected.label);
-                onChange({ ...values, [item.id]: event.target.value });
-              }} disabled={disabled}>
-                <option value="">Choose a category...</option>
-                {question.categories.map((category) => <option value={category.id} key={category.id}>{category.label}</option>)}
-              </select>
-            </label>
-          ))}
-        </div>
-      );
+      return <CategorizeResponse question={question} value={mapAnswer(answer)} onChange={onChange} disabled={disabled} evaluated={evaluated} renderText={render} onAnswerActivate={onAnswerActivate} onComplete={onComplete} />;
     }
     case "translation":
       return (
@@ -1050,14 +1554,14 @@ export function QuestionRenderer({
     case "errorCorrection":
       return (
         <div className="open-response">
-          <blockquote className="incorrect-source">{render(question.incorrectText)}</blockquote>
+          {question.targetPrompt ? null : <blockquote className="incorrect-source">{render(question.incorrectText)}</blockquote>}
           <AnswerBankResponse bank={question.answerBank} value={stringAnswer(answer)} onChange={onChange} inputMode={answerInputMode} label="Corrected sentence" disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} renderText={render} />
         </div>
       );
     case "sentenceTransformation":
       return (
         <div className="open-response">
-          <blockquote>{render(question.sourceText)}</blockquote>
+          {question.targetPrompt ? null : <blockquote>{render(question.sourceText)}</blockquote>}
           <p className="constraint-copy">Constraint: {render(question.constraint)}</p>
           <AnswerBankResponse bank={question.answerBank} value={stringAnswer(answer)} onChange={onChange} inputMode={answerInputMode} label="New sentence" disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} renderText={render} />
         </div>
@@ -1075,7 +1579,7 @@ export function QuestionRenderer({
     case "speakingRepeat":
       return (
         <div className="speaking-response">
-          <blockquote>{render(question.modelText)}</blockquote>
+          {question.targetPrompt ? null : <blockquote>{render(question.modelText)}</blockquote>}
           <SpeakingRecorder language={languageTagForSpeech(language)} disabled={disabled} requireRecognition onUnavailable={onRequireAlternate} onChange={(submission) => onSpeakingChange?.(submission)} onTranscriptChange={onChange} />
           <ReadOnlyTranscript value={stringAnswer(answer)} />
         </div>
@@ -1129,6 +1633,7 @@ export function QuestionRenderer({
           onSpeakLeft={onSpeakTarget}
           onSpeakRight={onAnswerActivate}
           audioLeft
+          onComplete={onComplete}
         />
       );
     case "flashcardRecall":

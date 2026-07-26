@@ -44,7 +44,7 @@ export interface QuestionPresentationSettings {
 export interface CustomQuestionTemplate {
   id: string;
   name: string;
-  baseFormat: QuestionFormat;
+  baseFormat: LessonQuestionFormat;
   guidance: string;
   enabled: boolean;
 }
@@ -92,6 +92,7 @@ export interface BaseQuestion {
   id: string;
   type: QuestionFormat;
   prompt: string;
+  targetPrompt?: string;
   explanation: string;
   hint?: string;
   supplementalHint?: string;
@@ -364,7 +365,7 @@ export interface SourceReference {
 }
 
 export interface Lesson {
-  schemaVersion: 1 | 2 | 3 | 4 | 5;
+  schemaVersion: 1 | 2 | 3 | 4 | 5 | 6;
   id: string;
   unitId: string;
   title: string;

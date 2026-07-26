@@ -11,7 +11,7 @@ import { isAllowedMeoiOrigin } from "./integration-policy";
 
 const commands = new Set([
   "SEND_OPERATION", "OPEN_VOICE", "GET_INTEGRATION_STATUS",
-  "GET_OPERATION_STATE", "RETRY_OPERATION", "ACK_OPERATION_RESULT",
+  "GET_OPERATION_STATE", "RETRY_OPERATION", "ACK_OPERATION_RESULT", "RESET_UNIT_CHAT",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -27,11 +27,15 @@ function validRequest(value: unknown): value is ExtensionRequest<Record<string, 
   if (typeof value.nonce !== "string" || value.nonce.length < 10 || typeof value.requestId !== "string") return false;
   if (typeof value.command !== "string" || !commands.has(value.command) || !isRecord(value.payload)) return false;
   const payload = value.payload;
-  if (value.command === "OPEN_VOICE" && typeof payload.unitId !== "string") return false;
+  if (["OPEN_VOICE", "RESET_UNIT_CHAT"].includes(value.command) && typeof payload.unitId !== "string") return false;
   if (["GET_OPERATION_STATE", "RETRY_OPERATION", "ACK_OPERATION_RESULT"].includes(value.command) && typeof payload.operationId !== "string") return false;
   if (value.command === "SEND_OPERATION") {
     const expectation = payload.expectation;
-    if (!isRecord(expectation) || !Array.isArray(expectation.allowedFormats) || !Array.isArray(expectation.requiredTemplates)) return false;
+    if (
+      !isRecord(expectation)
+      || !Array.isArray(expectation.allowedFormats)
+      || !Array.isArray(expectation.requiredTemplates)
+    ) return false;
     const allowedFormats = expectation.allowedFormats;
     const requiredTemplates = expectation.requiredTemplates;
     if (
@@ -48,7 +52,15 @@ function validRequest(value: unknown): value is ExtensionRequest<Record<string, 
       || allowedFormats.length < 5
       || allowedFormats.some((format) => !LESSON_QUESTION_FORMATS.includes(format as (typeof LESSON_QUESTION_FORMATS)[number]))
       || requiredTemplates.length > 20
-      || requiredTemplates.some((template) => !isRecord(template) || typeof template.id !== "string" || !allowedFormats.includes(template.format))
+      || requiredTemplates.some((template) => (
+        !isRecord(template)
+        || typeof template.id !== "string"
+        || template.id.length < 1
+        || template.id.length > 120
+        || typeof template.format !== "string"
+        || !allowedFormats.includes(template.format)
+      ))
+      || new Set(requiredTemplates.map((template) => isRecord(template) ? template.id : null)).size !== requiredTemplates.length
       || !["create_lesson", "evaluate_answer", "coaching"].includes(String(payload.kind))
     ) return false;
   }

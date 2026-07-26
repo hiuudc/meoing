@@ -203,6 +203,10 @@ export function isAnswerComplete(question: LessonQuestion, answer: QuestionAnswe
     const values = asMap(answer);
     return question.pairs.every((pair) => values[pair.audioId] === pair.matchId);
   }
+  if (question.type === "categorize") {
+    const values = asMap(answer);
+    return question.items.every((item) => values[item.id] === item.categoryId);
+  }
   if (question.type === "characterTracing") return asString(answer) === "passed";
   return true;
 }

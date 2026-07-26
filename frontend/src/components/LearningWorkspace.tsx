@@ -64,6 +64,7 @@ import {
   type OperationExpectation,
 } from "../integration/protocol";
 import { buildUnitContext } from "../integration/unitContext";
+import { runWithUnitChatRecovery } from "../integration/unitChatRecovery";
 import { isAllowedTranscriptFile, youtubeNoCookieEmbedUrl } from "../integration/youtube";
 import type { Collection, Document, StudyItem, Unit } from "../types";
 import { cleanUnitName } from "../unit";
@@ -399,9 +400,16 @@ export function LearningWorkspace({
     activeAbortRef.current = controller;
     try {
       const options = { signal: controller.signal, onState: (state: ChatOperationState) => setStatus(operationPhaseStatus(state)) };
-      const state = retrying
-        ? await extensionBridge.retryAndWait(operationId, options)
-        : await extensionBridge.dispatchAndWait({ unitId: unit.id, operationId, kind, prompt, expectation }, options);
+      const state: ChatOperationState = await runWithUnitChatRecovery(
+        () => retrying
+          ? extensionBridge.retryAndWait(operationId, options)
+          : extensionBridge.dispatchAndWait({ unitId: unit.id, operationId, kind, prompt, expectation }, options),
+        async () => {
+          setStatus("The saved ChatGPT conversation is unavailable. Starting a new unit chat and retrying once...");
+          await extensionBridge.resetUnitChat(unit.id);
+          return extensionBridge.retryAndWait(operationId, options);
+        },
+      );
       setExtensionConnected(true);
       delete retryAttemptsRef.current[kind];
       if (!state.result) throw new Error("The extension completed without a ChatGPT result.");

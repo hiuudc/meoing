@@ -31,9 +31,12 @@ class StubBridge extends ExtensionBridge {
 
 class DispatchStubBridge extends StubBridge {
   readonly commands: ExtensionCommand[] = [];
+  readonly payloads: unknown[] = [];
 
-  override async send<TResponse = unknown, TPayload = unknown>(command: ExtensionCommand, _payload: TPayload): Promise<TResponse> {
+  override async send<TResponse = unknown, TPayload = unknown>(command: ExtensionCommand, payload: TPayload): Promise<TResponse> {
     this.commands.push(command);
+    this.payloads.push(payload);
+    if (command === "RESET_UNIT_CHAT") return { reset: true } as TResponse;
     return { operationId: "op-1", phase: "queued" } as TResponse;
   }
 }
@@ -64,7 +67,7 @@ describe("ExtensionBridge operation waiting", () => {
       state("completed", {
         result: {
           type: "meoi.operation.result",
-          protocolVersion: 6,
+          protocolVersion: 7,
           operationId: "op-1",
           kind: "coaching",
           outcome: "completed",
@@ -100,7 +103,7 @@ describe("ExtensionBridge operation waiting", () => {
       state("completed", {
         result: {
           type: "meoi.operation.result",
-          protocolVersion: 6,
+          protocolVersion: 7,
           operationId: "op-1",
           kind: "coaching",
           outcome: "completed",
@@ -119,5 +122,12 @@ describe("ExtensionBridge operation waiting", () => {
     controller.abort(new DOMException("stopped", "AbortError"));
     await expect(bridge.dispatchAndWait(payload, { signal: controller.signal })).rejects.toMatchObject({ name: "AbortError" });
     expect(bridge.commands).toEqual([]);
+  });
+
+  it("resets only the requested unit chat mapping", async () => {
+    const bridge = new DispatchStubBridge([state("queued")]);
+    await expect(bridge.resetUnitChat("unit-1")).resolves.toBe(true);
+    expect(bridge.commands).toEqual(["RESET_UNIT_CHAT"]);
+    expect(bridge.payloads).toEqual([{ unitId: "unit-1" }]);
   });
 });

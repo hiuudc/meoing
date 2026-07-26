@@ -147,10 +147,10 @@ describe("ChatGPT selector adapter", () => {
 });
 
 describe("strict ChatGPT result parsing", () => {
-  const raw = '{"type":"meoi.operation.result","protocolVersion":6,"operationId":"op-1","kind":"coaching","outcome":"completed","result":{"coachingReply":"Try again."}}';
+  const raw = '{"type":"meoi.operation.result","protocolVersion":7,"operationId":"op-1","kind":"coaching","outcome":"completed","result":{"coachingReply":"Try again."}}';
 
   it("parses exact raw JSON or one standalone json fence", () => {
-    expect(parse(raw)).toMatchObject({ ok: true, result: { protocolVersion: 6, operationId: "op-1" } });
+    expect(parse(raw)).toMatchObject({ ok: true, result: { protocolVersion: 7, operationId: "op-1" } });
     expect(parse(`\`\`\`json\n${raw}\n\`\`\``).ok).toBe(true);
     document.body.innerHTML = `<div data-message-author-role="assistant"><pre><code>${raw}</code></pre></div>`;
     expect(parse(assistantTurnText(findAssistantTurns()[0])).ok).toBe(true);
@@ -166,8 +166,8 @@ describe("strict ChatGPT result parsing", () => {
   });
 
   it("accepts needs_source and strict structured failures", () => {
-    const needsSource = '{"type":"meoi.operation.result","protocolVersion":6,"operationId":"op-1","kind":"create_lesson","outcome":"needs_source","result":{"sourceRequest":"Paste a transcript."}}';
-    const failed = '{"type":"meoi.operation.result","protocolVersion":6,"operationId":"op-2","kind":"evaluate_answer","outcome":"failed","error":{"code":"NO_ANSWER","message":"No answer was supplied."}}';
+    const needsSource = '{"type":"meoi.operation.result","protocolVersion":7,"operationId":"op-1","kind":"create_lesson","outcome":"needs_source","result":{"sourceRequest":"Paste a transcript."}}';
+    const failed = '{"type":"meoi.operation.result","protocolVersion":7,"operationId":"op-2","kind":"evaluate_answer","outcome":"failed","error":{"code":"NO_ANSWER","message":"No answer was supplied."}}';
     expect(parse(needsSource, "op-1", "create_lesson").ok).toBe(true);
     expect(parse(failed, "op-2", "evaluate_answer").ok).toBe(true);
   });
@@ -176,7 +176,7 @@ describe("strict ChatGPT result parsing", () => {
     const lesson = generatedPreviewLesson();
     const valid = JSON.stringify({
       type: "meoi.operation.result",
-      protocolVersion: 6,
+      protocolVersion: 7,
       operationId: "op-1",
       kind: "create_lesson",
       outcome: "completed",
@@ -196,6 +196,7 @@ describe("strict ChatGPT result parsing", () => {
     const disabledFormatExpectation = {
       ...expectation,
       allowedFormats: LESSON_QUESTION_FORMATS.filter((format) => format !== "singleChoice"),
+      requiredTemplates: [],
     };
     expect(parse(valid, "op-1", "create_lesson", disabledFormatExpectation)).toMatchObject({ ok: false, code: "INVALID_RESULT_SCHEMA" });
 
@@ -212,38 +213,57 @@ describe("strict ChatGPT result parsing", () => {
     expect(parse(untrustedPresentation, "op-1", "create_lesson")).toMatchObject({ ok: false, code: "INVALID_RESULT_SCHEMA" });
   });
 
-  it("requires known blueprint IDs with their declared base format", () => {
+  it("accepts required Collection templates and rejects unknown, missing, or mismatched template IDs", () => {
     const lesson = generatedPreviewLesson();
-    const requiredExpectation: OperationExpectation = {
-      ...expectation,
-      requiredTemplates: [{ id: "blueprint-1", format: "singleChoice" }],
-    };
     const envelope = (candidate: typeof lesson) => JSON.stringify({
       type: "meoi.operation.result",
-      protocolVersion: 6,
+      protocolVersion: 7,
       operationId: "op-1",
       kind: "create_lesson",
       outcome: "completed",
       result: { lesson: candidate },
     });
-    const valid = {
+    const generatedWithTemplateId = {
       ...lesson,
-      questions: lesson.questions.map((question, index) => index === 0 ? { ...question, templateId: "blueprint-1" } : question),
+      questions: lesson.questions.map((question, index) => (
+        index === 0 ? { ...question, templateId: "collection-template" } : question
+      )),
     };
-    const parsedValid = parse(envelope(valid), "op-1", "create_lesson", requiredExpectation);
+    const templateExpectation: OperationExpectation = {
+      ...expectation,
+      requiredTemplates: [{ id: "collection-template", format: "singleChoice" }],
+    };
+    const parsedValid = parse(envelope(generatedWithTemplateId), "op-1", "create_lesson", templateExpectation);
     expect(parsedValid.ok, parsedValid.ok ? "" : resultParseFailureReason(parsedValid)).toBe(true);
-    expect(parse(envelope(lesson), "op-1", "create_lesson", requiredExpectation)).toMatchObject({ ok: false, code: "INVALID_RESULT_SCHEMA" });
-    const unknown = { ...valid, questions: valid.questions.map((question, index) => index === 0 ? { ...question, templateId: "unknown" } : question) };
-    expect(parse(envelope(unknown), "op-1", "create_lesson", requiredExpectation)).toMatchObject({ ok: false, code: "INVALID_RESULT_SCHEMA" });
-    const mismatched = { ...lesson, questions: lesson.questions.map((question, index) => index === 1 ? { ...question, templateId: "blueprint-1" } : question) };
-    expect(parse(envelope(mismatched), "op-1", "create_lesson", requiredExpectation)).toMatchObject({ ok: false, code: "INVALID_RESULT_SCHEMA" });
+
+    const unknownTemplate = {
+      ...generatedWithTemplateId,
+      questions: generatedWithTemplateId.questions.map((question, index) => (
+        index === 0 ? { ...question, templateId: "unknown-template" } : question
+      )),
+    };
+    const parsedUnknown = parse(envelope(unknownTemplate), "op-1", "create_lesson", templateExpectation);
+    expect(parsedUnknown).toMatchObject({ ok: false, code: "INVALID_RESULT_SCHEMA" });
+    if (!parsedUnknown.ok) expect(resultParseFailureReason(parsedUnknown)).toContain("unknown templateId");
+
+    const parsedMissing = parse(envelope(lesson), "op-1", "create_lesson", templateExpectation);
+    expect(parsedMissing).toMatchObject({ ok: false, code: "INVALID_RESULT_SCHEMA" });
+    if (!parsedMissing.ok) expect(resultParseFailureReason(parsedMissing)).toContain("missing required template");
+
+    const mismatchExpectation: OperationExpectation = {
+      ...templateExpectation,
+      requiredTemplates: [{ id: "collection-template", format: "multipleChoice" }],
+    };
+    const parsedMismatch = parse(envelope(generatedWithTemplateId), "op-1", "create_lesson", mismatchExpectation);
+    expect(parsedMismatch).toMatchObject({ ok: false, code: "INVALID_RESULT_SCHEMA" });
+    if (!parsedMismatch.ok) expect(resultParseFailureReason(parsedMismatch)).toContain("must use multipleChoice");
   });
 
   it("rejects disabled alternate formats, alternate template IDs, and missing glossary coverage", () => {
     const lesson = generatedPreviewLesson();
     const envelope = (candidate: typeof lesson) => JSON.stringify({
       type: "meoi.operation.result",
-      protocolVersion: 6,
+      protocolVersion: 7,
       operationId: "op-1",
       kind: "create_lesson",
       outcome: "completed",
@@ -252,6 +272,7 @@ describe("strict ChatGPT result parsing", () => {
     const disabledAlternateExpectation: OperationExpectation = {
       ...expectation,
       allowedFormats: LESSON_QUESTION_FORMATS.filter((format) => format !== "fillBlank"),
+      requiredTemplates: [],
     };
     expect(parse(envelope(lesson), "op-1", "create_lesson", disabledAlternateExpectation))
       .toMatchObject({ ok: false, code: "INVALID_RESULT_SCHEMA" });
@@ -284,17 +305,17 @@ describe("strict ChatGPT result parsing", () => {
       nextHint: "Check the verb.",
     };
     const envelope = (value: unknown) => JSON.stringify({
-      type: "meoi.operation.result", protocolVersion: 6, operationId: "op-1", kind: "evaluate_answer", outcome: "completed", result: { evaluation: value },
+      type: "meoi.operation.result", protocolVersion: 7, operationId: "op-1", kind: "evaluate_answer", outcome: "completed", result: { evaluation: value },
     });
     expect(parse(envelope(evaluation), "op-1", "evaluate_answer").ok).toBe(true);
     expect(parse(envelope({ ...evaluation, saved: true }), "op-1", "evaluate_answer")).toMatchObject({ ok: false, code: "INVALID_RESULT_SCHEMA" });
   });
 
   it("rejects wrong IDs, kinds, extra envelope fields, and oversized responses", () => {
-    const wrong = '{"type":"meoi.operation.result","protocolVersion":6,"operationId":"op-2","kind":"coaching","outcome":"completed","result":{"coachingReply":"ok"}}';
+    const wrong = '{"type":"meoi.operation.result","protocolVersion":7,"operationId":"op-2","kind":"coaching","outcome":"completed","result":{"coachingReply":"ok"}}';
     expect(parse(wrong, "op-1", "coaching")).toMatchObject({ ok: false, code: "WRONG_OPERATION_ID" });
     expect(parse(wrong, "op-2", "create_lesson")).toMatchObject({ ok: false, code: "WRONG_OPERATION_KIND" });
-    expect(parse('{"type":"meoi.operation.result","protocolVersion":6,"operationId":"op-1","kind":"coaching","outcome":"completed","result":{"coachingReply":"ok"},"extra":true}'))
+    expect(parse('{"type":"meoi.operation.result","protocolVersion":7,"operationId":"op-1","kind":"coaching","outcome":"completed","result":{"coachingReply":"ok"},"extra":true}'))
       .toMatchObject({ ok: false, code: "INVALID_RESULT_SCHEMA" });
     expect(parse("x".repeat(CHAT_RESULT_MAX_BYTES + 1))).toMatchObject({ ok: false, code: "RESPONSE_TOO_LARGE" });
   });

@@ -2,7 +2,7 @@
 
 This package contains the Meoi React website and the Meoi Bridge Chrome extension.
 
-## Meoi Bridge v6 - ChatGPT Web, no API or MCP
+## Meoi Bridge v7 - ChatGPT Web, no API or MCP
 
 Meoi runs on the user's device. Its Chrome extension sends requests through an existing `chatgpt.com` tab, validates the returned lesson, evaluation, or coaching JSON, and passes that result back to the current Meoi page.
 
@@ -45,7 +45,7 @@ ChatGPT account quotas still apply. If a response fails validation, the extensio
 
 ## Result contract
 
-The page and extension use wire protocol v6. A successful coaching result looks like this:
+The page and extension use wire protocol v7. A successful coaching result looks like this:
 
 ```json
 {

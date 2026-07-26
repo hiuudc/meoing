@@ -1,9 +1,10 @@
 import type { Evaluation, LessonQuestion } from "./types";
+import { stripBlankMarkers } from "./multiCloze";
 
 function uniqueSpeechParts(parts: string[]): string[] {
   return [...new Set(parts.map((part) => (
     part
-      .replace(/\{\{blank\}\}/g, " ")
+      .replace(/\{\{blank(?::[^{}]+)?\}\}/g, " ")
       .replace(/_{2,}/g, " ")
       .replace(/\s+/g, " ")
       .trim()
@@ -19,6 +20,7 @@ function targetPartsIn(question: LessonQuestion, candidates: string[]): string[]
 
 function questionTextCandidates(question: LessonQuestion): string[] {
   const parts = [question.prompt];
+  if (question.targetPrompt) parts.push(question.targetPrompt);
   switch (question.type) {
     case "trueFalse": parts.push(question.statement); break;
     case "fillBlank":
@@ -81,6 +83,7 @@ function answerTextCandidates(question: LessonQuestion, evaluation?: Evaluation 
 
 export function questionVisibleTexts(question: LessonQuestion): string[] {
   const parts = [question.prompt];
+  if (question.targetPrompt) parts.push(question.targetPrompt);
   switch (question.type) {
     case "singleChoice":
     case "multipleChoice":
@@ -126,6 +129,7 @@ export function questionVisibleTexts(question: LessonQuestion): string[] {
 }
 
 export function questionSpeechText(question: LessonQuestion): string {
+  if (question.targetPrompt?.trim()) return stripBlankMarkers(question.targetPrompt);
   const targetParts = targetPartsIn(question, questionTextCandidates(question));
   if (targetParts.length) return targetParts.join(". ");
 
@@ -135,6 +139,10 @@ export function questionSpeechText(question: LessonQuestion): string {
   if (question.type === "listenSelect" || question.type === "soundDiscrimination") return question.audioText;
   if (question.type === "speakingRepeat") return question.modelText;
   return "";
+}
+
+export function targetPromptSpeechText(question: LessonQuestion): string {
+  return question.targetPrompt ? stripBlankMarkers(question.targetPrompt) : "";
 }
 
 export function answerSpeechText(question: LessonQuestion, evaluation?: Evaluation | null): string {

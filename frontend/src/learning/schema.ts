@@ -5,6 +5,7 @@ import {
   type Evaluation,
   type LearningProfile,
   type Lesson,
+  type LessonQuestionFormat,
   type LessonProgressSnapshot,
   type QuestionFormat,
 } from "./types";
@@ -16,6 +17,7 @@ import {
 } from "./questionSettings";
 import { segmentGlossaryText } from "./glossary";
 import { questionVisibleTexts } from "./questionContent";
+import { stripBlankMarkers, validateMultiClozeMarkers } from "./multiCloze";
 
 const id = z.string().min(1).max(120);
 const plainText = z.string().min(1).max(16_000);
@@ -58,6 +60,7 @@ const glossaryEntrySchema = z.object({
 const baseFields = {
   id,
   prompt: plainText,
+  targetPrompt: plainText.optional(),
   explanation: plainText,
   hint: plainText.optional(),
   supplementalHint: plainText.optional(),
@@ -201,9 +204,33 @@ export const lessonQuestionSchema = z.discriminatedUnion("type", [
 });
 
 function targetHasGlossaryCoverage(target: string, glossary: Lesson["glossary"]): boolean {
-  return segmentGlossaryText(target, glossary).every((segment) => (
+  return segmentGlossaryText(stripBlankMarkers(target), glossary).every((segment) => (
     Boolean(segment.entry) || !/[\p{L}\p{N}\p{M}]/u.test(segment.text)
   ));
+}
+
+function validateSchemaSixQuestion(
+  question: Lesson["questions"][number],
+  lesson: Pick<Lesson, "targetLanguage" | "glossary">,
+): string[] {
+  const errors: string[] = [];
+  if (question.targetPrompt && !targetHasGlossaryCoverage(question.targetPrompt, lesson.glossary)) {
+    errors.push(`Question ${question.id} targetPrompt is not fully covered by the glossary.`);
+  }
+  if (!["Japanese", "Chinese", "Korean"].includes(lesson.targetLanguage)) return errors;
+  const missingPronunciation = new Set<string>();
+  (question.glossaryTargets ?? []).forEach((target) => {
+    segmentGlossaryText(stripBlankMarkers(target), lesson.glossary).forEach((segment) => {
+      if (!segment.entry || !/[\p{L}\p{N}\p{M}]/u.test(segment.text)) return;
+      if (!segment.entry.pronunciation?.native && !segment.entry.pronunciation?.romanized) {
+        missingPronunciation.add(segment.entry.term);
+      }
+    });
+  });
+  missingPronunciation.forEach((term) => {
+    errors.push(`Target-language glossary term ${term} needs pronunciation metadata.`);
+  });
+  return errors;
 }
 
 export function validateQuestionGlossaryCoverage(
@@ -230,7 +257,7 @@ export function validateQuestionGlossaryCoverage(
 
 export const lessonSchema = z
   .object({
-    schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]),
+    schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6)]),
     id,
     unitId: id,
     title: plainText.max(300),
@@ -262,6 +289,16 @@ export const lessonSchema = z
         context.addIssue({ code: "custom", path: ["questions", index, "id"], message: "Question IDs must be unique." });
       }
       questionIds.add(question.id);
+      if (lesson.schemaVersion >= 6 && question.type === "multiCloze") {
+        validateMultiClozeMarkers(question.template, question.blanks.map((blank) => blank.id)).forEach((message) => {
+          context.addIssue({ code: "custom", path: ["questions", index, "template"], message });
+        });
+      }
+      if (lesson.schemaVersion >= 6) {
+        validateSchemaSixQuestion(question, lesson).forEach((message) => {
+          context.addIssue({ code: "custom", path: ["questions", index], message });
+        });
+      }
     });
     const alternateSlotIds = new Set<string>();
     const allQuestionIds = new Set(questionIds);
@@ -284,6 +321,19 @@ export const lessonSchema = z
       if (primary && isListeningQuestionFormat(primary.type) && isListeningQuestionFormat(alternate.question.type)) {
         context.addIssue({ code: "custom", path: ["questionAlternates", index, "question", "type"], message: "Listening alternates cannot require listening." });
       }
+      if (lesson.schemaVersion >= 6 && alternate.question.type === "multiCloze") {
+        validateMultiClozeMarkers(
+          alternate.question.template,
+          alternate.question.blanks.map((blank) => blank.id),
+        ).forEach((message) => {
+          context.addIssue({ code: "custom", path: ["questionAlternates", index, "question", "template"], message });
+        });
+      }
+      if (lesson.schemaVersion >= 6) {
+        validateSchemaSixQuestion(alternate.question, lesson).forEach((message) => {
+          context.addIssue({ code: "custom", path: ["questionAlternates", index, "question"], message });
+        });
+      }
     });
     if (lesson.schemaVersion >= 3) {
       if ((lesson.questionAlternates?.length ?? 0) !== lesson.questions.length) {
@@ -304,7 +354,7 @@ export const lessonSchema = z
         if (lesson.schemaVersion < 5 && question.type === "freeWriting" && (!question.supportBank || !question.supportBankSeparator)) {
           context.addIssue({ code: "custom", path: ["questions"], message: `Free-writing question ${question.id} needs a support bank and separator.` });
         }
-        if (lesson.schemaVersion === 5 && isWrittenAnswerFormat(question.type) && !question.answerBank) {
+        if (lesson.schemaVersion >= 5 && isWrittenAnswerFormat(question.type) && !question.answerBank) {
           context.addIssue({ code: "custom", path: ["questions"], message: `${question.type} question ${question.id} needs an answer bank.` });
         }
       });
@@ -394,15 +444,15 @@ export interface LessonExpectation {
   level: LearningProfile["level"];
   questionCount: number;
   speaking: boolean;
-  allowedFormats: QuestionFormat[];
-  requiredTemplates: Array<{ id: string; format: QuestionFormat }>;
+  allowedFormats: LessonQuestionFormat[];
+  requiredTemplates: Array<{ id: string; format: LessonQuestionFormat }>;
 }
 
 export function validateLessonForExpectation(lesson: Lesson, expectation: LessonExpectation): string[] {
   const errors: string[] = [];
-  const allowedFormats = new Set(expectation.allowedFormats);
+  const allowedFormats = new Set<QuestionFormat>(expectation.allowedFormats);
   const requiredTemplates = new Map(expectation.requiredTemplates.map((template) => [template.id, template.format]));
-  if (lesson.schemaVersion !== 5) errors.push("Generated lessons must use schemaVersion 5.");
+  if (lesson.schemaVersion !== 6) errors.push("Generated lessons must use schemaVersion 6.");
   if (new Set(lesson.questions.map((question) => question.type)).size < 5) {
     errors.push("Lesson must use at least five formats.");
   }

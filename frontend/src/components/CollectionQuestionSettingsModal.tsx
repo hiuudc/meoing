@@ -1,10 +1,9 @@
-import { Eye, Plus, Trash2, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Plus, Trash2, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { LESSON_QUESTION_FORMAT_DEFINITIONS, QUESTION_FORMAT_REGISTRY } from "../learning/questionRegistry";
 import {
   MAX_CUSTOM_QUESTION_TEMPLATES,
   getEffectiveCollectionQuestionSettings,
-  isSpeakingQuestionFormat,
   supportsQuestionFormatForLanguage,
   validateCollectionQuestionSettings,
 } from "../learning/questionSettings";
@@ -14,6 +13,7 @@ import type {
   CustomQuestionTemplate,
   LearningProfile,
   LessonQuestion,
+  LessonQuestionFormat,
   QuestionAnswer,
   QuestionFormat,
 } from "../learning/types";
@@ -73,7 +73,6 @@ function PreviewColumn({
 }) {
   return (
     <div className="question-preview-column">
-      <div className="question-preview-label"><Eye size={15} /> Preview</div>
       <QuestionPreview
         key={`${previewId}:${format}`}
         disabled={disabled}
@@ -82,6 +81,63 @@ function PreviewColumn({
         previewId={previewId}
       />
     </div>
+  );
+}
+
+type QuestionFormatDefinition = (typeof LESSON_QUESTION_FORMAT_DEFINITIONS)[number];
+
+interface QuestionFormatState {
+  definition: QuestionFormatDefinition;
+  enabled: boolean;
+  languageUnavailable: boolean;
+  speakingUnavailable: boolean;
+}
+
+function QuestionFormatCard({
+  formatState,
+  language,
+  onToggle,
+}: {
+  formatState: QuestionFormatState;
+  language: string;
+  onToggle: (format: QuestionFormat, enabled: boolean) => void;
+}) {
+  const {
+    definition,
+    enabled,
+    languageUnavailable,
+    speakingUnavailable,
+  } = formatState;
+
+  return (
+    <article
+      className={`question-format-card ${enabled ? "is-enabled" : "is-disabled"}`}
+      data-question-format={definition.id}
+    >
+      <div className="question-format-heading">
+        <label className="format-enable-control">
+          <input
+            type="checkbox"
+            checked={enabled}
+            disabled={speakingUnavailable || languageUnavailable}
+            onChange={(event) => onToggle(definition.id, event.target.checked)}
+          />
+          <span>{definition.label}</span>
+        </label>
+        <span className={`question-format-badge is-${definition.badge}`}>
+          {definition.badge === "ai" ? "AI" : definition.badge}
+        </span>
+      </div>
+      <p>{definition.description}</p>
+      {speakingUnavailable ? <small>Collection speaking is disabled.</small> : null}
+      {languageUnavailable ? <small>Available only when learning Chinese, Japanese, or Korean.</small> : null}
+      <PreviewColumn
+        disabled={!enabled}
+        format={definition.id}
+        language={language}
+        previewId={`format-preview-${definition.id}`}
+      />
+    </article>
   );
 }
 
@@ -98,18 +154,24 @@ function BlueprintEditor({
   onChange: (template: CustomQuestionTemplate) => void;
   onDelete: () => void;
 }) {
-  const speakingUnavailable = !speakingEnabled && isSpeakingQuestionFormat(template.baseFormat);
-  const enabled = template.enabled && !speakingUnavailable;
+  const definition = QUESTION_FORMAT_REGISTRY[template.baseFormat];
+  const speakingUnavailable = !speakingEnabled && definition.badge === "speaking";
+  const languageUnavailable = !supportsQuestionFormatForLanguage(template.baseFormat, language);
+  const available = !speakingUnavailable && !languageUnavailable;
+  const enabled = template.enabled && available;
 
   return (
-    <article className={`question-blueprint-card ${enabled ? "is-enabled" : "is-disabled"}`}>
+    <article
+      className={`question-blueprint-card ${enabled ? "is-enabled" : "is-disabled"}`}
+      data-question-blueprint={template.id}
+    >
       <div className="question-blueprint-settings">
         <div className="question-blueprint-heading">
           <label className="format-enable-control">
             <input
               type="checkbox"
               checked={enabled}
-              disabled={speakingUnavailable}
+              disabled={!available}
               onChange={(event) => onChange({ ...template, enabled: event.target.checked })}
             />
             <span>Enabled</span>
@@ -132,16 +194,19 @@ function BlueprintEditor({
             <span>Base format</span>
             <select
               value={template.baseFormat}
-              onChange={(event) => onChange({ ...template, baseFormat: event.target.value as QuestionFormat })}
+              onChange={(event) => onChange({
+                ...template,
+                baseFormat: event.target.value as LessonQuestionFormat,
+              })}
             >
-              {LESSON_QUESTION_FORMAT_DEFINITIONS.map((definition) => (
+              {LESSON_QUESTION_FORMAT_DEFINITIONS.map((formatDefinition) => (
                 <option
-                  key={definition.id}
-                  value={definition.id}
-                  disabled={(!speakingEnabled && definition.badge === "speaking")
-                    || !supportsQuestionFormatForLanguage(definition.id, language)}
+                  key={formatDefinition.id}
+                  value={formatDefinition.id}
+                  disabled={(!speakingEnabled && formatDefinition.badge === "speaking")
+                    || !supportsQuestionFormatForLanguage(formatDefinition.id, language)}
                 >
-                  {definition.label}
+                  {formatDefinition.label}
                 </option>
               ))}
             </select>
@@ -155,11 +220,14 @@ function BlueprintEditor({
               onChange={(event) => onChange({ ...template, guidance: event.target.value })}
               placeholder="Example: Use a short workplace exchange and include one distractor from this collection."
             />
-            <small>{template.guidance.length}/2,000. Treated as learning data, not executable instructions.</small>
+            <small>{template.guidance.length}/2,000. Treated as untrusted learning data.</small>
           </label>
         </div>
         {speakingUnavailable ? (
           <p className="settings-inline-warning">Enable speaking in the collection learning profile to use this blueprint.</p>
+        ) : null}
+        {languageUnavailable ? (
+          <p className="settings-inline-warning">This blueprint format is unavailable for the collection language.</p>
         ) : null}
       </div>
       <PreviewColumn
@@ -182,6 +250,7 @@ export function CollectionQuestionSettingsModal({
   const [questionSettings, setQuestionSettings] = useState<CollectionQuestionSettings>(
     () => getEffectiveCollectionQuestionSettings(collection?.questionSettings, profile),
   );
+  const pendingFormatFocusRef = useRef<QuestionFormat | null>(null);
   const activeCollection = collection ?? retainedCollection;
 
   useEffect(() => {
@@ -190,12 +259,36 @@ export function CollectionQuestionSettingsModal({
     setQuestionSettings(getEffectiveCollectionQuestionSettings(collection.questionSettings, profile));
   }, [collection, profile]);
 
+  useEffect(() => {
+    const format = pendingFormatFocusRef.current;
+    if (!format) return;
+    pendingFormatFocusRef.current = null;
+    document.querySelector<HTMLInputElement>(
+      `[data-question-format="${format}"] input[type="checkbox"]`,
+    )?.focus();
+  }, [questionSettings.enabledFormats]);
+
   if (!activeCollection) return null;
 
   const errors = validateCollectionQuestionSettings(questionSettings, profile);
+  const formatStates: QuestionFormatState[] = LESSON_QUESTION_FORMAT_DEFINITIONS.map((definition) => {
+    const speakingUnavailable = !profile.speakingEnabled && definition.badge === "speaking";
+    const languageUnavailable = !supportsQuestionFormatForLanguage(definition.id, profile.targetLanguage);
+    return {
+      definition,
+      enabled: questionSettings.enabledFormats.includes(definition.id)
+        && !speakingUnavailable
+        && !languageUnavailable,
+      languageUnavailable,
+      speakingUnavailable,
+    };
+  });
+  const enabledFormats = formatStates.filter((formatState) => formatState.enabled);
+  const disabledFormats = formatStates.filter((formatState) => !formatState.enabled);
   const canAddBlueprint = questionSettings.customTemplates.length < MAX_CUSTOM_QUESTION_TEMPLATES;
 
   function updateFormatEnabled(format: QuestionFormat, enabled: boolean) {
+    pendingFormatFocusRef.current = format;
     setQuestionSettings((current) => ({
       ...current,
       enabledFormats: enabled
@@ -209,7 +302,7 @@ export function CollectionQuestionSettingsModal({
     const template: CustomQuestionTemplate = {
       id: makeId("question-template"),
       name: `Custom blueprint ${questionSettings.customTemplates.length + 1}`,
-      baseFormat: questionSettings.enabledFormats[0] ?? "singleChoice",
+      baseFormat: enabledFormats[0]?.definition.id ?? "singleChoice",
       guidance: "",
       enabled: true,
     };
@@ -257,7 +350,7 @@ export function CollectionQuestionSettingsModal({
           <section className="collection-question-settings" aria-label="Question configuration">
             <div className="question-settings-summary">
               <div><span>Lesson size</span><strong>{profile.lessonQuestionCount} questions</strong></div>
-              <div><span>Enabled formats</span><strong>{questionSettings.enabledFormats.length}/{LESSON_QUESTION_FORMAT_DEFINITIONS.length}</strong></div>
+              <div><span>Enabled formats</span><strong>{enabledFormats.length}/{LESSON_QUESTION_FORMAT_DEFINITIONS.length}</strong></div>
               <div><span>Enabled blueprints</span><strong>{questionSettings.customTemplates.filter((template) => template.enabled).length}/{profile.lessonQuestionCount}</strong></div>
             </div>
 
@@ -267,76 +360,70 @@ export function CollectionQuestionSettingsModal({
                 <p>Enable at least five formats, including one local and one AI-graded format.</p>
               </div>
             </div>
-            <div className="question-format-grid">
-              {LESSON_QUESTION_FORMAT_DEFINITIONS.map((definition) => {
-                const speakingUnavailable = !profile.speakingEnabled && definition.badge === "speaking";
-                const languageUnavailable = !supportsQuestionFormatForLanguage(definition.id, profile.targetLanguage);
-                const enabled = questionSettings.enabledFormats.includes(definition.id)
-                  && !speakingUnavailable
-                  && !languageUnavailable;
-
-                return (
-                  <article
-                    className={`question-format-card ${enabled ? "is-enabled" : "is-disabled"}`}
-                    data-question-format={definition.id}
-                    key={definition.id}
-                  >
-                    <div className="question-format-heading">
-                      <label className="format-enable-control">
-                        <input
-                          type="checkbox"
-                          checked={enabled}
-                          disabled={speakingUnavailable || languageUnavailable}
-                          onChange={(event) => updateFormatEnabled(definition.id, event.target.checked)}
+            <div className="question-format-groups">
+              {([
+                {
+                  id: "enabled-question-formats",
+                  label: "Enabled formats",
+                  formats: enabledFormats,
+                  emptyMessage: "No formats are enabled.",
+                },
+                {
+                  id: "disabled-question-formats",
+                  label: "Disabled formats",
+                  formats: disabledFormats,
+                  emptyMessage: "All available formats are enabled.",
+                },
+              ] as const).map((group) => (
+                <section className="question-format-group" aria-labelledby={`${group.id}-title`} key={group.id}>
+                  <div className="question-format-group-heading">
+                    <h4 id={`${group.id}-title`}>{group.label}</h4>
+                    <span>{group.formats.length}</span>
+                  </div>
+                  {group.formats.length ? (
+                    <div className="question-format-grid">
+                      {group.formats.map((formatState) => (
+                        <QuestionFormatCard
+                          key={formatState.definition.id}
+                          formatState={formatState}
+                          language={profile.targetLanguage}
+                          onToggle={updateFormatEnabled}
                         />
-                        <span>{definition.label}</span>
-                      </label>
-                      <span className={`question-format-badge is-${definition.badge}`}>
-                        {definition.badge === "ai" ? "AI" : definition.badge}
-                      </span>
+                      ))}
                     </div>
-                    <p>{definition.description}</p>
-                    {speakingUnavailable ? <small>Collection speaking is disabled.</small> : null}
-                    {languageUnavailable ? <small>Available only when learning Chinese, Japanese, or Korean.</small> : null}
-                    <PreviewColumn
-                      disabled={!enabled}
-                      format={definition.id}
-                      language={profile.targetLanguage}
-                      previewId={`format-preview-${definition.id}`}
-                    />
-                  </article>
-                );
-              })}
+                  ) : (
+                    <p className="question-format-empty">{group.emptyMessage}</p>
+                  )}
+                </section>
+              ))}
             </div>
 
             <div className="settings-section-heading question-blueprint-section-heading">
               <div>
                 <h3>Custom blueprints</h3>
-                <p>Each enabled blueprint must appear in every newly generated lesson. Saved lessons keep their copied settings.</p>
+                <p>Each enabled blueprint must appear in every newly generated lesson.</p>
               </div>
               <button className="secondary-button" type="button" onClick={addBlueprint} disabled={!canAddBlueprint}>
                 <Plus size={16} /> Add blueprint
               </button>
             </div>
-            {questionSettings.customTemplates.length ? (
-              <div className="question-blueprint-list">
-                {questionSettings.customTemplates.map((template, index) => (
-                  <BlueprintEditor
-                    key={template.id}
-                    template={template}
-                    language={profile.targetLanguage}
-                    speakingEnabled={profile.speakingEnabled}
-                    onChange={(nextTemplate) => updateBlueprint(index, nextTemplate)}
-                    onDelete={() => setQuestionSettings((current) => ({
-                      ...current,
-                      customTemplates: current.customTemplates.filter((_, candidateIndex) => candidateIndex !== index),
-                    }))}
-                  />
-                ))}
-              </div>
-            ) : (
-              <p className="question-blueprint-empty">No custom blueprints. Built-in formats will fill the lesson.</p>
-            )}
+            <div className="question-blueprint-list">
+              {questionSettings.customTemplates.length ? questionSettings.customTemplates.map((template, index) => (
+                <BlueprintEditor
+                  key={template.id}
+                  template={template}
+                  language={profile.targetLanguage}
+                  speakingEnabled={profile.speakingEnabled}
+                  onChange={(nextTemplate) => updateBlueprint(index, nextTemplate)}
+                  onDelete={() => setQuestionSettings((current) => ({
+                    ...current,
+                    customTemplates: current.customTemplates.filter((candidate) => candidate.id !== template.id),
+                  }))}
+                />
+              )) : (
+                <p className="question-blueprint-empty">No custom blueprints yet. Built-in formats remain available.</p>
+              )}
+            </div>
 
             {errors.length ? (
               <div className="question-settings-validation" role="alert">

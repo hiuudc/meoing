@@ -6,6 +6,7 @@ import {
   type CustomQuestionTemplate,
   type LearningProfile,
   type Lesson,
+  type LessonQuestionFormat,
   type QuestionFormat,
   type QuestionPresentationSettings,
 } from "./types";
@@ -106,7 +107,6 @@ export function normalizeCollectionQuestionSettings(value: unknown): CollectionQ
   const source = isRecord(value) ? value : {};
   const rawFormats = Array.isArray(source.enabledFormats) ? source.enabledFormats : [];
   const enabledFormats = [...new Set(rawFormats.filter(isLessonQuestionFormat))];
-
   const usedIds = new Set<string>();
   const customTemplates = (Array.isArray(source.customTemplates) ? source.customTemplates : [])
     .slice(0, MAX_CUSTOM_QUESTION_TEMPLATES)
@@ -150,7 +150,6 @@ export function getEffectiveCollectionQuestionSettings(
     customTemplates: normalized.customTemplates.map((template) => ({
       ...template,
       enabled: template.enabled
-        && isLessonQuestionFormat(template.baseFormat)
         && (speakingAllowed || !isSpeakingQuestionFormat(template.baseFormat))
         && supportsQuestionFormatForLanguage(template.baseFormat, profile.targetLanguage),
     })),
@@ -165,7 +164,7 @@ export function validateCollectionQuestionSettings(
 ): string[] {
   const errors: string[] = [];
   const effective = getEffectiveCollectionQuestionSettings(settings, profile);
-  const enabledFormats = effective.enabledFormats;
+  const enabledFormats = effective.enabledFormats.filter(isLessonQuestionFormat);
   const enabledFormatSet = new Set(enabledFormats);
 
   if (enabledFormats.length < 5) errors.push("Enable at least five question formats.");
@@ -214,8 +213,8 @@ export function validateCollectionQuestionSettings(
 }
 
 export interface QuestionGenerationConstraints {
-  allowedFormats: QuestionFormat[];
-  requiredTemplates: Array<{ id: string; format: QuestionFormat }>;
+  allowedFormats: LessonQuestionFormat[];
+  requiredTemplates: Array<{ id: string; format: LessonQuestionFormat }>;
 }
 
 export function buildQuestionGenerationConstraints(
@@ -224,7 +223,7 @@ export function buildQuestionGenerationConstraints(
 ): QuestionGenerationConstraints {
   const effective = getEffectiveCollectionQuestionSettings(settings, profile);
   return {
-    allowedFormats: [...effective.enabledFormats],
+    allowedFormats: effective.enabledFormats.filter(isLessonQuestionFormat),
     requiredTemplates: effective.customTemplates
       .filter((template) => template.enabled)
       .map((template) => ({ id: template.id, format: template.baseFormat })),

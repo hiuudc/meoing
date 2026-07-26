@@ -8,20 +8,27 @@ import {
   LoaderCircle,
   MessageCircle,
   HeadphoneOff,
+  Keyboard,
+  Rows3,
   RotateCcw,
   Send,
   Settings2,
   SkipForward,
   Sparkles,
+  Volume2,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { gradeAnswer, isAnswerComplete } from "./grader";
 import { GlossaryText } from "./GlossaryText";
 import { shouldFlushProgress } from "./progress";
 import { answerActivationSpeechText, questionSpeechText } from "./questionContent";
 import {
+  isForbiddenLessonShortcut,
+  lessonShortcutFromKeyboardEvent,
+  lessonShortcutLabel,
+  lessonShortcutMatches,
   effectivePresentation,
   enableListening,
   loadLessonPlayerPreference,
@@ -132,6 +139,26 @@ function glossaryEntryMatchesTargets(entry: Lesson["glossary"][number], targets:
   });
 }
 
+function isEditableTarget(target: HTMLElement | null): boolean {
+  return Boolean(target?.closest("input, textarea, select, [contenteditable='true']"));
+}
+
+function separatedQuestionPrompts(question: LessonQuestion): { source: string; target: string } {
+  if (question.targetPrompt?.trim()) {
+    return { source: question.prompt, target: question.targetPrompt.trim() };
+  }
+  const candidates = (question.glossaryTargets ?? [])
+    .map((target) => target.trim())
+    .filter((target) => target && question.prompt.includes(target));
+  const maximal = candidates.filter((candidate) => !candidates.some((other) => (
+    other !== candidate && other.includes(candidate)
+  )));
+  if (maximal.length !== 1) return { source: question.prompt, target: "" };
+  const target = maximal[0];
+  const source = question.prompt.replace(target, " ").replace(/\s+/g, " ").trim();
+  return source && source !== question.prompt ? { source, target } : { source: question.prompt, target: "" };
+}
+
 export function LessonPlayer({
   lesson,
   coachingAvailable,
@@ -171,6 +198,8 @@ export function LessonPlayer({
   const [coachError, setCoachError] = useState("");
   const [coachSending, setCoachSending] = useState(false);
   const [exiting, setExiting] = useState(false);
+  const [recordingSkipShortcut, setRecordingSkipShortcut] = useState(false);
+  const [shortcutStatus, setShortcutStatus] = useState("");
   const pendingAttemptsRef = useRef<AttemptRecord[]>([]);
   const retryStateRef = useRef(retryState);
   const progressHandlerRef = useRef(onProgressBatch);
@@ -179,8 +208,10 @@ export function LessonPlayer({
   const dialogRef = useRef<HTMLElement>(null);
   const speechButtonRef = useRef<HTMLButtonElement>(null);
   const speechPopoverRef = useRef<HTMLDivElement>(null);
+  const continueButtonRef = useRef<HTMLButtonElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const autoSpokenQuestionRef = useRef<string | null>(null);
+  const focusKeyboardInputRef = useRef(false);
 
   function questionForState(state: RetryState): LessonQuestion | undefined {
     const slotId = state.queue[0];
@@ -226,6 +257,8 @@ export function LessonPlayer({
     setCoachDraft("");
     setCoachError("");
     setNotice("");
+    setRecordingSkipShortcut(false);
+    setShortcutStatus("");
     pendingAttemptsRef.current = [];
   }, [lesson]);
 
@@ -264,7 +297,9 @@ export function LessonPlayer({
       element.setAttribute("aria-hidden", "true");
     });
     const frame = window.requestAnimationFrame(() => {
-      const initialFocus = dialogRef.current?.querySelector<HTMLElement>(".answer-composer") ?? dialogRef.current;
+      const initialFocus = dialogRef.current?.querySelector<HTMLElement>(
+        "[data-question-primary-focus], [data-question-answer-input], .answer-composer",
+      ) ?? dialogRef.current;
       initialFocus?.focus();
     });
     return () => {
@@ -279,6 +314,21 @@ export function LessonPlayer({
       previousFocusRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    if (!currentQuestion || evaluation) return;
+    const frame = window.requestAnimationFrame(() => {
+      dialogRef.current?.querySelector<HTMLElement>(
+        "[data-question-primary-focus], [data-question-answer-input], .answer-composer",
+      )?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [currentQuestion?.id, currentSlotId ? retryState.attemptsByQuestion[currentSlotId] : 0]);
+
+  useLayoutEffect(() => {
+    if (!evaluation) return;
+    continueButtonRef.current?.focus({ preventScroll: true });
+  }, [evaluation]);
 
   useEffect(() => {
     if (!("speechSynthesis" in window)) return;
@@ -380,9 +430,25 @@ export function LessonPlayer({
     }
   }
 
-  function handleDialogKeyDown(event: React.KeyboardEvent<HTMLElement>) {
-    if (event.defaultPrevented) return;
+  function handleDialogKeyDownCapture(event: React.KeyboardEvent<HTMLElement>) {
+    if (event.defaultPrevented || recordingSkipShortcut) return;
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    const skipShortcut = playerPreference.skipShortcut;
+    if (
+      !event.repeat
+      && !event.nativeEvent.isComposing
+      && event.nativeEvent.keyCode !== 229
+      && !speechOpen
+      && !theoryOpen
+      && lessonShortcutMatches(event.nativeEvent, skipShortcut)
+      && (!isEditableTarget(target) || skipShortcut.altKey || skipShortcut.ctrlKey || skipShortcut.metaKey || skipShortcut.shiftKey)
+    ) {
+      event.preventDefault();
+      skipCurrentQuestion();
+      return;
+    }
     if (event.key === "Escape") {
+      if (target?.closest("[data-typeahead-active='true']")) return;
       event.preventDefault();
       if (speechOpen) {
         setSpeechOpen(false);
@@ -402,7 +468,6 @@ export function LessonPlayer({
         || speechOpen
         || theoryOpen
       ) return;
-      const target = event.target instanceof HTMLElement ? event.target : null;
       const button = target?.closest("button");
       const coachForm = target?.closest(".lesson-coach-chat form");
       if (coachForm) {
@@ -410,15 +475,21 @@ export function LessonPlayer({
         if (target instanceof HTMLTextAreaElement && event.shiftKey) return;
         event.preventDefault();
         if (coachDraft.trim() && coachingAvailable && !coachSending) void sendCoachMessage();
+        else if (evaluation) continueLesson();
         return;
       }
-      if (button && !button.classList.contains("answer-token")) return;
+      if (evaluation) {
+        if (button && !button.classList.contains("lesson-continue-button") && !button.hasAttribute("disabled")) return;
+        event.preventDefault();
+        continueLesson();
+        return;
+      }
+      if (button && !button.classList.contains("primary-button")) return;
       if (target instanceof HTMLSelectElement) return;
       if (target instanceof HTMLTextAreaElement && event.shiftKey) return;
       if (!currentQuestion) return;
       event.preventDefault();
-      if (evaluation) continueLesson();
-      else void submitAnswer();
+      void submitAnswer();
       return;
     }
     if (event.key !== "Tab") return;
@@ -454,26 +525,36 @@ export function LessonPlayer({
     return true;
   }
 
-  async function submitAnswer() {
+  async function submitAnswer(candidateAnswer: QuestionAnswer = answer) {
     if (!currentQuestion || evaluation || submitting) return;
-    if (!isAnswerComplete(currentQuestion, answer) && !(speaking?.audio || speaking?.transcript)) {
+    if (!isAnswerComplete(currentQuestion, candidateAnswer) && !(speaking?.audio || speaking?.transcript)) {
       setError(currentQuestion.type === "matching" || currentQuestion.type === "audioMatching"
         ? "Complete every matching pair before checking the answer."
+        : currentQuestion.type === "categorize"
+          ? "Categorize every item before checking the answer."
         : currentQuestion.type === "characterTracing"
           ? "Complete the character trace before checking the answer."
           : "Enter or select an answer before checking it.");
+      if (currentQuestion.type === "multiCloze") {
+        const values = candidateAnswer && typeof candidateAnswer === "object" && !Array.isArray(candidateAnswer)
+          ? candidateAnswer as Record<string, string>
+          : {};
+        const missing = currentQuestion.blanks.find((blank) => !values[blank.id]?.trim());
+        const inputs = Array.from(dialogRef.current?.querySelectorAll<HTMLInputElement>("[data-multi-cloze-input]") ?? []);
+        inputs.find((input) => input.dataset.multiClozeInput === missing?.id)?.focus();
+      }
       return;
     }
     setError("");
     setSubmitting(true);
     try {
-      const local = gradeAnswer(currentQuestion, answer);
+      const local = gradeAnswer(currentQuestion, candidateAnswer);
       if (!local.requiresAi) {
         setEvaluation(local);
       } else if (!onEvaluate) {
         setError("This question needs ChatGPT evaluation and is unavailable in local-only mode.");
       } else {
-        setEvaluation(await onEvaluate(currentQuestion, answer, speaking));
+        setEvaluation(await onEvaluate(currentQuestion, candidateAnswer, speaking));
       }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The answer could not be evaluated right now.");
@@ -599,6 +680,12 @@ export function LessonPlayer({
     : "";
   const targetVoiceAvailable = speechSupported && targetVoices.length > 0;
   const questionSpeech = currentQuestion ? questionSpeechText(currentQuestion) : "";
+  const separatedPrompts = currentQuestion
+    ? separatedQuestionPrompts(currentQuestion)
+    : { source: "", target: "" };
+  const rendererOwnsTargetPrompt = currentQuestion
+    ? ["fillBlank", "selectBlank", "multiCloze"].includes(currentQuestion.type)
+    : false;
   const currentAnswerBank = currentQuestion ? answerBankForQuestion(currentQuestion) : undefined;
   const answerInputMode = currentAnswerBank
     ? answerInputModeOverride ?? currentAnswerBank.defaultMode
@@ -627,8 +714,21 @@ export function LessonPlayer({
     || voicePreviewSample(lesson.targetLanguage);
   const speechRateLabel = `${Number(speechPreference.rate.toFixed(2))}x`;
   const listeningPaused = playerPreference.listeningDisabledUntil > now;
+  const automaticallyGraded = currentQuestion
+    ? ["matching", "audioMatching", "categorize"].includes(currentQuestion.type)
+    : false;
   const renderGlossaryText = Boolean(presentation?.wordTooltips || playerPreference.showPronunciation);
   const portalTarget = document.querySelector<HTMLElement>(".app-shell") ?? document.body;
+
+  useLayoutEffect(() => {
+    if (!focusKeyboardInputRef.current || answerInputMode !== "keyboard") return;
+    focusKeyboardInputRef.current = false;
+    const input = dialogRef.current?.querySelector<HTMLInputElement | HTMLTextAreaElement>("[data-question-answer-input]");
+    if (!input) return;
+    input.focus({ preventScroll: true });
+    const end = input.value.length;
+    input.setSelectionRange(end, end);
+  }, [answerInputMode, currentQuestion?.id]);
 
   useEffect(() => {
     if (!presentation?.readQuestion) {
@@ -646,6 +746,37 @@ export function LessonPlayer({
     if (!currentQuestion || !presentation?.readAnswers) return;
     const targetText = answerActivationSpeechText(currentQuestion, text);
     if (targetText) speak(targetText);
+  }
+
+  function completeInteractiveQuestion(nextAnswer: QuestionAnswer) {
+    setAnswer(nextAnswer);
+    void submitAnswer(nextAnswer);
+  }
+
+  function switchAnswerInputMode() {
+    if (!answerInputMode) return;
+    const nextMode: AnswerInputMode = answerInputMode === "keyboard" ? "bank" : "keyboard";
+    focusKeyboardInputRef.current = nextMode === "keyboard";
+    setAnswerInputModeOverride(nextMode);
+  }
+
+  function recordSkipShortcut(event: React.KeyboardEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.key === "Escape") {
+      setRecordingSkipShortcut(false);
+      setShortcutStatus("Shortcut recording cancelled.");
+      return;
+    }
+    if (event.repeat || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+    const shortcut = lessonShortcutFromKeyboardEvent(event.nativeEvent);
+    if (isForbiddenLessonShortcut(shortcut)) {
+      setShortcutStatus("That key is reserved by the lesson or browser. Choose another shortcut.");
+      return;
+    }
+    setPlayerPreference((current) => ({ ...current, skipShortcut: shortcut }));
+    setRecordingSkipShortcut(false);
+    setShortcutStatus(`Skip shortcut saved as ${lessonShortcutLabel(shortcut)}.`);
   }
 
   function renderLessonText(text: string, interactive = true) {
@@ -696,7 +827,7 @@ export function LessonPlayer({
         aria-modal="true"
         aria-labelledby="lesson-player-title"
         tabIndex={-1}
-        onKeyDown={handleDialogKeyDown}
+        onKeyDownCapture={handleDialogKeyDownCapture}
       >
         <header className="lesson-fullscreen-header">
           <button className="lesson-close-button" type="button" aria-label="Exit lesson" onClick={() => void requestExit()} disabled={exiting}>
@@ -734,9 +865,22 @@ export function LessonPlayer({
               </div>
               <div className="lesson-question-title-row">
                 <h1 id="lesson-player-title">
-                  {renderLessonText(currentQuestion.prompt)}
+                  {separatedPrompts.target ? separatedPrompts.source : renderLessonText(separatedPrompts.source)}
                 </h1>
               </div>
+              {separatedPrompts.target && !rendererOwnsTargetPrompt ? (
+                <div className="lesson-target-prompt-row">
+                  <button
+                    type="button"
+                    aria-label={`Play ${lesson.targetLanguage} prompt`}
+                    onClick={() => speak(questionSpeech || separatedPrompts.target)}
+                    disabled={!targetVoiceAvailable}
+                  >
+                    <Volume2 size={20} />
+                  </button>
+                  <p>{renderLessonText(separatedPrompts.target)}</p>
+                </div>
+              ) : null}
               <QuestionRenderer
                 key={`${currentQuestion.id}-${displayedAttempt}`}
                 question={currentQuestion}
@@ -747,9 +891,10 @@ export function LessonPlayer({
                 onChange={setAnswer}
                 answerInputMode={answerInputMode}
                 onAnswerActivate={speakActivatedAnswer}
-                onSpeakTarget={speak}
+                onSpeakTarget={targetVoiceAvailable ? speak : undefined}
                 onSpeakingChange={setSpeaking}
                 onRequireAlternate={() => useCurrentAlternate("This exercise is not supported on this device.")}
+                onComplete={completeInteractiveQuestion}
                 renderText={renderLessonText}
               />
               {error ? <p className="inline-error" role="alert">{error}</p> : null}
@@ -786,18 +931,23 @@ export function LessonPlayer({
               <button
                 className="lesson-input-mode-toggle"
                 type="button"
-                onClick={() => setAnswerInputModeOverride(answerInputMode === "keyboard" ? "bank" : "keyboard")}
+                onClick={switchAnswerInputMode}
                 disabled={submitting}
               >
+                {answerInputMode === "keyboard" ? <Rows3 size={17} /> : <Keyboard size={17} />}
                 {answerInputMode === "keyboard" ? "Use word bank" : "Use keyboard"}
               </button>
-            ) : (
+            ) : !automaticallyGraded ? (
               <p>{currentQuestion.hint ? `Hint: ${currentQuestion.hint}` : "Answer the question, then check your response."}</p>
+            ) : <span aria-hidden="true" />}
+            {automaticallyGraded ? (
+              <p className="lesson-auto-grade-status">{submitting ? "Checking completed matches..." : "Complete all matches to continue."}</p>
+            ) : (
+              <button className="primary-button" type="button" onClick={() => void submitAnswer()} disabled={submitting}>
+                {submitting ? <LoaderCircle className="spin" size={17} /> : null}
+                {submitting ? "Checking..." : "Check answer"}
+              </button>
             )}
-            <button className="primary-button" type="button" onClick={() => void submitAnswer()} disabled={submitting}>
-              {submitting ? <LoaderCircle className="spin" size={17} /> : null}
-              {submitting ? "Checking..." : "Check answer"}
-            </button>
           </footer>
         ) : null}
 
@@ -819,7 +969,7 @@ export function LessonPlayer({
                   <ul>{evaluation.errors.map((item, index) => <li key={`${item.location}-${index}`}><b>{item.location}:</b> {item.message}</li>)}</ul>
                 ) : null}
               </div>
-              <button className="lesson-continue-button" type="button" onClick={continueLesson}>
+              <button ref={continueButtonRef} className="lesson-continue-button" type="button" onClick={continueLesson}>
                 Continue <ChevronRight size={17} />
               </button>
             </div>
@@ -928,6 +1078,28 @@ export function LessonPlayer({
                   <span>Native reading</span>
                 </button>
               </div>
+            </section>
+            <section className="lesson-settings-section">
+              <div className="lesson-settings-section-title"><strong>Keyboard shortcuts</strong><span>Browser setting</span></div>
+              <div className="lesson-shortcut-setting">
+                <span>
+                  Skip exercise
+                  <small>Plain keys work outside text fields. Modified shortcuts also work while typing.</small>
+                </span>
+                <button
+                  type="button"
+                  className={recordingSkipShortcut ? "is-recording" : ""}
+                  aria-pressed={recordingSkipShortcut}
+                  onClick={() => {
+                    setRecordingSkipShortcut(true);
+                    setShortcutStatus("Press the new Skip shortcut. Escape cancels.");
+                  }}
+                  onKeyDown={recordSkipShortcut}
+                >
+                  {recordingSkipShortcut ? "Press keys..." : lessonShortcutLabel(playerPreference.skipShortcut)}
+                </button>
+              </div>
+              <p className="lesson-shortcut-status" role="status">{shortcutStatus}</p>
             </section>
             <section className="lesson-settings-section">
               <div className="lesson-settings-section-title"><strong>Listening</strong>{listeningPaused ? <span>{listeningCountdown(playerPreference.listeningDisabledUntil, now)}</span> : <span>Available</span>}</div>
