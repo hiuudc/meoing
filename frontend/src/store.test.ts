@@ -192,7 +192,7 @@ describe("persistence", () => {
     expect(loadWorkspace(storage).sidebarWidth).toBe(DEFAULT_SIDEBAR_WIDTH);
   });
 
-  it("loads legacy units without settings and normalizes optional question settings in version 1", () => {
+  it("migrates legacy unit question settings to its collection without changing version 1", () => {
     const state = createSeedState();
     const unitId = state.unitOrder[0];
     const storage = {
@@ -218,15 +218,58 @@ describe("persistence", () => {
 
     const loaded = loadWorkspace(storage);
     expect(loaded.version).toBe(1);
-    expect(loaded.units[unitId].questionSettings?.enabledFormats).toEqual(["singleChoice", "selectBlank", "translation"]);
-    expect(loaded.units[unitId].questionSettings?.customTemplates[0]).toMatchObject({
+    const collectionId = state.units[unitId].collectionId;
+    expect(loaded.collections[collectionId].questionSettings?.enabledFormats).toEqual(["singleChoice", "selectBlank", "translation"]);
+    expect(loaded.collections[collectionId].questionSettings?.customTemplates[0]).toMatchObject({
       name: "Daily greeting",
       guidance: "Use one greeting.",
       enabled: true,
     });
+    expect("questionSettings" in loaded.units[unitId]).toBe(false);
 
     const legacyStorage = { getItem: () => JSON.stringify(state) };
-    expect(loadWorkspace(legacyStorage).units[unitId].questionSettings).toBeUndefined();
+    expect(loadWorkspace(legacyStorage).collections[collectionId].questionSettings).toBeUndefined();
+  });
+
+  it("prefers persisted collection question settings over legacy unit settings", () => {
+    const state = createSeedState();
+    const unitId = state.unitOrder[0];
+    const collectionId = state.units[unitId].collectionId;
+    const storage = {
+      getItem: () => JSON.stringify({
+        ...state,
+        collections: {
+          ...state.collections,
+          [collectionId]: {
+            ...state.collections[collectionId],
+            questionSettings: {
+              enabledFormats: ["singleChoice", "multipleChoice", "trueFalse", "fillBlank", "translation"],
+              customTemplates: [],
+            },
+          },
+        },
+        units: {
+          ...state.units,
+          [unitId]: {
+            ...state.units[unitId],
+            questionSettings: {
+              enabledFormats: ["shortAnswer", "freeWriting"],
+              customTemplates: [],
+            },
+          },
+        },
+      }),
+    };
+
+    const loaded = loadWorkspace(storage);
+    expect(loaded.collections[collectionId].questionSettings?.enabledFormats).toEqual([
+      "singleChoice",
+      "multipleChoice",
+      "trueFalse",
+      "fillBlank",
+      "translation",
+    ]);
+    expect("questionSettings" in loaded.units[unitId]).toBe(false);
   });
 });
 

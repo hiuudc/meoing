@@ -31,9 +31,10 @@ const units: Unit[] = [
 interface SidebarHarnessProps {
   onSelectUnit?: (id: string) => void;
   onOpenLessons?: (id: string) => void;
+  onOpenCollectionQuestions?: () => void;
 }
 
-function SidebarHarness({ onSelectUnit, onOpenLessons }: SidebarHarnessProps) {
+function SidebarHarness({ onSelectUnit, onOpenLessons, onOpenCollectionQuestions }: SidebarHarnessProps) {
   const [activeUnitId, setActiveUnitId] = useState(units[0].id);
   const [activeKind, setActiveKind] = useState<ContentKind>("document");
   const [mode, setMode] = useState<WorkspaceMode>("library");
@@ -62,7 +63,7 @@ function SidebarHarness({ onSelectUnit, onOpenLessons }: SidebarHarnessProps) {
     },
     onCreateUnit: vi.fn(),
     onEditUnit: vi.fn(),
-    onOpenUnitQuestions: vi.fn(),
+    onOpenCollectionQuestions: onOpenCollectionQuestions ?? vi.fn(),
     onDeleteUnit: vi.fn(),
     onMoveUnit: vi.fn(),
     onOpenAppearance: vi.fn(),
@@ -105,6 +106,20 @@ afterEach(async () => {
 });
 
 describe("workspace unit navigation", () => {
+  it("opens collection question settings from the collection heading only", async () => {
+    const onOpenCollectionQuestions = vi.fn();
+    await renderSidebar({ onOpenCollectionQuestions });
+
+    const settingsButton = document.querySelector<HTMLButtonElement>(
+      '[aria-label="Open question settings for Test Collection"]',
+    );
+    expect(settingsButton).not.toBeNull();
+    expect(document.querySelector('[aria-label="Open question settings for Daily Rhythm"]')).toBeNull();
+
+    await act(async () => settingsButton!.click());
+    expect(onOpenCollectionQuestions).toHaveBeenCalledOnce();
+  });
+
   it("keeps the unit name and disclosure button in sync while toggling the active unit", async () => {
     const onSelectUnit = vi.fn();
     await renderSidebar({ onSelectUnit });

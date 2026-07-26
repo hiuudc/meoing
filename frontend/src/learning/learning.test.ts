@@ -17,9 +17,9 @@ import { DEFAULT_LEARNING_PROFILE, normalizeLearningProfile, resolveLearningProf
 import { answerSpeechText, questionSpeechText } from "./questionContent";
 import {
   decorateLessonPresentation,
-  getEffectiveUnitQuestionSettings,
-  normalizeUnitQuestionSettings,
-  validateUnitQuestionSettings,
+  getEffectiveCollectionQuestionSettings,
+  normalizeCollectionQuestionSettings,
+  validateCollectionQuestionSettings,
 } from "./questionSettings";
 import { applyAttempt, createRetryState, masteryPercent, scheduleRetry, skipQuestion, useListeningAlternate } from "./retry";
 import {
@@ -338,20 +338,20 @@ describe("profile and progress normalization", () => {
   });
 });
 
-describe("unit question settings", () => {
-  it("normalizes legacy settings and adds selectBlank when a unit inherits profile defaults", () => {
+describe("collection question settings", () => {
+  it("normalizes legacy settings and adds selectBlank when a collection inherits profile defaults", () => {
     const profile = normalizeLearningProfile({ preferredFormats: QUESTION_FORMATS.filter((format) => format !== "selectBlank") });
-    const effective = getEffectiveUnitQuestionSettings(undefined, profile);
+    const effective = getEffectiveCollectionQuestionSettings(undefined, profile);
     expect(effective.enabledFormats).toContain("selectBlank");
     expect(effective.enabledFormats).not.toContain("characterTracing");
 
-    const normalized = normalizeUnitQuestionSettings({
+    const normalized = normalizeCollectionQuestionSettings({
       enabledFormats: ["singleChoice", "translation", "unknown", "singleChoice"],
       customTemplates: [{ id: "template-1", name: "  My prompt  ", baseFormat: "singleChoice", guidance: "  Keep it short.  " }],
     });
     expect(normalized.enabledFormats).toEqual(["singleChoice", "translation"]);
     expect(normalized.customTemplates[0]).toMatchObject({ name: "My prompt", guidance: "Keep it short.", enabled: true });
-    expect(normalizeUnitQuestionSettings({
+    expect(normalizeCollectionQuestionSettings({
       enabledFormats: ["characterTracing", "singleChoice"],
       customTemplates: [{ id: "legacy-tracing", name: "Legacy", baseFormat: "characterTracing", guidance: "Trace." }],
     })).toMatchObject({
@@ -361,7 +361,7 @@ describe("unit question settings", () => {
   });
 
   it("rejects blueprint combinations that cannot leave five distinct lesson formats", () => {
-    const settings = normalizeUnitQuestionSettings({
+    const settings = normalizeCollectionQuestionSettings({
       enabledFormats: ["singleChoice", "trueFalse", "fillBlank", "translation", "shortAnswer"],
       customTemplates: Array.from({ length: 6 }, (_, index) => ({
         id: `template-${index}`,
@@ -371,16 +371,17 @@ describe("unit question settings", () => {
         enabled: true,
       })),
     });
-    expect(validateUnitQuestionSettings(settings, { ...DEFAULT_LEARNING_PROFILE, lessonQuestionCount: 8 })).toContain(
+    expect(validateCollectionQuestionSettings(settings, { ...DEFAULT_LEARNING_PROFILE, lessonQuestionCount: 8 })).toContain(
       "Enabled blueprints leave too few lesson slots to use five distinct formats.",
     );
   });
 
-  it("copies trusted presentation settings into schema-v2 lessons", () => {
-    const settings = normalizeUnitQuestionSettings({
+  it("uses trusted format defaults instead of persisted presentation overrides", () => {
+    const settings = normalizeCollectionQuestionSettings({
       enabledFormats: QUESTION_FORMATS,
       formatPresentation: { singleChoice: { readQuestion: true, readAnswers: true, wordTooltips: false } },
     });
+    expect("formatPresentation" in settings).toBe(false);
     const lesson: Lesson = {
       schemaVersion: 1,
       id: "decorate-lesson",
@@ -399,7 +400,7 @@ describe("unit question settings", () => {
     };
     const decorated = decorateLessonPresentation(lesson, settings, DEFAULT_LEARNING_PROFILE);
     expect(decorated.schemaVersion).toBe(2);
-    expect(decorated.questions[0].presentation).toEqual({ readQuestion: true, readAnswers: true, wordTooltips: false });
+    expect(decorated.questions[0].presentation).toEqual({ readQuestion: false, readAnswers: false, wordTooltips: true });
   });
 });
 

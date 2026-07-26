@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useReducer, useState } from "react";
 import { AppearanceModal } from "./components/AppearanceModal";
 import { CollectionRail } from "./components/CollectionRail";
+import { CollectionQuestionSettingsModal } from "./components/CollectionQuestionSettingsModal";
 import { ContentWorkspace } from "./components/ContentWorkspace";
 import { EntityEditorModal, type EditorState } from "./components/EntityEditorModal";
 import { OverviewPanel } from "./components/OverviewPanel";
@@ -9,7 +10,6 @@ import { LettersWorkspace } from "./components/LettersWorkspace";
 import { pruneStoredLessonsFromStorage } from "./integration/learningStorage";
 import { ThemeCustomizerDrawer } from "./components/ThemeCustomizerDrawer";
 import { WorkspaceSidebar } from "./components/WorkspaceSidebar";
-import { UnitSettingsModal, type UnitSettingsRequest } from "./components/UnitSettingsModal";
 import { normalizeLearningProfile } from "./learning/profile";
 import { getSupportedLanguage } from "./learning/languages";
 import { loadWorkspace, makeId, saveWorkspace, workspaceReducer } from "./store";
@@ -29,7 +29,7 @@ export function App() {
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const [sidebarWidthDraft, setSidebarWidthDraft] = useState<number | null>(null);
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>("library");
-  const [unitSettingsRequest, setUnitSettingsRequest] = useState<UnitSettingsRequest | null>(null);
+  const [questionSettingsCollection, setQuestionSettingsCollection] = useState<Collection | null>(null);
 
   useEffect(() => {
     saveWorkspace(state, window.localStorage);
@@ -40,19 +40,23 @@ export function App() {
   }, [state.unitOrder]);
 
   useEffect(() => {
-    if (!mobileNavigationOpen || editor || unitSettingsRequest || appearanceDraft || themeDraft || pendingAppearanceDraft || pendingThemeDraft) return;
+    if (!mobileNavigationOpen || editor || questionSettingsCollection || appearanceDraft || themeDraft || pendingAppearanceDraft || pendingThemeDraft) return;
     function onEscape(event: KeyboardEvent) {
       if (event.key === "Escape") setMobileNavigationOpen(false);
     }
     window.addEventListener("keydown", onEscape);
     return () => window.removeEventListener("keydown", onEscape);
-  }, [appearanceDraft, editor, mobileNavigationOpen, pendingAppearanceDraft, pendingThemeDraft, themeDraft, unitSettingsRequest]);
+  }, [appearanceDraft, editor, mobileNavigationOpen, pendingAppearanceDraft, pendingThemeDraft, questionSettingsCollection, themeDraft]);
 
   const collections = useMemo(
     () => state.collectionOrder.map((id) => state.collections[id]).filter(Boolean),
     [state.collectionOrder, state.collections],
   );
   const activeCollection = state.collections[state.activeCollectionId] ?? collections[0];
+  const activeLearningProfile = useMemo(
+    () => normalizeLearningProfile(activeCollection?.learningProfile),
+    [activeCollection?.learningProfile],
+  );
   const units = useMemo(
     () => state.unitOrder.map((id) => state.units[id]).filter((unit) => unit?.collectionId === activeCollection?.id),
     [activeCollection?.id, state.unitOrder, state.units],
@@ -118,6 +122,7 @@ export function App() {
           targetLanguage: fields.targetLanguage,
           sourceLanguage: getSupportedLanguage(fields.sourceLanguage)?.name ?? currentProfile.sourceLanguage,
         }),
+        questionSettings: editor.value?.questionSettings,
       };
       dispatch({ type: editor.value ? "updateCollection" : "createCollection", collection });
     } else if (editor.type === "unit") {
@@ -127,7 +132,6 @@ export function App() {
         name: fields.name.trim(),
         description: fields.description.trim(),
         instructionOverride: fields.instructionOverride.trim(),
-        questionSettings: editor.value?.questionSettings,
       };
       dispatch({ type: editor.value ? "updateUnit" : "createUnit", unit });
     } else if (editor.type === "document") {
@@ -243,8 +247,11 @@ export function App() {
           closeMobileNavigation();
         }}
         onCreateUnit={() => openEditor({ type: "unit", collectionId: activeCollection.id })}
-        onEditUnit={(unit) => setUnitSettingsRequest({ unit, initialTab: "general" })}
-        onOpenUnitQuestions={(unit) => setUnitSettingsRequest({ unit, initialTab: "questions" })}
+        onEditUnit={(unit) => openEditor({ type: "unit", value: unit, collectionId: unit.collectionId })}
+        onOpenCollectionQuestions={() => {
+          setQuestionSettingsCollection(activeCollection);
+          closeMobileNavigation();
+        }}
         onDeleteUnit={(unit) => confirmDelete(cleanUnitName(unit.name), () => dispatch({ type: "deleteUnit", id: unit.id }))}
         onMoveUnit={(id, targetId, placement) => dispatch({ type: "moveUnit", id, targetId, placement })}
         onOpenAppearance={() => setAppearanceDraft(cloneTheme(state.theme))}
@@ -311,13 +318,19 @@ export function App() {
         onSubmit={submitEditor}
         onAccentPreview={setCollectionAccentPreview}
       />
-      <UnitSettingsModal
-        request={unitSettingsRequest}
-        profile={normalizeLearningProfile(activeCollection.learningProfile)}
-        onClose={() => setUnitSettingsRequest(null)}
-        onSave={(unit) => {
-          dispatch({ type: "updateUnit", unit });
-          setUnitSettingsRequest(null);
+      <CollectionQuestionSettingsModal
+        collection={questionSettingsCollection}
+        profile={activeLearningProfile}
+        onClose={() => setQuestionSettingsCollection(null)}
+        onSave={(questionSettings) => {
+          if (!questionSettingsCollection) return;
+          const currentCollection = state.collections[questionSettingsCollection.id];
+          if (!currentCollection) return;
+          dispatch({
+            type: "updateCollection",
+            collection: { ...currentCollection, questionSettings },
+          });
+          setQuestionSettingsCollection(null);
         }}
       />
       <AppearanceModal

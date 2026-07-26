@@ -43,7 +43,7 @@ interface WorkspaceSidebarProps {
   onOpenLessons: (unitId: string) => void;
   onCreateUnit: () => void;
   onEditUnit: (unit: Unit) => void;
-  onOpenUnitQuestions: (unit: Unit) => void;
+  onOpenCollectionQuestions: () => void;
   onDeleteUnit: (unit: Unit) => void;
   onMoveUnit: (id: string, targetId: string, placement: "before" | "after") => void;
   onOpenAppearance: () => void;
@@ -86,7 +86,7 @@ export function WorkspaceSidebar({
   onOpenLessons,
   onCreateUnit,
   onEditUnit,
-  onOpenUnitQuestions,
+  onOpenCollectionQuestions,
   onDeleteUnit,
   onMoveUnit,
   onOpenAppearance,
@@ -279,6 +279,14 @@ export function WorkspaceSidebar({
       <div className="sidebar-heading">
         <span>{collection.name}</span>
         <ChevronDown size={16} />
+        <button
+          className="collection-question-settings-button"
+          type="button"
+          aria-label={`Open question settings for ${collection.name}`}
+          onClick={onOpenCollectionQuestions}
+        >
+          <Settings size={15} />
+        </button>
         <button className="mobile-sidebar-close" type="button" onClick={onCloseMobile} aria-label="Close navigation">
           <X size={18} />
         </button>
@@ -372,17 +380,6 @@ export function WorkspaceSidebar({
                       onPointerCancel={cancelUnitDrag}
                     >
                       <span>{cleanName}</span>
-                    </button>
-                    <button
-                      className="unit-settings-placeholder"
-                      type="button"
-                      aria-label={`Open question settings for ${cleanName}`}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onOpenUnitQuestions(unit);
-                      }}
-                    >
-                      <Settings size={14} />
                     </button>
                     <button
                       className="unit-overflow-button"

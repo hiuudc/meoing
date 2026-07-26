@@ -9,7 +9,7 @@ import type {
   WorkspaceState,
 } from "./types";
 import { normalizeLearningProfile } from "./learning/profile";
-import { normalizeUnitQuestionSettings } from "./learning/questionSettings";
+import { normalizeCollectionQuestionSettings } from "./learning/questionSettings";
 
 export const STORAGE_KEY = "meoi.workspace.v1";
 export const STORAGE_VERSION = 1;
@@ -392,24 +392,54 @@ export function loadWorkspace(storage?: Pick<Storage, "getItem">): WorkspaceStat
     if (!saved) return createSeedState();
     const parsed = JSON.parse(saved) as WorkspaceState;
     if (parsed.version !== STORAGE_VERSION) return createSeedState();
+    const parsedUnits = (parsed.units ?? {}) as Record<string, Unit & { questionSettings?: unknown }>;
+    const legacyQuestionSettingsByCollection = new Map<string, unknown>();
+    const orderedUnitIds = [
+      ...(Array.isArray(parsed.unitOrder) ? parsed.unitOrder : []),
+      ...Object.keys(parsedUnits),
+    ];
+    orderedUnitIds.forEach((unitId) => {
+      const unit = parsedUnits[unitId];
+      if (
+        !unit
+        || legacyQuestionSettingsByCollection.has(unit.collectionId)
+        || !unit.questionSettings
+        || typeof unit.questionSettings !== "object"
+        || Array.isArray(unit.questionSettings)
+      ) return;
+      legacyQuestionSettingsByCollection.set(unit.collectionId, unit.questionSettings);
+    });
     const normalizedCollections = Object.fromEntries(
       Object.entries(parsed.collections ?? {}).map(([id, collection]) => [
         id,
-        { ...collection, learningProfile: normalizeLearningProfile(collection?.learningProfile) },
+        (() => {
+          const collectionQuestionSettings = collection?.questionSettings;
+          const rawQuestionSettings = collectionQuestionSettings
+            && typeof collectionQuestionSettings === "object"
+            && !Array.isArray(collectionQuestionSettings)
+            ? collectionQuestionSettings
+            : legacyQuestionSettingsByCollection.get(id);
+          return {
+            ...collection,
+            learningProfile: normalizeLearningProfile(collection?.learningProfile),
+            ...(rawQuestionSettings && typeof rawQuestionSettings === "object" && !Array.isArray(rawQuestionSettings)
+              ? { questionSettings: normalizeCollectionQuestionSettings(rawQuestionSettings) }
+              : {}),
+          };
+        })(),
       ]),
     );
     const normalizedUnits = Object.fromEntries(
-      Object.entries(parsed.units ?? {}).map(([id, unit]) => [
+      Object.entries(parsedUnits).map(([id, unit]) => [
         id,
         (() => {
-          const { instructionOverride, questionSettings, ...rest } = unit ?? {};
-          return {
+          const { instructionOverride, ...rest } = unit ?? {};
+          const normalizedUnit = {
             ...rest,
             ...(typeof instructionOverride === "string" ? { instructionOverride } : {}),
-            ...(questionSettings && typeof questionSettings === "object" && !Array.isArray(questionSettings)
-              ? { questionSettings: normalizeUnitQuestionSettings(questionSettings) }
-              : {}),
           };
+          delete normalizedUnit.questionSettings;
+          return normalizedUnit;
         })(),
       ]),
     );

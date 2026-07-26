@@ -2,12 +2,12 @@ import { QUESTION_FORMAT_REGISTRY } from "./questionRegistry";
 import {
   LESSON_QUESTION_FORMATS,
   QUESTION_FORMATS,
+  type CollectionQuestionSettings,
   type CustomQuestionTemplate,
   type LearningProfile,
   type Lesson,
   type QuestionFormat,
   type QuestionPresentationSettings,
-  type UnitQuestionSettings,
 } from "./types";
 
 export const MAX_CUSTOM_QUESTION_TEMPLATES = 20;
@@ -76,18 +76,6 @@ export function defaultPresentationForFormat(format: QuestionFormat): QuestionPr
   };
 }
 
-export function normalizeQuestionPresentation(
-  value: unknown,
-  fallback: QuestionPresentationSettings = { readQuestion: false, readAnswers: false, wordTooltips: true },
-): QuestionPresentationSettings {
-  const source = isRecord(value) ? value : {};
-  return {
-    readQuestion: typeof source.readQuestion === "boolean" ? source.readQuestion : fallback.readQuestion,
-    readAnswers: typeof source.readAnswers === "boolean" ? source.readAnswers : fallback.readAnswers,
-    wordTooltips: typeof source.wordTooltips === "boolean" ? source.wordTooltips : fallback.wordTooltips,
-  };
-}
-
 function normalizeTemplate(value: unknown, index: number, usedIds: Set<string>): CustomQuestionTemplate | null {
   if (!isRecord(value)) return null;
   const rawId = typeof value.id === "string" ? value.id.trim().slice(0, 120) : "";
@@ -111,23 +99,13 @@ function normalizeTemplate(value: unknown, index: number, usedIds: Set<string>):
     baseFormat,
     guidance,
     enabled: typeof value.enabled === "boolean" ? value.enabled : true,
-    presentation: normalizeQuestionPresentation(value.presentation, defaultPresentationForFormat(baseFormat)),
   };
 }
 
-export function normalizeUnitQuestionSettings(value: unknown): UnitQuestionSettings {
+export function normalizeCollectionQuestionSettings(value: unknown): CollectionQuestionSettings {
   const source = isRecord(value) ? value : {};
   const rawFormats = Array.isArray(source.enabledFormats) ? source.enabledFormats : [];
   const enabledFormats = [...new Set(rawFormats.filter(isLessonQuestionFormat))];
-  const formatPresentationSource = isRecord(source.formatPresentation) ? source.formatPresentation : {};
-  const formatPresentation: UnitQuestionSettings["formatPresentation"] = {};
-
-  QUESTION_FORMATS.forEach((format) => {
-    formatPresentation[format] = normalizeQuestionPresentation(
-      formatPresentationSource[format],
-      defaultPresentationForFormat(format),
-    );
-  });
 
   const usedIds = new Set<string>();
   const customTemplates = (Array.isArray(source.customTemplates) ? source.customTemplates : [])
@@ -137,7 +115,6 @@ export function normalizeUnitQuestionSettings(value: unknown): UnitQuestionSetti
 
   return {
     enabledFormats: enabledFormats.length ? enabledFormats : [...LESSON_QUESTION_FORMATS],
-    formatPresentation,
     customTemplates,
     characterTracing: {
       requireStrokeOrder: !isRecord(source.characterTracing)
@@ -148,11 +125,11 @@ export function normalizeUnitQuestionSettings(value: unknown): UnitQuestionSetti
   };
 }
 
-export function getEffectiveUnitQuestionSettings(
-  settings: UnitQuestionSettings | undefined,
+export function getEffectiveCollectionQuestionSettings(
+  settings: CollectionQuestionSettings | undefined,
   profile: LearningProfile,
-): UnitQuestionSettings {
-  const normalized = settings ? normalizeUnitQuestionSettings(settings) : normalizeUnitQuestionSettings({
+): CollectionQuestionSettings {
+  const normalized = settings ? normalizeCollectionQuestionSettings(settings) : normalizeCollectionQuestionSettings({
     enabledFormats: [...new Set([
       ...profile.preferredFormats,
       "selectBlank" as const,
@@ -170,10 +147,8 @@ export function getEffectiveUnitQuestionSettings(
       (speakingAllowed || !isSpeakingQuestionFormat(format))
       && supportsQuestionFormatForLanguage(format, profile.targetLanguage)
     )),
-    formatPresentation: normalized.formatPresentation,
     customTemplates: normalized.customTemplates.map((template) => ({
       ...template,
-      presentation: { ...template.presentation },
       enabled: template.enabled
         && isLessonQuestionFormat(template.baseFormat)
         && (speakingAllowed || !isSpeakingQuestionFormat(template.baseFormat))
@@ -183,13 +158,13 @@ export function getEffectiveUnitQuestionSettings(
   };
 }
 
-export function validateUnitQuestionSettings(
-  settings: UnitQuestionSettings,
+export function validateCollectionQuestionSettings(
+  settings: CollectionQuestionSettings,
   profile: LearningProfile,
   questionCount = profile.lessonQuestionCount,
 ): string[] {
   const errors: string[] = [];
-  const effective = getEffectiveUnitQuestionSettings(settings, profile);
+  const effective = getEffectiveCollectionQuestionSettings(settings, profile);
   const enabledFormats = effective.enabledFormats;
   const enabledFormatSet = new Set(enabledFormats);
 
@@ -201,7 +176,7 @@ export function validateUnitQuestionSettings(
     errors.push("Enable at least one AI-graded format.");
   }
   if (settings.customTemplates.length > MAX_CUSTOM_QUESTION_TEMPLATES) {
-    errors.push(`A unit can contain at most ${MAX_CUSTOM_QUESTION_TEMPLATES} custom blueprints.`);
+    errors.push(`A collection can contain at most ${MAX_CUSTOM_QUESTION_TEMPLATES} custom blueprints.`);
   }
 
   const templateIds = new Set<string>();
@@ -244,10 +219,10 @@ export interface QuestionGenerationConstraints {
 }
 
 export function buildQuestionGenerationConstraints(
-  settings: UnitQuestionSettings | undefined,
+  settings: CollectionQuestionSettings | undefined,
   profile: LearningProfile,
 ): QuestionGenerationConstraints {
-  const effective = getEffectiveUnitQuestionSettings(settings, profile);
+  const effective = getEffectiveCollectionQuestionSettings(settings, profile);
   return {
     allowedFormats: [...effective.enabledFormats],
     requiredTemplates: effective.customTemplates
@@ -258,22 +233,17 @@ export function buildQuestionGenerationConstraints(
 
 export function decorateLessonPresentation(
   lesson: Lesson,
-  settings: UnitQuestionSettings | undefined,
+  settings: CollectionQuestionSettings | undefined,
   profile: LearningProfile,
 ): Lesson {
-  const effective = getEffectiveUnitQuestionSettings(settings, profile);
-  const templates = new Map(effective.customTemplates.map((template) => [template.id, template]));
+  const effective = getEffectiveCollectionQuestionSettings(settings, profile);
   const decorateQuestion = (question: Lesson["questions"][number]) => {
-    const template = question.templateId ? templates.get(question.templateId) : undefined;
-    const presentationSettings = template?.baseFormat === question.type
-      ? template.presentation
-      : effective.formatPresentation[question.type] ?? defaultPresentationForFormat(question.type);
     return {
       ...question,
       ...(question.type === "characterTracing"
         ? { requireStrokeOrder: effective.characterTracing.requireStrokeOrder }
         : {}),
-      presentation: { ...presentationSettings },
+      presentation: defaultPresentationForFormat(question.type),
     };
   };
   return {

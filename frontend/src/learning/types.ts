@@ -47,12 +47,10 @@ export interface CustomQuestionTemplate {
   baseFormat: QuestionFormat;
   guidance: string;
   enabled: boolean;
-  presentation: QuestionPresentationSettings;
 }
 
-export interface UnitQuestionSettings {
+export interface CollectionQuestionSettings {
   enabledFormats: QuestionFormat[];
-  formatPresentation: Partial<Record<QuestionFormat, QuestionPresentationSettings>>;
   customTemplates: CustomQuestionTemplate[];
   characterTracing: CharacterTracingSettings;
 }

@@ -24,8 +24,8 @@ import { normalizeLearningProfile } from "../learning/profile";
 import {
   buildQuestionGenerationConstraints,
   decorateLessonPresentation,
-  getEffectiveUnitQuestionSettings,
-  validateUnitQuestionSettings,
+  getEffectiveCollectionQuestionSettings,
+  validateCollectionQuestionSettings,
 } from "../learning/questionSettings";
 import { parseEvaluation, parseLesson } from "../learning/schema";
 import type {
@@ -372,7 +372,7 @@ export function LearningWorkspace({
     const targetLanguage = profile.targetLanguage.trim();
     if (!targetLanguage) throw new Error("Enter a target language in the learning profile.");
     if (targetLanguage.length > 100) throw new Error("The target language name must be 100 characters or fewer.");
-    const constraints = buildQuestionGenerationConstraints(unit.questionSettings, profile);
+    const constraints = buildQuestionGenerationConstraints(collection.questionSettings, profile);
     return {
       unitId: unit.id,
       targetLanguage,
@@ -422,12 +422,12 @@ export function LearningWorkspace({
 
   async function createLesson() {
     if (!unit) return;
-    const questionSettingsErrors = validateUnitQuestionSettings(
-      getEffectiveUnitQuestionSettings(unit.questionSettings, profile),
+    const questionSettingsErrors = validateCollectionQuestionSettings(
+      getEffectiveCollectionQuestionSettings(collection.questionSettings, profile),
       profile,
     );
     if (questionSettingsErrors.length) {
-      setError(`Update this unit's question settings before generating a lesson: ${questionSettingsErrors.join(" ")}`);
+      setError(`Update this collection's question settings before generating a lesson: ${questionSettingsErrors.join(" ")}`);
       return;
     }
     if (youtubeUrl && !embedUrl) {
@@ -466,7 +466,7 @@ export function LearningWorkspace({
       if (result.outcome !== "completed" || !result.result?.lesson) throw new Error("ChatGPT did not return a valid lesson.");
       const parsedLesson = parseLesson(result.result.lesson);
       if (parsedLesson.unitId !== unit.id) throw new Error("The returned lesson does not match the active unit.");
-      const preparedLesson = decorateLessonPresentation(parsedLesson, unit.questionSettings, profile);
+      const preparedLesson = decorateLessonPresentation(parsedLesson, collection.questionSettings, profile);
       const nextCache = putStoredLesson(learningCacheRef.current, preparedLesson);
       const stored = commitLearningCache(nextCache);
       startLesson(

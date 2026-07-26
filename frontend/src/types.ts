@@ -1,4 +1,4 @@
-import type { LearningProfile, UnitQuestionSettings } from "./learning/types";
+import type { CollectionQuestionSettings, LearningProfile } from "./learning/types";
 
 export type ContentKind = "document" | "word" | "phrase" | "sentence";
 export type StudyKind = Exclude<ContentKind, "document">;
@@ -27,6 +27,7 @@ export interface Collection {
   icon: string;
   accent: string;
   learningProfile?: LearningProfile;
+  questionSettings?: CollectionQuestionSettings;
 }
 
 export interface Unit {
@@ -35,7 +36,6 @@ export interface Unit {
   name: string;
   description: string;
   instructionOverride?: string;
-  questionSettings?: UnitQuestionSettings;
 }
 
 export interface Document {
