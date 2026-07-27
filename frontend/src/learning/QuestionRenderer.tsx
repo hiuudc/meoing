@@ -14,7 +14,6 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
-  type CSSProperties,
 } from "react";
 import { createPortal } from "react-dom";
 import { CharacterTracingResponse } from "./CharacterTracingResponse";
@@ -44,9 +43,13 @@ interface QuestionRendererProps {
   onComplete?: (answer: QuestionAnswer) => void;
   renderText?: (text: string, interactive?: boolean) => ReactNode;
   answerInputMode?: AnswerInputMode;
+  typeaheadResetMs?: number;
   tracingOptions?: {
+    requireStrokeOrder?: boolean;
     strokeTolerance?: number;
     showStrokeGuide?: boolean;
+    onOpenSettings?: () => void;
+    resetRevision?: number;
   };
 }
 
@@ -155,6 +158,7 @@ function NumericChoiceResponse({
 }) {
   const numberBufferRef = useRef("");
   const numberTimerRef = useRef<number | null>(null);
+  const fieldsetRef = useRef<HTMLFieldSetElement>(null);
 
   useEffect(() => () => {
     if (numberTimerRef.current !== null) window.clearTimeout(numberTimerRef.current);
@@ -172,35 +176,57 @@ function NumericChoiceResponse({
       : [option.id]);
   }
 
+  function focusGroup() {
+    window.requestAnimationFrame(() => {
+      fieldsetRef.current?.focus({ preventScroll: true });
+    });
+  }
+
   function handleNumberKey(event: ReactKeyboardEvent<HTMLFieldSetElement>) {
-    if (disabled || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+    if (event.defaultPrevented || disabled || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
     const digit = event.code.startsWith("Numpad") ? event.code.slice(6) : event.key;
     if (!/^\d$/.test(digit)) return;
     event.preventDefault();
     if (numberTimerRef.current !== null) window.clearTimeout(numberTimerRef.current);
+    if (options.length <= 9) {
+      numberBufferRef.current = "";
+      numberTimerRef.current = null;
+      const numeric = Number(digit);
+      if (numeric >= 1 && numeric <= options.length) {
+        activate(numeric);
+        focusGroup();
+      }
+      return;
+    }
     const nextBuffer = `${numberBufferRef.current}${digit}`.replace(/^0+/, "");
     numberBufferRef.current = nextBuffer;
     const numeric = Number(nextBuffer);
-    const hasLongerCandidate = nextBuffer.length === 1 && options.length >= 10 && numeric === 1;
+    const hasLongerCandidate = nextBuffer.length === 1
+      && options.some((_, index) => String(index + 1).length > 1 && String(index + 1).startsWith(nextBuffer));
     if (numeric >= 1 && numeric <= options.length && !hasLongerCandidate) {
       numberBufferRef.current = "";
+      numberTimerRef.current = null;
       activate(numeric);
+      focusGroup();
       return;
     }
     numberTimerRef.current = window.setTimeout(() => {
       const pending = Number(numberBufferRef.current);
       numberBufferRef.current = "";
       numberTimerRef.current = null;
-      if (pending >= 1 && pending <= options.length) activate(pending);
+      if (pending >= 1 && pending <= options.length) {
+        activate(pending);
+        focusGroup();
+      }
     }, 420);
   }
 
   return (
     <fieldset
-      className={`choice-list${inline ? " choice-list-inline" : ""}`}
+      ref={fieldsetRef}
+      className={`choice-list is-numbered${inline ? " choice-list-inline" : ""}`}
       disabled={disabled}
-      tabIndex={0}
-      data-question-primary-focus
+      tabIndex={-1}
       onKeyDownCapture={handleNumberKey}
     >
       <legend className={legendClassName}>{legend}</legend>
@@ -214,6 +240,7 @@ function NumericChoiceResponse({
               value={option.id}
               checked={selected}
               onChange={() => activate(index + 1)}
+              data-lesson-hotkey-index={index + 1}
             />
             <span className="choice-index" aria-hidden="true">{index + 1}</span>
             <span>{renderText(option.label, Boolean(evaluated))}</span>
@@ -261,7 +288,7 @@ interface DragInsertion {
 }
 
 const DRAG_DROP_MARGIN = 32;
-const TYPEAHEAD_RESET_MS = 1_500;
+const DEFAULT_TYPEAHEAD_RESET_MS = 1_500;
 
 function pointInRect(rect: DOMRect | undefined, x: number, y: number, margin = 0): boolean {
   return Boolean(rect
@@ -288,6 +315,7 @@ export function OrderedAnswerComposer({
   renderText,
   renderOption,
   maxSelections,
+  typeaheadResetMs = DEFAULT_TYPEAHEAD_RESET_MS,
 }: {
   options: ChoiceOption[];
   value: string[];
@@ -298,6 +326,7 @@ export function OrderedAnswerComposer({
   renderText: TextRenderer;
   renderOption?: (option: ChoiceOption, interactive: boolean) => ReactNode;
   maxSelections?: number;
+  typeaheadResetMs?: number;
 }) {
   const labels = useMemo(() => new Map(options.map((option) => [option.id, option.label])), [options]);
   const optionsById = useMemo(() => new Map(options.map((option) => [option.id, option])), [options]);
@@ -336,14 +365,6 @@ export function OrderedAnswerComposer({
     setTypeahead("");
   }
 
-  function scheduleTypeaheadReset() {
-    if (typeaheadTimerRef.current !== null) window.clearTimeout(typeaheadTimerRef.current);
-    typeaheadTimerRef.current = window.setTimeout(() => {
-      typeaheadTimerRef.current = null;
-      setTypeahead("");
-    }, TYPEAHEAD_RESET_MS);
-  }
-
   function addToken(id: string, label: string, targetIndex = value.length) {
     if (value.includes(id) || (maxSelections !== undefined && value.length >= maxSelections)) return;
     const next = [...value];
@@ -362,9 +383,18 @@ export function OrderedAnswerComposer({
     focusComposer();
   }
 
-  useEffect(() => () => {
+  useEffect(() => {
+    if (!typeahead) return undefined;
     if (typeaheadTimerRef.current !== null) window.clearTimeout(typeaheadTimerRef.current);
-  }, []);
+    typeaheadTimerRef.current = window.setTimeout(() => {
+      typeaheadTimerRef.current = null;
+      setTypeahead("");
+    }, typeaheadResetMs);
+    return () => {
+      if (typeaheadTimerRef.current !== null) window.clearTimeout(typeaheadTimerRef.current);
+      typeaheadTimerRef.current = null;
+    };
+  }, [typeahead, typeaheadResetMs]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => composerRef.current?.focus({ preventScroll: true }));
@@ -539,8 +569,7 @@ export function OrderedAnswerComposer({
       if (typeahead) {
         const next = typeahead.slice(0, -1);
         setTypeahead(next);
-        if (next) scheduleTypeaheadReset();
-        else clearTypeahead();
+        if (!next) clearTypeahead();
         announce(next ? `Word bank prefix ${next}.` : "Word bank filter cleared.");
       } else if (value.length) {
         removeToken(value[value.length - 1]);
@@ -561,7 +590,6 @@ export function OrderedAnswerComposer({
       addToken(matches[0].id, matches[0].label);
       return;
     }
-    scheduleTypeaheadReset();
     announce(matches.length
       ? `${matches.length} words match ${next}: ${matches.map((option) => option.label).join(", ")}.`
       : `No available word matches ${next}.`);
@@ -692,6 +720,7 @@ function AnswerBankResponse({
   evaluated,
   onAnswerActivate,
   renderText,
+  typeaheadResetMs,
 }: {
   bank?: AnswerBank;
   value: string;
@@ -703,6 +732,7 @@ function AnswerBankResponse({
   evaluated?: boolean;
   onAnswerActivate?: (text: string) => void;
   renderText: TextRenderer;
+  typeaheadResetMs?: number;
 }) {
   const mode = inputMode ?? bank?.defaultMode ?? "keyboard";
   const [keyboardDraft, setKeyboardDraft] = useState(value);
@@ -745,6 +775,7 @@ function AnswerBankResponse({
           disabled={disabled}
           evaluated={evaluated}
           renderText={renderText}
+          typeaheadResetMs={typeaheadResetMs}
         />
       )}
     </div>
@@ -767,6 +798,7 @@ function InlineClozeResponse({
   onAnswerActivate,
   onSpeakTarget,
   renderText,
+  typeaheadResetMs = DEFAULT_TYPEAHEAD_RESET_MS,
 }: {
   question: InlineClozeQuestion;
   answer: QuestionAnswer;
@@ -777,6 +809,7 @@ function InlineClozeResponse({
   onAnswerActivate?: (text: string) => void;
   onSpeakTarget?: (text: string) => void;
   renderText: TextRenderer;
+  typeaheadResetMs?: number;
 }) {
   const blanks = useMemo(
     () => question.type === "fillBlank"
@@ -817,6 +850,7 @@ function InlineClozeResponse({
     y: number;
   } | null>(null);
   const [announcement, setAnnouncement] = useState("");
+  const responseRef = useRef<HTMLDivElement>(null);
   const blankRefs = useRef(new Map<string, HTMLElement>());
   const bankRef = useRef<HTMLDivElement>(null);
   const suppressClickRef = useRef("");
@@ -840,27 +874,32 @@ function InlineClozeResponse({
     onChange(question.type === "fillBlank" ? nextValues[blanks[0].id] : nextValues);
   }, [assignments, bank, blanks, keyboardValues, labels, mode, onChange, question.type]);
 
-  useEffect(() => () => {
+  useEffect(() => {
+    if (!typeahead) return undefined;
     if (typeaheadTimerRef.current !== null) window.clearTimeout(typeaheadTimerRef.current);
-  }, []);
+    typeaheadTimerRef.current = window.setTimeout(() => {
+      typeaheadTimerRef.current = null;
+      setTypeahead("");
+    }, typeaheadResetMs);
+    return () => {
+      if (typeaheadTimerRef.current !== null) window.clearTimeout(typeaheadTimerRef.current);
+      typeaheadTimerRef.current = null;
+    };
+  }, [typeahead, typeaheadResetMs]);
 
   function announce(message: string) {
     setAnnouncement("");
     window.requestAnimationFrame(() => setAnnouncement(message));
   }
 
+  function focusResponse() {
+    window.requestAnimationFrame(() => responseRef.current?.focus({ preventScroll: true }));
+  }
+
   function clearTypeahead() {
     if (typeaheadTimerRef.current !== null) window.clearTimeout(typeaheadTimerRef.current);
     typeaheadTimerRef.current = null;
     setTypeahead("");
-  }
-
-  function scheduleTypeaheadReset() {
-    if (typeaheadTimerRef.current !== null) window.clearTimeout(typeaheadTimerRef.current);
-    typeaheadTimerRef.current = window.setTimeout(() => {
-      typeaheadTimerRef.current = null;
-      setTypeahead("");
-    }, TYPEAHEAD_RESET_MS);
   }
 
   function nextEmptyBlank(currentId: string, nextAssignments: Record<string, string>): string {
@@ -894,6 +933,7 @@ function InlineClozeResponse({
     const label = labels.get(tokenId) ?? tokenId;
     if (speakToken && !sourceBlankId) onAnswerActivate?.(label);
     announce(`${label} placed in ${blankId}.`);
+    focusResponse();
   }
 
   function removeToken(blankId: string) {
@@ -904,6 +944,7 @@ function InlineClozeResponse({
     publishAssignments(next);
     setActiveBlankId(blankId);
     announce(`${labels.get(tokenId) ?? tokenId} returned to the word bank.`);
+    focusResponse();
   }
 
   function startDrag(
@@ -981,8 +1022,7 @@ function InlineClozeResponse({
       if (typeahead) {
         const next = typeahead.slice(0, -1);
         setTypeahead(next);
-        if (next) scheduleTypeaheadReset();
-        else clearTypeahead();
+        if (!next) clearTypeahead();
         announce(next ? `Word bank prefix ${next}.` : "Word bank filter cleared.");
         return;
       }
@@ -1006,36 +1046,28 @@ function InlineClozeResponse({
       assignToken(matches[0].id, targetBlank, true);
       return;
     }
-    scheduleTypeaheadReset();
     announce(matches.length
       ? `${matches.length} words match ${next}: ${matches.map((token) => token.label).join(", ")}.`
       : `No available word matches ${next}.`);
   }
 
   function renderBlank(blankId: string, index: number) {
-    const blank = blanks.find((candidate) => candidate.id === blankId);
     const currentValue = mode === "keyboard" || !bank
       ? keyboardValues[blankId] ?? ""
       : labels.get(assignments[blankId]) ?? "";
-    const suggestedLength = Math.max(
-      currentValue.length,
-      ...(blank?.acceptedAnswers.map((accepted) => accepted.length) ?? [0]),
-    );
-    const blankStyle = {
-      width: `${Math.max(4, Math.min(18, suggestedLength + 2))}ch`,
-    } as CSSProperties;
+    const measurementText = currentValue;
     if (mode === "keyboard" || !bank) {
       return (
         <label
           className={`multi-cloze-inline-blank${activeBlankId === blankId ? " is-active" : ""}`}
           key={`${blankId}-${index}`}
-          style={blankStyle}
           ref={(element) => {
             if (element) blankRefs.current.set(blankId, element);
             else blankRefs.current.delete(blankId);
           }}
         >
           <span className="sr-only">Blank {index + 1}</span>
+          <span className="multi-cloze-blank-measure" aria-hidden="true">{measurementText}</span>
           <input
             data-question-answer-input
             data-multi-cloze-input={blankId}
@@ -1058,7 +1090,6 @@ function InlineClozeResponse({
       <span
         className={`multi-cloze-inline-blank is-bank${activeBlankId === blankId ? " is-active" : ""}${tokenId ? " is-filled" : ""}`}
         key={`${blankId}-${index}`}
-        style={blankStyle}
         ref={(element) => {
           if (element) blankRefs.current.set(blankId, element);
           else blankRefs.current.delete(blankId);
@@ -1099,6 +1130,8 @@ function InlineClozeResponse({
   return (
     <div
       className="multi-cloze-response"
+      ref={responseRef}
+      tabIndex={-1}
       onKeyDownCapture={handleTypeahead}
       data-typeahead-active={typeahead ? "true" : undefined}
     >
@@ -1239,7 +1272,9 @@ export function PairMatchingResponse({
       onChange(next);
       setSelectedLeft("");
       setSelectedRight("");
-      window.requestAnimationFrame(() => groupRef.current?.focus({ preventScroll: true }));
+      window.requestAnimationFrame(() => {
+        groupRef.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus({ preventScroll: true });
+      });
       if (pairs.every((candidate) => next[candidate.leftId] === candidate.rightId)) {
         window.queueMicrotask(() => onComplete?.(next));
       }
@@ -1251,7 +1286,7 @@ export function PairMatchingResponse({
       setWrong([]);
       setSelectedLeft("");
       setSelectedRight("");
-      groupRef.current?.focus({ preventScroll: true });
+      groupRef.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus({ preventScroll: true });
     }, 420);
   }
 
@@ -1273,10 +1308,15 @@ export function PairMatchingResponse({
     if (index < 1 || index > pairs.length + rightItems.length) return;
     if (index <= pairs.length) chooseLeft(pairs[index - 1]);
     else chooseRight(rightItems[index - pairs.length - 1]);
+    window.requestAnimationFrame(() => {
+      groupRef.current
+        ?.querySelector<HTMLButtonElement>(`[data-lesson-hotkey-index="${index}"]:not(:disabled)`)
+        ?.focus({ preventScroll: true });
+    });
   }
 
   function handleNumberKey(event: ReactKeyboardEvent<HTMLDivElement>) {
-    if (disabled || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+    if (event.defaultPrevented || disabled || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
     const digit = event.code.startsWith("Numpad") ? event.code.slice(6) : event.key;
     if (!/^\d$/.test(digit)) return;
     event.preventDefault();
@@ -1308,8 +1348,6 @@ export function PairMatchingResponse({
       ref={groupRef}
       role="group"
       aria-label="Select matching pairs"
-      tabIndex={0}
-      data-question-primary-focus
       onKeyDownCapture={handleNumberKey}
     >
       <div className="pair-grid">
@@ -1325,6 +1363,8 @@ export function PairMatchingResponse({
                 aria-pressed={selectedLeft === pair.leftId}
                 onClick={() => chooseLeft(pair)}
                 disabled={disabled || locked}
+                data-lesson-hotkey-index={index + 1}
+                data-question-primary-focus={index === 0 ? "" : undefined}
               >
                 <span className="pair-index">{index + 1}</span>
                 {audioLeft ? (
@@ -1340,6 +1380,7 @@ export function PairMatchingResponse({
                 aria-pressed={selectedRight === rightPair.rightId}
                 onClick={() => chooseRight(rightPair)}
                 disabled={disabled || rightLocked}
+                data-lesson-hotkey-index={pairs.length + index + 1}
               >
                 <span className="pair-index">{pairs.length + index + 1}</span>
                 {renderText(rightPair.rightText, Boolean(evaluated))}
@@ -1463,6 +1504,7 @@ function FreeWritingResponse({
   disabled,
   evaluated,
   renderText,
+  typeaheadResetMs,
 }: {
   question: Extract<LessonQuestion, { type: "freeWriting" }>;
   value: string;
@@ -1472,6 +1514,7 @@ function FreeWritingResponse({
   disabled?: boolean;
   evaluated?: boolean;
   renderText: TextRenderer;
+  typeaheadResetMs?: number;
 }) {
   const wordCount = value.trim() ? value.trim().split(/\s+/).length : 0;
   return (
@@ -1487,6 +1530,7 @@ function FreeWritingResponse({
         evaluated={evaluated}
         onAnswerActivate={onAnswerActivate}
         renderText={renderText}
+        typeaheadResetMs={typeaheadResetMs}
       />
       <p className="rubric-copy">{wordCount}/{question.minWords}-{question.maxWords} words · {question.rubric.join(" · ")}</p>
     </div>
@@ -1547,6 +1591,7 @@ export function QuestionRenderer({
   onComplete,
   renderText,
   answerInputMode,
+  typeaheadResetMs = DEFAULT_TYPEAHEAD_RESET_MS,
   tracingOptions,
 }: QuestionRendererProps) {
   const render = renderText ?? ((text: string) => text);
@@ -1602,7 +1647,7 @@ export function QuestionRenderer({
         />
       );
     case "fillBlank":
-      return <InlineClozeResponse question={question} answer={answer} onChange={onChange} inputMode={answerInputMode} disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} onSpeakTarget={onSpeakTarget} renderText={render} />;
+      return <InlineClozeResponse question={question} answer={answer} onChange={onChange} inputMode={answerInputMode} disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} onSpeakTarget={onSpeakTarget} renderText={render} typeaheadResetMs={typeaheadResetMs} />;
     case "selectBlank": {
       const selectedId = stringAnswer(answer);
       const selectedOption = question.options.find((option) => option.id === selectedId);
@@ -1667,10 +1712,10 @@ export function QuestionRenderer({
       );
     }
     case "multiCloze":
-      return <InlineClozeResponse question={question} answer={answer} onChange={onChange} inputMode={answerInputMode} disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} onSpeakTarget={onSpeakTarget} renderText={render} />;
+      return <InlineClozeResponse question={question} answer={answer} onChange={onChange} inputMode={answerInputMode} disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} onSpeakTarget={onSpeakTarget} renderText={render} typeaheadResetMs={typeaheadResetMs} />;
     case "wordBank":
     case "reorderTokens":
-      return <OrderedAnswerComposer options={question.tokens} value={stringArrayAnswer(answer)} onChange={onChange} onAnswerActivate={onAnswerActivate} disabled={disabled} evaluated={evaluated} renderText={render} />;
+      return <OrderedAnswerComposer options={question.tokens} value={stringArrayAnswer(answer)} onChange={onChange} onAnswerActivate={onAnswerActivate} disabled={disabled} evaluated={evaluated} renderText={render} typeaheadResetMs={typeaheadResetMs} />;
     case "matching":
       return (
         <PairMatchingResponse
@@ -1698,6 +1743,7 @@ export function QuestionRenderer({
             disabled={disabled}
             evaluated={evaluated}
             renderText={render}
+            typeaheadResetMs={typeaheadResetMs}
             renderOption={(option, interactive) => {
               const turn = question.turns.find((candidate) => candidate.id === option.id);
               if (!turn) return render(option.label, interactive);
@@ -1719,14 +1765,14 @@ export function QuestionRenderer({
       return (
         <div className="open-response">
           <blockquote>{render(question.sourceText)}</blockquote>
-          <AnswerBankResponse bank={question.answerBank} value={stringAnswer(answer)} onChange={onChange} inputMode={answerInputMode} label={`${question.targetLanguage} translation`} multiline disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} renderText={render} />
+          <AnswerBankResponse bank={question.answerBank} value={stringAnswer(answer)} onChange={onChange} inputMode={answerInputMode} label={`${question.targetLanguage} translation`} multiline disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} renderText={render} typeaheadResetMs={typeaheadResetMs} />
           <p className="rubric-copy">ChatGPT rubric: {question.rubric.join(" · ")}</p>
         </div>
       );
     case "shortAnswer":
       return (
         <div className="open-response">
-          <AnswerBankResponse bank={question.answerBank} value={stringAnswer(answer)} onChange={onChange} inputMode={answerInputMode} label="Answer" multiline disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} renderText={render} />
+          <AnswerBankResponse bank={question.answerBank} value={stringAnswer(answer)} onChange={onChange} inputMode={answerInputMode} label="Answer" multiline disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} renderText={render} typeaheadResetMs={typeaheadResetMs} />
           <p className="rubric-copy">Required ideas: {question.requiredIdeas.join(" · ")}</p>
         </div>
       );
@@ -1734,7 +1780,7 @@ export function QuestionRenderer({
       return (
         <div className="open-response">
           {question.targetPrompt ? null : <blockquote className="incorrect-source">{render(question.incorrectText)}</blockquote>}
-          <AnswerBankResponse bank={question.answerBank} value={stringAnswer(answer)} onChange={onChange} inputMode={answerInputMode} label="Corrected sentence" disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} renderText={render} />
+          <AnswerBankResponse bank={question.answerBank} value={stringAnswer(answer)} onChange={onChange} inputMode={answerInputMode} label="Corrected sentence" disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} renderText={render} typeaheadResetMs={typeaheadResetMs} />
         </div>
       );
     case "sentenceTransformation":
@@ -1742,19 +1788,19 @@ export function QuestionRenderer({
         <div className="open-response">
           {question.targetPrompt ? null : <blockquote>{render(question.sourceText)}</blockquote>}
           <p className="constraint-copy">Constraint: {render(question.constraint)}</p>
-          <AnswerBankResponse bank={question.answerBank} value={stringAnswer(answer)} onChange={onChange} inputMode={answerInputMode} label="New sentence" disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} renderText={render} />
+          <AnswerBankResponse bank={question.answerBank} value={stringAnswer(answer)} onChange={onChange} inputMode={answerInputMode} label="New sentence" disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} renderText={render} typeaheadResetMs={typeaheadResetMs} />
         </div>
       );
     case "dictation":
       return (
         <div className="open-response">
           <AudioPrompt text={question.transcript} onSpeak={onSpeakTarget} label="Play dictation audio" />
-          <AnswerBankResponse bank={question.answerBank} value={stringAnswer(answer)} onChange={onChange} inputMode={answerInputMode} label="What you heard" disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} renderText={render} />
+          <AnswerBankResponse bank={question.answerBank} value={stringAnswer(answer)} onChange={onChange} inputMode={answerInputMode} label="What you heard" disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} renderText={render} typeaheadResetMs={typeaheadResetMs} />
           <details className="transcript-fallback"><summary>Cannot hear it? Show the fallback transcript</summary><p>{render(question.transcript)}</p></details>
         </div>
       );
     case "freeWriting":
-      return <FreeWritingResponse question={question} value={stringAnswer(answer)} onChange={onChange} inputMode={answerInputMode} onAnswerActivate={onAnswerActivate} disabled={disabled} evaluated={evaluated} renderText={render} />;
+      return <FreeWritingResponse question={question} value={stringAnswer(answer)} onChange={onChange} inputMode={answerInputMode} onAnswerActivate={onAnswerActivate} disabled={disabled} evaluated={evaluated} renderText={render} typeaheadResetMs={typeaheadResetMs} />;
     case "speakingRepeat":
       return (
         <div className="speaking-response">
@@ -1820,10 +1866,14 @@ export function QuestionRenderer({
     case "characterTracing":
       return (
         <CharacterTracingResponse
+          key={`${question.id}-${tracingOptions?.resetRevision ?? 0}`}
           question={question}
           language={language}
           answer={answer}
           disabled={disabled}
+          onSpeak={onSpeakTarget}
+          onOpenSettings={tracingOptions?.onOpenSettings}
+          requireStrokeOrder={tracingOptions?.requireStrokeOrder}
           strokeTolerance={tracingOptions?.strokeTolerance}
           showStrokeGuide={tracingOptions?.showStrokeGuide}
           onUnavailable={onRequireAlternate}

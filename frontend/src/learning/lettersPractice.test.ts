@@ -87,4 +87,34 @@ describe("Letters practice sessions", () => {
     });
     expect(session.lesson.unitId).toBe("letters:collection-a:hiragana");
   });
+
+  it("distinguishes small kana in display text while preserving their pronunciation reading", () => {
+    const kana = ["\u3041", "\u3042"];
+    const kanaMetadata = new Map<string, LettersCharacterMetadata>([
+      ["\u3041", { displayLabel: "small a", reading: "a" }],
+      ["\u3042", { reading: "a" }],
+    ]);
+    const session = buildLettersPracticeSession({
+      collectionId: "collection-a",
+      language: "Japanese",
+      sourceLanguage: "English",
+      level: "beginner",
+      script: "hiragana",
+      scriptLabel: "Hiragana",
+      characters: kana,
+      metadata: kanaMetadata,
+      progress: {},
+      requireStrokeOrder: true,
+      sessionId: "small-kana-session",
+      createdAt: "2026-07-26T00:00:00.000Z",
+    });
+
+    expect(session.lesson.questions[0]).toMatchObject({
+      type: "characterTracing",
+      character: "\u3041",
+      reading: "small a",
+    });
+    expect(session.lesson.examples.map((example) => example.translation)).toEqual(["small a", "a"]);
+    expect(session.lesson.glossary.map((entry) => entry.pronunciation?.romanized)).toEqual(["a", "a"]);
+  });
 });

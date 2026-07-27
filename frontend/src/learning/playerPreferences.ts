@@ -3,6 +3,10 @@ import type { QuestionPresentationSettings } from "./types";
 export const LESSON_PLAYER_PREFERENCE_KEY = "meoi.lessonPlayerPreferences.v1";
 export const LESSON_PLAYER_PREFERENCE_VERSION = 1;
 export const LISTENING_PAUSE_DURATION_MS = 15 * 60 * 1_000;
+export const DEFAULT_TYPEAHEAD_TIMEOUT_MS = 1_500;
+export const MIN_TYPEAHEAD_TIMEOUT_MS = 1_000;
+export const MAX_TYPEAHEAD_TIMEOUT_MS = 10_000;
+export const TYPEAHEAD_TIMEOUT_STEP_MS = 250;
 
 export interface LessonShortcut {
   key: string;
@@ -21,6 +25,7 @@ export interface LessonPlayerPreference {
   pronunciationMode: "romanized" | "native";
   listeningDisabledUntil: number;
   skipShortcut: LessonShortcut;
+  typeaheadTimeoutMs: number;
 }
 
 export const DEFAULT_SKIP_SHORTCUT: LessonShortcut = {
@@ -37,10 +42,17 @@ export const DEFAULT_LESSON_PLAYER_PREFERENCE: LessonPlayerPreference = {
   pronunciationMode: "romanized",
   listeningDisabledUntil: 0,
   skipShortcut: DEFAULT_SKIP_SHORTCUT,
+  typeaheadTimeoutMs: DEFAULT_TYPEAHEAD_TIMEOUT_MS,
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+export function normalizeTypeaheadTimeoutMs(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_TYPEAHEAD_TIMEOUT_MS;
+  const rounded = Math.round(value / TYPEAHEAD_TIMEOUT_STEP_MS) * TYPEAHEAD_TIMEOUT_STEP_MS;
+  return Math.min(MAX_TYPEAHEAD_TIMEOUT_MS, Math.max(MIN_TYPEAHEAD_TIMEOUT_MS, rounded));
 }
 
 export function normalizeLessonPlayerPreference(value: unknown, now = Date.now()): LessonPlayerPreference {
@@ -62,6 +74,7 @@ export function normalizeLessonPlayerPreference(value: unknown, now = Date.now()
     pronunciationMode: source.pronunciationMode === "native" ? "native" : "romanized",
     listeningDisabledUntil,
     skipShortcut: normalizeLessonShortcut(source.skipShortcut),
+    typeaheadTimeoutMs: normalizeTypeaheadTimeoutMs(source.typeaheadTimeoutMs),
   };
 }
 

@@ -19,6 +19,7 @@ import type {
 } from "./types";
 
 export interface LettersCharacterMetadata {
+  displayLabel?: string;
   reading?: string;
   meaning?: string;
 }
@@ -118,13 +119,17 @@ function descriptorChoiceQuestion(
   metadata: ReadonlyMap<string, LettersCharacterMetadata>,
 ): SingleChoiceQuestion {
   const characterMetadata = metadata.get(target);
-  const descriptor = characterMetadata?.reading ?? characterMetadata?.meaning;
+  const descriptor = characterMetadata?.displayLabel
+    ?? characterMetadata?.reading
+    ?? characterMetadata?.meaning;
   if (!descriptor) return visualChoiceQuestion(id, target, characters);
   return {
     ...baseQuestion(
       id,
       "singleChoice",
-      characterMetadata?.reading
+      characterMetadata?.displayLabel
+        ? `Which character is "${descriptor}"?`
+        : characterMetadata?.reading
         ? `Which character is read "${descriptor}"?`
         : `Which character means "${descriptor}"?`,
     ),
@@ -160,7 +165,7 @@ function tracingQuestion(
     ...baseQuestion(id, "characterTracing", "Trace the character."),
     type: "characterTracing",
     character: target,
-    reading: characterMetadata?.reading,
+    reading: characterMetadata?.displayLabel ?? characterMetadata?.reading,
     meaning: characterMetadata?.meaning,
     requireStrokeOrder,
     glossaryTargets: [target],
@@ -173,7 +178,10 @@ function matchingDescriptor(
   used: Set<string>,
 ): string {
   const characterMetadata = metadata.get(character);
-  const preferred = characterMetadata?.reading ?? characterMetadata?.meaning ?? unicodeLabel(character);
+  const preferred = characterMetadata?.displayLabel
+    ?? characterMetadata?.reading
+    ?? characterMetadata?.meaning
+    ?? unicodeLabel(character);
   if (!used.has(preferred)) {
     used.add(preferred);
     return preferred;
@@ -309,7 +317,9 @@ export function buildLettersPracticeSession({
       examples: targets.map((character) => ({
         id: `${sessionId}-example-${characterKey(character)}`,
         source: character,
-        translation: metadata.get(character)?.reading ?? metadata.get(character)?.meaning,
+        translation: metadata.get(character)?.displayLabel
+          ?? metadata.get(character)?.reading
+          ?? metadata.get(character)?.meaning,
       })),
       glossary: glossaryFor(targets, metadata),
       sourceReferences: [],

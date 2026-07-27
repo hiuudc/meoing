@@ -19,12 +19,14 @@ function Harness({
   question,
   evaluated = false,
   inputMode,
+  typeaheadResetMs,
   onAnswerActivate,
   onComplete,
 }: {
   question: LessonQuestion;
   evaluated?: boolean;
   inputMode?: AnswerInputMode;
+  typeaheadResetMs?: number;
   onAnswerActivate?: (text: string) => void;
   onComplete?: (answer: QuestionAnswer) => void;
 }) {
@@ -38,6 +40,7 @@ function Harness({
       language: "English",
       evaluated,
       answerInputMode: inputMode,
+      typeaheadResetMs,
       onChange: setAnswer,
       onAnswerActivate,
       onComplete,
@@ -128,7 +131,9 @@ describe("QuestionRenderer interactions", () => {
     await act(async () => new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve())));
     expect(document.querySelectorAll(".pair-grid-row > button.is-locked")).toHaveLength(2);
     expect(onComplete).not.toHaveBeenCalled();
-    expect(document.activeElement).toBe(group);
+    expect(document.activeElement).toBeInstanceOf(HTMLButtonElement);
+    expect((document.activeElement as HTMLButtonElement).disabled).toBe(false);
+    expect(group.contains(document.activeElement)).toBe(true);
 
     await act(async () => group.dispatchEvent(
       new KeyboardEvent("keydown", { bubbles: true, code: "Digit2", key: "2" }),
@@ -197,6 +202,8 @@ describe("QuestionRenderer interactions", () => {
         await act(async () => root!.render(createElement(Harness, { key: question.id, question })));
       }
       const choices = document.querySelector<HTMLFieldSetElement>(".choice-list")!;
+      expect(choices.tabIndex).toBe(-1);
+      expect(choices.classList.contains("is-numbered")).toBe(true);
       expect(Array.from(choices.querySelectorAll(".choice-index")).map((item) => item.textContent))
         .toEqual(Array.from({ length: choices.querySelectorAll("label").length }, (_, index) => String(index + 1)));
       await act(async () => choices.dispatchEvent(new KeyboardEvent("keydown", {
@@ -206,6 +213,35 @@ describe("QuestionRenderer interactions", () => {
       })));
       expect(document.querySelector("#answer-value")?.textContent).toBe(expected);
     }
+  });
+
+  it("discards an out-of-range digit immediately for short choice lists", async () => {
+    const question: LessonQuestion = {
+      id: "true-false-invalid-digit",
+      type: "trueFalse",
+      prompt: "True or false",
+      explanation: "True",
+      evaluationMode: "local",
+      statement: "The statement is true.",
+      correct: true,
+    };
+    await render(createElement(Harness, { question }));
+    const choices = document.querySelector<HTMLFieldSetElement>(".choice-list")!;
+
+    await act(async () => {
+      choices.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true,
+        code: "Digit3",
+        key: "3",
+      }));
+      choices.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true,
+        code: "Digit1",
+        key: "1",
+      }));
+    });
+
+    expect(document.querySelector("#answer-value")?.textContent).toBe("true");
   });
 
   it("keeps duplicate-label bank tokens distinct and supports keyboard reordering", async () => {
@@ -293,6 +329,107 @@ describe("QuestionRenderer interactions", () => {
     await act(async () => vi.advanceTimersByTime(1_500));
     expect(document.querySelector(".is-typeahead-match")).toBeNull();
     expect(document.querySelector(".is-typeahead-dimmed")).toBeNull();
+  });
+
+  it("reschedules an active word-bank prefix when the typeahead setting changes", async () => {
+    vi.useFakeTimers();
+    const question: LessonQuestion = {
+      id: "typeahead-setting",
+      type: "freeWriting",
+      prompt: "Write",
+      explanation: "Write",
+      evaluationMode: "ai",
+      minWords: 1,
+      maxWords: 20,
+      rubric: ["Clarity"],
+      answerBank: {
+        tokens: [
+          { id: "america", label: "America" },
+          { id: "and", label: "and" },
+          { id: "japan", label: "Japan" },
+        ],
+        separator: "space",
+        defaultMode: "bank",
+      },
+    };
+    await render(createElement(Harness, { question, inputMode: "bank", typeaheadResetMs: 10_000 }));
+    const composer = document.querySelector<HTMLElement>(".answer-composer")!;
+
+    await act(async () => composer.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true })));
+    await act(async () => vi.advanceTimersByTime(2_000));
+    expect(document.querySelectorAll(".is-typeahead-match")).toHaveLength(2);
+
+    await act(async () => root!.render(createElement(Harness, {
+      question,
+      inputMode: "bank",
+      typeaheadResetMs: 1_000,
+    })));
+    await act(async () => vi.advanceTimersByTime(999));
+    expect(document.querySelectorAll(".is-typeahead-match")).toHaveLength(2);
+    await act(async () => vi.advanceTimersByTime(1));
+    expect(document.querySelector(".is-typeahead-match")).toBeNull();
+  });
+
+  it("uses intrinsic inline-blank measurement instead of a fixed character width", async () => {
+    const question: LessonQuestion = {
+      id: "intrinsic-japanese-blank",
+      type: "fillBlank",
+      prompt: "Complete the sentence",
+      targetPrompt: "私は{{blank:object}}を飲みます。",
+      explanation: "Tea completes the sentence.",
+      evaluationMode: "local",
+      template: "私は{{blank:object}}を飲みます。",
+      acceptedAnswers: ["お茶"],
+    };
+    await render(createElement(Harness, { question, inputMode: "keyboard" }));
+
+    const blank = document.querySelector<HTMLElement>(".multi-cloze-inline-blank")!;
+    expect(blank.style.width).toBe("");
+    expect(blank.querySelector(".multi-cloze-blank-measure")?.textContent).toBe("");
+    const input = blank.querySelector<HTMLInputElement>("input")!;
+    expect(input.value).toBe("");
+
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, "typed answer");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(blank.querySelector(".multi-cloze-blank-measure")?.textContent).toBe("typed answer");
+  });
+
+  it("applies the configured typeahead timeout to an inline-cloze word bank", async () => {
+    vi.useFakeTimers();
+    const question: LessonQuestion = {
+      id: "inline-typeahead-setting",
+      type: "fillBlank",
+      prompt: "Complete the sentence",
+      targetPrompt: "Visit {{blank:place}}.",
+      explanation: "Choose a place.",
+      evaluationMode: "local",
+      template: "Visit {{blank:place}}.",
+      acceptedAnswers: ["America"],
+      answerBank: {
+        tokens: [
+          { id: "america", label: "America" },
+          { id: "amsterdam", label: "Amsterdam" },
+          { id: "japan", label: "Japan" },
+        ],
+        separator: "space",
+        defaultMode: "bank",
+      },
+    };
+    await render(createElement(Harness, {
+      question,
+      inputMode: "bank",
+      typeaheadResetMs: 1_000,
+    }));
+    const response = document.querySelector<HTMLElement>(".multi-cloze-response")!;
+
+    await act(async () => response.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true })));
+    expect(document.querySelectorAll(".multi-cloze-bank .is-typeahead-match")).toHaveLength(2);
+    await act(async () => vi.advanceTimersByTime(999));
+    expect(document.querySelectorAll(".multi-cloze-bank .is-typeahead-match")).toHaveLength(2);
+    await act(async () => vi.advanceTimersByTime(1));
+    expect(document.querySelector(".multi-cloze-bank .is-typeahead-match")).toBeNull();
   });
 
   it("accepts a bank-token drop inside the expanded tray hitbox", async () => {
@@ -470,7 +607,7 @@ describe("QuestionRenderer interactions", () => {
     };
     await render(createElement(Harness, { question, inputMode: "bank" }));
     const blank = document.querySelector<HTMLElement>(".multi-cloze-inline-blank")!;
-    expect(blank.style.width).toBe("7ch");
+    expect(blank.style.width).toBe("");
 
     await act(async () => button("water").click());
     expect(blank.textContent).toContain("water");

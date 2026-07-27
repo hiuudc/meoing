@@ -2,9 +2,103 @@ import { readdir, readFile } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+const EXPECTED_JAPANESE_MERGE_COUNT = 37;
+const CHARACTER_BOUNDS = {
+  minX: 0,
+  maxX: 1_024,
+  minY: -124,
+  maxY: 900,
+};
+
 function shardKey(character) {
   const codePoint = character.codePointAt(0);
   return codePoint === undefined ? "0" : Math.floor(codePoint / 256).toString(16);
+}
+
+function identityAnimationGroups(strokeCount) {
+  return Array.from({ length: strokeCount }, (_, index) => [index]);
+}
+
+function matchingEdgePoints(left, right, fromStart) {
+  const limit = Math.min(left.length, right.length);
+  let count = 0;
+  while (count < limit) {
+    const leftIndex = fromStart ? count : left.length - count - 1;
+    const rightIndex = fromStart ? count : right.length - count - 1;
+    const leftPoint = left[leftIndex];
+    const rightPoint = right[rightIndex];
+    if (leftPoint[0] !== rightPoint[0] || leftPoint[1] !== rightPoint[1]) break;
+    count += 1;
+  }
+  return count;
+}
+
+function isTechnicalStrokePart(left, right) {
+  const shorterLength = Math.min(left.length, right.length);
+  if (shorterLength < 3) return false;
+  const sharedEdgePoints = Math.max(
+    matchingEdgePoints(left, right, true),
+    matchingEdgePoints(left, right, false),
+  );
+  return sharedEdgePoints >= Math.max(3, Math.ceil(shorterLength * .25));
+}
+
+function hasImpossibleMedianPoint(median) {
+  return median.some(([x, y]) => (
+    x < CHARACTER_BOUNDS.minX
+    || x > CHARACTER_BOUNDS.maxX
+    || y < CHARACTER_BOUNDS.minY
+    || y > CHARACTER_BOUNDS.maxY
+  ));
+}
+
+function detectedJapaneseAnimationGroups(data) {
+  if (!Array.isArray(data.strokes) || !Array.isArray(data.medians)) return [];
+  const groups = [];
+  data.strokes.forEach((_, index) => {
+    const previousMedian = data.medians[index - 1];
+    const median = data.medians[index];
+    if (previousMedian && (
+      isTechnicalStrokePart(previousMedian, median)
+      || hasImpossibleMedianPoint(median)
+    )) {
+      groups[groups.length - 1].push(index);
+    } else {
+      groups.push([index]);
+    }
+  });
+  return groups;
+}
+
+function validateManifestGroups(character, groups, strokeCount) {
+  if (!Array.isArray(groups) || !groups.length || groups.some((group) => (
+    !Array.isArray(group) || !group.length
+  ))) {
+    throw new Error(`Japanese stroke manifest has empty groups for ${character}.`);
+  }
+  const flattened = groups.flat();
+  if (
+    flattened.length !== strokeCount
+    || flattened.some((index, position) => index !== position)
+  ) {
+    throw new Error(
+      `Japanese stroke manifest for ${character} must cover ${strokeCount} raw paths exactly once.`,
+    );
+  }
+}
+
+async function loadJapaneseStrokeManifest(path) {
+  const value = JSON.parse(await readFile(path, "utf8"));
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Japanese stroke manifest must be an object.");
+  }
+  const characters = Object.keys(value);
+  if (characters.length !== EXPECTED_JAPANESE_MERGE_COUNT) {
+    throw new Error(
+      `Japanese stroke manifest must contain ${EXPECTED_JAPANESE_MERGE_COUNT} characters; found ${characters.length}.`,
+    );
+  }
+  return value;
 }
 
 async function buildLanguageData(source) {
@@ -16,14 +110,37 @@ async function buildLanguageData(source) {
     .map((entry) => entry.name)
     .sort((left, right) => left.localeCompare(right));
   const entriesByShard = new Map();
+  const strokeManifest = source.strokeManifest
+    ? await loadJapaneseStrokeManifest(source.strokeManifest)
+    : null;
+  const seenManifestCharacters = new Set();
 
   for (const file of files) {
     const character = basename(file, ".json");
     const raw = await readFile(resolve(source.directory, file), "utf8");
+    if (strokeManifest) {
+      const data = JSON.parse(raw);
+      const detected = detectedJapaneseAnimationGroups(data);
+      const expected = strokeManifest[character] ?? identityAnimationGroups(data.strokes.length);
+      validateManifestGroups(character, expected, data.strokes.length);
+      if (JSON.stringify(detected) !== JSON.stringify(expected)) {
+        throw new Error(
+          `Japanese stroke merge audit failed for ${character}: expected ${JSON.stringify(expected)}, detected ${JSON.stringify(detected)}.`,
+        );
+      }
+      if (strokeManifest[character]) seenManifestCharacters.add(character);
+    }
     const key = shardKey(character);
     const entries = entriesByShard.get(key) ?? [];
     entries.push(`${JSON.stringify(character)}:${raw.trim()}`);
     entriesByShard.set(key, entries);
+  }
+
+  if (strokeManifest) {
+    const missing = Object.keys(strokeManifest).filter((character) => !seenManifestCharacters.has(character));
+    if (missing.length) {
+      throw new Error(`Japanese stroke manifest characters are missing from source data: ${missing.join(", ")}.`);
+    }
   }
 
   return {
@@ -55,6 +172,7 @@ export function strokeDataPlugin() {
     {
       language: "ja",
       directory: resolve(projectRoot, "node_modules", "@k1low", "hanzi-writer-data-jp"),
+      strokeManifest: resolve(projectRoot, "src", "learning", "japaneseStrokeGroups.json"),
     },
   ];
   const dataPromises = new Map();

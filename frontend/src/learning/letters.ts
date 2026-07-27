@@ -2,9 +2,14 @@ import { BASIC_HANGUL_JAMO } from "./strokeData";
 
 export const LETTERS_STORAGE_KEY = "meoi.letters.v1";
 export const LETTERS_STORAGE_VERSION = 1;
-export const MIN_STROKE_TOLERANCE = 0.5;
+export const MIN_STROKE_TOLERANCE = 0.1;
 export const MAX_STROKE_TOLERANCE = 2;
 export const DEFAULT_STROKE_TOLERANCE = 1;
+export const STROKE_TOLERANCE_PRESETS = [
+  { label: "Strict", value: MIN_STROKE_TOLERANCE },
+  { label: "Standard", value: DEFAULT_STROKE_TOLERANCE },
+  { label: "Forgiving", value: MAX_STROKE_TOLERANCE },
+] as const;
 export const MIN_LETTERS_PRACTICE_QUESTIONS = 1;
 export const MAX_LETTERS_PRACTICE_QUESTIONS = 20;
 export const DEFAULT_LETTERS_PRACTICE_QUESTIONS = 5;
@@ -25,6 +30,13 @@ export interface LettersLanguageProgress {
   showStrokeGuide: boolean;
   practiceQuestionCount: number;
   characters: Record<string, LetterProgressStatus>;
+}
+
+export interface LetterSettings {
+  requireStrokeOrder: boolean;
+  strokeTolerance: number;
+  showStrokeGuide: boolean;
+  practiceQuestionCount: number;
 }
 
 export interface LettersProgressStore {
@@ -105,6 +117,26 @@ export const INTERNAL_CHARACTER_READINGS: ReadonlyMap<string, string> = new Map(
   ...BASIC_HANGUL_JAMO.map((character, index) => [character, JAMO_READINGS[index]] as const),
 ]);
 
+const SMALL_HIRAGANA_LABELS = [
+  [0x3041, "small a"],
+  [0x3043, "small i"],
+  [0x3045, "small u"],
+  [0x3047, "small e"],
+  [0x3049, "small o"],
+  [0x3063, "small tsu"],
+  [0x3083, "small ya"],
+  [0x3085, "small yu"],
+  [0x3087, "small yo"],
+  [0x308e, "small wa"],
+  [0x3095, "small ka"],
+  [0x3096, "small ke"],
+] as const;
+
+export const INTERNAL_CHARACTER_DISPLAY_LABELS: ReadonlyMap<string, string> = new Map([
+  ...SMALL_HIRAGANA_LABELS.map(([codePoint, label]) => [String.fromCodePoint(codePoint), label] as const),
+  ...SMALL_HIRAGANA_LABELS.map(([codePoint, label]) => [String.fromCodePoint(codePoint + 0x60), label] as const),
+]);
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -117,6 +149,53 @@ export function normalizeStrokeTolerance(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_STROKE_TOLERANCE;
   const clamped = Math.min(MAX_STROKE_TOLERANCE, Math.max(MIN_STROKE_TOLERANCE, value));
   return Math.round(clamped * 10) / 10;
+}
+
+export function strokeTolerancePosition(value: number): number {
+  const normalized = normalizeStrokeTolerance(value);
+  if (normalized <= DEFAULT_STROKE_TOLERANCE) {
+    return (normalized - MIN_STROKE_TOLERANCE)
+      / (DEFAULT_STROKE_TOLERANCE - MIN_STROKE_TOLERANCE)
+      * 50;
+  }
+  return 50 + (normalized - DEFAULT_STROKE_TOLERANCE)
+    / (MAX_STROKE_TOLERANCE - DEFAULT_STROKE_TOLERANCE)
+    * 50;
+}
+
+export function strokeToleranceFromPosition(value: number): number {
+  const position = Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 50;
+  if (position <= 50) {
+    return normalizeStrokeTolerance(
+      MIN_STROKE_TOLERANCE
+      + (position / 50) * (DEFAULT_STROKE_TOLERANCE - MIN_STROKE_TOLERANCE),
+    );
+  }
+  return normalizeStrokeTolerance(
+    DEFAULT_STROKE_TOLERANCE
+    + ((position - 50) / 50) * (MAX_STROKE_TOLERANCE - DEFAULT_STROKE_TOLERANCE),
+  );
+}
+
+export function strokeToleranceForKey(value: number, key: string): number | null {
+  if (key === "Home") return MIN_STROKE_TOLERANCE;
+  if (key === "End") return MAX_STROKE_TOLERANCE;
+  const changes: Readonly<Record<string, number>> = {
+    ArrowDown: -0.1,
+    ArrowLeft: -0.1,
+    ArrowRight: 0.1,
+    ArrowUp: 0.1,
+    PageDown: -0.5,
+    PageUp: 0.5,
+  };
+  const change = changes[key];
+  return change === undefined ? null : normalizeStrokeTolerance(value + change);
+}
+
+export function strokeToleranceLabel(value: number): string {
+  const normalized = normalizeStrokeTolerance(value);
+  const preset = STROKE_TOLERANCE_PRESETS.find((candidate) => candidate.value === normalized);
+  return `${preset?.label ?? "Custom"} ${normalized.toFixed(1)}x`;
 }
 
 export function normalizeLettersPracticeQuestionCount(value: unknown): number {

@@ -182,6 +182,29 @@ describe("fullscreen lesson player", () => {
     expect(document.activeElement).toBe(lastFocusable);
   });
 
+  it("makes the lesson inert and suspends its shortcuts while an overlaid modal is active", async () => {
+    const onExit = vi.fn();
+    await renderPlayer({ interactionSuspended: true, onExit });
+    const dialog = document.querySelector<HTMLElement>(".lesson-fullscreen-dialog")!;
+
+    expect(dialog.inert).toBe(true);
+    expect(dialog.getAttribute("aria-hidden")).toBe("true");
+
+    await act(async () => dialog.dispatchEvent(new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "1",
+    })));
+    expect(document.querySelector<HTMLInputElement>('input[value="a"]')?.checked).toBe(false);
+
+    await act(async () => dialog.dispatchEvent(new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Escape",
+    })));
+    expect(onExit).not.toHaveBeenCalled();
+  });
+
   it("keeps the mastered position on an incorrect retry and shows red feedback", async () => {
     await renderPlayer();
     expect(document.querySelector("#background")?.getAttribute("aria-hidden")).toBe("true");
@@ -264,6 +287,50 @@ describe("fullscreen lesson player", () => {
     expect(document.querySelector("#lesson-player-title")?.textContent).toContain("second answer");
   });
 
+  it("keeps number shortcuts active after a matching pair is locked", async () => {
+    const matching: LessonQuestion = {
+      id: "number-matching-player",
+      type: "matching",
+      prompt: "Match both pairs",
+      explanation: "Both pairs match.",
+      evaluationMode: "local",
+      pairs: [
+        { leftId: "water", left: "water", rightId: "mizu", right: "mizu" },
+        { leftId: "tea", left: "tea", rightId: "ocha", right: "ocha" },
+      ],
+    };
+    await renderPlayer({
+      lesson: lessonWithQuestions("number-matching-player-test", [matching]),
+    });
+    const stage = document.querySelector<HTMLElement>("[data-question-focus-root]")!;
+
+    async function pressMatchingItem(text: string) {
+      const control = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-lesson-hotkey-index]"))
+        .find((candidate) => candidate.textContent?.includes(text) && !candidate.disabled);
+      if (!control?.dataset.lessonHotkeyIndex) throw new Error(`Matching item not found: ${text}`);
+      const digit = control.dataset.lessonHotkeyIndex;
+      await act(async () => {
+        stage.dispatchEvent(new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          code: `Digit${digit}`,
+          key: digit,
+        }));
+        await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+      });
+    }
+
+    await pressMatchingItem("water");
+    await pressMatchingItem("mizu");
+    expect(document.querySelectorAll(".pair-grid-row > button.is-locked")).toHaveLength(2);
+    expect(document.activeElement).toBe(stage);
+
+    await pressMatchingItem("tea");
+    await pressMatchingItem("ocha");
+    expect(document.querySelectorAll(".pair-grid-row > button.is-locked")).toHaveLength(4);
+    expect(document.querySelector(".lesson-feedback-tray.is-correct")).not.toBeNull();
+  });
+
   it("checks an answer textarea with Enter and preserves Shift+Enter for a newline", async () => {
     const writing: LessonQuestion = {
       id: "enter-writing",
@@ -315,6 +382,171 @@ describe("fullscreen lesson player", () => {
     expect(document.querySelector(".lesson-feedback-tray.is-correct")).not.toBeNull();
   });
 
+  it("checks a selected inline word-bank answer with Enter and advances only after feedback", async () => {
+    const fillBlank: LessonQuestion = {
+      id: "inline-enter",
+      type: "fillBlank",
+      prompt: "Complete the sentence",
+      targetPrompt: "I drink {{blank:object}}.",
+      explanation: "Water completes the sentence.",
+      evaluationMode: "local",
+      template: "I drink {{blank:object}}.",
+      acceptedAnswers: ["water"],
+      answerBank: {
+        tokens: [{ id: "water", label: "water" }, { id: "tea", label: "tea" }],
+        separator: "space",
+        defaultMode: "bank",
+      },
+    };
+    await renderPlayer({
+      lesson: lessonWithQuestions("inline-enter-test", [fillBlank, lesson.questions[1]]),
+    });
+
+    await act(async () => {
+      button("water").click();
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+    });
+    const response = document.querySelector<HTMLElement>(".multi-cloze-response")!;
+    expect(document.activeElement).toBe(response);
+    expect(document.querySelector("#lesson-player-title")?.textContent).toContain("Complete the sentence");
+    expect(document.querySelector(".lesson-feedback-tray")).toBeNull();
+
+    await act(async () => response.dispatchEvent(new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Enter",
+    })));
+    expect(document.querySelector(".lesson-feedback-tray.is-correct")).not.toBeNull();
+    expect(document.querySelector("#lesson-player-title")?.textContent).toContain("Complete the sentence");
+
+    const continueButton = button("Continue");
+    await act(async () => continueButton.dispatchEvent(new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Enter",
+    })));
+    expect(document.querySelector("#lesson-player-title")?.textContent).toContain("second answer");
+  });
+
+  it("uses number shortcuts outside the choice group without moving to the next question", async () => {
+    await renderPlayer();
+    const stage = document.querySelector<HTMLElement>(".lesson-question-stage")
+      ?? document.querySelector<HTMLElement>(".lesson-fullscreen-dialog")!;
+    stage.focus();
+
+    await act(async () => stage.dispatchEvent(new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      code: "Numpad1",
+      key: "1",
+    })));
+    await act(async () => new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve())));
+
+    expect(document.querySelector<HTMLInputElement>('input[value="a"]')?.checked).toBe(true);
+    expect(document.querySelector("#lesson-player-title")?.textContent).toContain("first answer");
+    expect(document.querySelector(".lesson-feedback-tray")).toBeNull();
+    expect(document.activeElement).toBe(stage);
+  });
+
+  it("accepts a valid true-false shortcut immediately after an out-of-range digit", async () => {
+    const trueFalse: LessonQuestion = {
+      id: "true-false-invalid-digit-player",
+      type: "trueFalse",
+      prompt: "True or false",
+      explanation: "True",
+      evaluationMode: "local",
+      statement: "The statement is true.",
+      correct: true,
+    };
+    await renderPlayer({
+      lesson: lessonWithQuestions("true-false-invalid-digit-player-test", [trueFalse]),
+    });
+    const dialog = document.querySelector<HTMLElement>(".lesson-fullscreen-dialog")!;
+
+    await act(async () => {
+      dialog.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        code: "Digit3",
+        key: "3",
+      }));
+      dialog.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        code: "Digit1",
+        key: "1",
+      }));
+    });
+
+    expect(document.querySelector<HTMLInputElement>('input[value="true"]')?.checked).toBe(true);
+    expect(document.querySelector(".lesson-feedback-tray")).toBeNull();
+  });
+
+  it("keeps Continue focused when Enter follows a number shortcut before its focus frame", async () => {
+    await renderPlayer();
+    const dialog = document.querySelector<HTMLElement>(".lesson-fullscreen-dialog")!;
+
+    await act(async () => dialog.dispatchEvent(new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      code: "Digit1",
+      key: "1",
+    })));
+    await act(async () => {
+      dialog.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "Enter",
+      }));
+      await Promise.resolve();
+    });
+    await act(async () => new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve())));
+
+    expect(document.querySelector(".lesson-feedback-tray.is-correct")).not.toBeNull();
+    expect(document.activeElement).toBe(button("Continue"));
+  });
+
+  it("toggles multiple-choice answers from repeated global digit shortcuts without leaving a focus border", async () => {
+    const multipleChoice: LessonQuestion = {
+      id: "global-multiple-choice",
+      type: "multipleChoice",
+      prompt: "Choose two answers.",
+      explanation: "A and B are correct.",
+      evaluationMode: "local",
+      options: [{ id: "a", label: "A" }, { id: "b", label: "B" }, { id: "c", label: "C" }],
+      correctOptionIds: ["a", "b"],
+    };
+    await renderPlayer({ lesson: lessonWithQuestions("global-multiple-choice-test", [multipleChoice]) });
+    const dialog = document.querySelector<HTMLElement>(".lesson-fullscreen-dialog")!;
+    const stage = document.querySelector<HTMLElement>("[data-question-focus-root]")!;
+    const expectedSelections = [
+      ["c"],
+      ["a", "c"],
+      ["a", "b", "c"],
+      ["a", "b"],
+      ["b"],
+      [],
+    ];
+
+    for (const [index, digit] of ["3", "1", "2", "3", "1", "2"].entries()) {
+      await act(async () => {
+        dialog.dispatchEvent(new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          code: index % 2 ? `Numpad${digit}` : `Digit${digit}`,
+          key: digit,
+        }));
+        await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+      });
+      const checked = Array.from(document.querySelectorAll<HTMLInputElement>(".choice-list input:checked"))
+        .map((input) => input.value);
+      expect(checked).toEqual(expectedSelections[index]);
+      expect(document.activeElement).toBe(stage);
+    }
+
+    expect(document.querySelector(".lesson-feedback-tray")).toBeNull();
+  });
+
   it("focuses the answer field at the end when switching from word bank to keyboard", async () => {
     const writing: LessonQuestion = {
       id: "focus-writing",
@@ -343,6 +575,67 @@ describe("fullscreen lesson player", () => {
     expect(document.activeElement).toBe(textarea);
     expect(textarea.selectionStart).toBe(textarea.value.length);
     expect(button("Use word bank").querySelector("svg")).not.toBeNull();
+  });
+
+  it("focuses the first empty keyboard blank when the next question opens", async () => {
+    const fillBlank = (id: string, acceptedAnswer: string): LessonQuestion => ({
+      id,
+      type: "fillBlank",
+      prompt: `Complete ${id}`,
+      targetPrompt: `I drink {{blank:object}} in ${id}.`,
+      explanation: "Complete the sentence.",
+      evaluationMode: "local",
+      template: `I drink {{blank:object}} in ${id}.`,
+      acceptedAnswers: [acceptedAnswer],
+      answerBank: {
+        tokens: [{ id: acceptedAnswer, label: acceptedAnswer }],
+        separator: "space",
+        defaultMode: "keyboard",
+      },
+    });
+    await renderPlayer({
+      lesson: lessonWithQuestions("keyboard-question-focus", [
+        fillBlank("question-one", "water"),
+        fillBlank("question-two", "tea"),
+      ]),
+    });
+    await act(async () => new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve())));
+    const firstInput = document.querySelector<HTMLInputElement>("[data-question-answer-input]")!;
+    expect(document.activeElement).toBe(firstInput);
+
+    await setTextValue(firstInput, "water");
+    await act(async () => firstInput.dispatchEvent(new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Enter",
+    })));
+    await act(async () => button("Continue").click());
+    await act(async () => new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve())));
+
+    const secondInput = document.querySelector<HTMLInputElement>("[data-question-answer-input]")!;
+    expect(secondInput).not.toBe(firstInput);
+    expect(document.activeElement).toBe(secondInput);
+    expect(secondInput.selectionStart).toBe(secondInput.value.length);
+  });
+
+  it("persists and resets the word-bank typeahead timeout from Lesson settings", async () => {
+    await renderPlayer();
+    await act(async () => button("Lesson settings").click());
+    const slider = document.querySelector<HTMLInputElement>("#lesson-typeahead-timeout")!;
+    expect(slider.min).toBe("1");
+    expect(slider.max).toBe("10");
+    expect(slider.step).toBe("0.25");
+    expect(slider.value).toBe("1.5");
+
+    await setTextValue(slider, "2.75");
+    expect(document.querySelector<HTMLOutputElement>(".lesson-typeahead-control output")?.textContent).toBe("2.75s");
+    expect(JSON.parse(window.localStorage.getItem(LESSON_PLAYER_PREFERENCE_KEY) ?? "{}").typeaheadTimeoutMs)
+      .toBe(2_750);
+
+    await act(async () => button("Reset to lesson defaults").click());
+    expect(slider.value).toBe("1.5");
+    expect(JSON.parse(window.localStorage.getItem(LESSON_PLAYER_PREFERENCE_KEY) ?? "{}").typeaheadTimeoutMs)
+      .toBe(1_500);
   });
 
   it("records and persists a modified Skip shortcut that works from an answer field", async () => {
@@ -556,7 +849,7 @@ describe("fullscreen lesson player", () => {
     expect(speed.min).toBe("0.25");
     expect(speed.max).toBe("2");
     expect(speed.step).toBe("0.05");
-    expect(Array.from(document.querySelectorAll<HTMLElement>(".lesson-speed-ticks > span")).map((tick) => tick.style.left))
+    expect(Array.from(document.querySelectorAll<HTMLElement>(".lesson-speed-control .lesson-speed-ticks > span")).map((tick) => tick.style.left))
       .toEqual(["0%", "42.857%", "71.429%", "100%"]);
     await act(async () => {
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;

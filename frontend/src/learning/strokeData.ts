@@ -1,8 +1,15 @@
 import type { CharacterJson } from "hanzi-writer";
+import japaneseStrokeGroups from "./japaneseStrokeGroups.json";
 import { getSupportedLanguage } from "./languages";
 
 type StrokeDataLanguage = "zh" | "ja" | "ko";
 type Point = [number, number];
+
+export interface LoadedStrokeCharacterData {
+  logicalData: CharacterJson;
+  animationData: CharacterJson;
+  animationGroups: number[][];
+}
 
 const shardCache = new Map<string, Promise<Record<string, CharacterJson>>>();
 let catalogPromise: Promise<{ zh: string[]; ja: string[] }> | null = null;
@@ -13,77 +20,64 @@ const CHARACTER_BOUNDS = {
   maxY: 900,
 } as const;
 
-function matchingEdgePoints(left: number[][], right: number[][], fromStart: boolean): number {
-  const limit = Math.min(left.length, right.length);
-  let count = 0;
-  while (count < limit) {
-    const leftIndex = fromStart ? count : left.length - count - 1;
-    const rightIndex = fromStart ? count : right.length - count - 1;
-    const leftPoint = left[leftIndex];
-    const rightPoint = right[rightIndex];
-    if (leftPoint[0] !== rightPoint[0] || leftPoint[1] !== rightPoint[1]) break;
-    count += 1;
+export const JAPANESE_STROKE_GROUPS:
+Readonly<Record<string, readonly (readonly number[])[]>> = japaneseStrokeGroups;
+
+function identityAnimationGroups(strokeCount: number): number[][] {
+  return Array.from({ length: strokeCount }, (_, index) => [index]);
+}
+
+function validatedJapaneseAnimationGroups(character: string, strokeCount: number): number[][] {
+  const configured = JAPANESE_STROKE_GROUPS[character];
+  if (!configured) return identityAnimationGroups(strokeCount);
+  const groups = configured.map((group) => [...group]);
+  const flattened = groups.flat();
+  const coversEveryRawPath = flattened.length === strokeCount
+    && flattened.every((index, position) => index === position);
+  if (!groups.length || groups.some((group) => !group.length) || !coversEveryRawPath) {
+    throw new Error(`Stroke groups for ${character} do not cover its raw paths exactly once.`);
   }
-  return count;
+  return groups;
 }
 
-function isTechnicalStrokePart(left: number[][], right: number[][]): boolean {
-  const shorterLength = Math.min(left.length, right.length);
-  if (shorterLength < 3) return false;
-  const sharedEdgePoints = Math.max(
-    matchingEdgePoints(left, right, true),
-    matchingEdgePoints(left, right, false),
-  );
-  return sharedEdgePoints >= Math.max(3, Math.ceil(shorterLength * .25));
-}
-
-function hasImpossibleMedianPoint(median: number[][]): boolean {
-  return median.some(([x, y]) => (
-    x < CHARACTER_BOUNDS.minX
-    || x > CHARACTER_BOUNDS.maxX
-    || y < CHARACTER_BOUNDS.minY
-    || y > CHARACTER_BOUNDS.maxY
-  ));
-}
-
-function normalizeJapaneseStrokeData(data: CharacterJson): CharacterJson {
-  if (data.strokes.length < 2 || data.strokes.length !== data.medians.length) return data;
-  const strokes: string[] = [];
-  const medians: number[][][] = [];
-  const mergedIndexes: number[] = [];
-  let changed = false;
-
-  data.strokes.forEach((stroke, index) => {
-    const previousMedian = data.medians[index - 1];
-    const median = data.medians[index];
-    if (previousMedian && (
-      isTechnicalStrokePart(previousMedian, median)
-      || hasImpossibleMedianPoint(median)
-    )) {
-      const mergedIndex = strokes.length - 1;
-      strokes[mergedIndex] = `${strokes[mergedIndex]} ${stroke}`;
-      mergedIndexes[index] = mergedIndex;
-      changed = true;
-      return;
-    }
-    mergedIndexes[index] = strokes.length;
-    strokes.push(stroke);
-    medians.push(median);
+function normalizeJapaneseStrokeData(data: CharacterJson, character: string): {
+  logicalData: CharacterJson;
+  animationGroups: number[][];
+} {
+  const animationGroups = validatedJapaneseAnimationGroups(character, data.strokes.length);
+  if (animationGroups.every((group) => group.length === 1)) {
+    return {
+      logicalData: data,
+      animationGroups,
+    };
+  }
+  const mergedIndexes = Array.from({ length: data.strokes.length }, () => -1);
+  const strokes = animationGroups.map((group, mergedIndex) => {
+    group.forEach((rawIndex) => {
+      mergedIndexes[rawIndex] = mergedIndex;
+    });
+    return group.map((rawIndex) => data.strokes[rawIndex]).join(" ");
   });
-
-  if (!changed) return data;
+  const medians = animationGroups.map(([firstRawIndex]) => data.medians[firstRawIndex]);
   const radStrokes = data.radStrokes
     ? [...new Set(data.radStrokes.map((index) => mergedIndexes[index]))]
     : undefined;
   return {
-    ...data,
-    strokes,
-    medians,
-    ...(radStrokes ? { radStrokes } : {}),
+    logicalData: {
+      ...data,
+      strokes,
+      medians,
+      ...(radStrokes ? { radStrokes } : {}),
+    },
+    animationGroups,
   };
 }
 
-function validateCharacterData(data: CharacterJson, character: string): CharacterJson {
+function validateCharacterData(
+  data: CharacterJson,
+  character: string,
+  allowAnimationOverflow = false,
+): CharacterJson {
   if (
     !Array.isArray(data.strokes)
     || !Array.isArray(data.medians)
@@ -100,10 +94,15 @@ function validateCharacterData(data: CharacterJson, character: string): Characte
       && point.length >= 2
       && Number.isFinite(point[0])
       && Number.isFinite(point[1])
-      && point[0] >= CHARACTER_BOUNDS.minX
-      && point[0] <= CHARACTER_BOUNDS.maxX
-      && point[1] >= CHARACTER_BOUNDS.minY
-      && point[1] <= CHARACTER_BOUNDS.maxY
+      && (
+        allowAnimationOverflow
+        || (
+          point[0] >= CHARACTER_BOUNDS.minX
+          && point[0] <= CHARACTER_BOUNDS.maxX
+          && point[1] >= CHARACTER_BOUNDS.minY
+          && point[1] <= CHARACTER_BOUNDS.maxY
+        )
+      )
     ))
   ));
   if (!valid) throw new Error(`Stroke data for ${character} contains an invalid median.`);
@@ -268,21 +267,39 @@ export function supportsCharacterTracing(language: string): boolean {
   return strokeLanguage(language) !== null;
 }
 
-export async function loadStrokeCharacterData(language: string, character: string): Promise<CharacterJson> {
+export async function loadStrokeCharacterData(
+  language: string,
+  character: string,
+): Promise<LoadedStrokeCharacterData> {
   const family = strokeLanguage(language);
   if (!family) throw new Error(`Character tracing is not available for ${language}.`);
   if (family === "ko") {
     const generated = jamoData(character) ?? hangulData(character);
     if (!generated) throw new Error("Only modern Hangul syllables are supported.");
-    return validateCharacterData(generated, character);
+    const logicalData = validateCharacterData(generated, character);
+    return {
+      logicalData,
+      animationData: logicalData,
+      animationGroups: identityAnimationGroups(logicalData.strokes.length),
+    };
   }
   const shard = await loadShard(family, character);
   const data = shard[character];
   if (!data) throw new Error(`No stroke data is available for ${character}.`);
-  return validateCharacterData(
-    family === "ja" ? normalizeJapaneseStrokeData(data) : data,
-    character,
-  );
+  const animationData = validateCharacterData(data, character, family === "ja");
+  if (family === "ja") {
+    const normalized = normalizeJapaneseStrokeData(animationData, character);
+    return {
+      logicalData: validateCharacterData(normalized.logicalData, character),
+      animationData,
+      animationGroups: normalized.animationGroups,
+    };
+  }
+  return {
+    logicalData: animationData,
+    animationData,
+    animationGroups: identityAnimationGroups(animationData.strokes.length),
+  };
 }
 
 export function clearStrokeDataCache(): void {

@@ -85,9 +85,13 @@ interface LessonPlayerProps {
   ) => Promise<string>;
   onExit: () => void;
   returnLabel?: string;
+  interactionSuspended?: boolean;
   tracingOptions?: {
+    requireStrokeOrder?: boolean;
     strokeTolerance?: number;
     showStrokeGuide?: boolean;
+    onOpenSettings?: () => void;
+    resetRevision?: number;
   };
 }
 
@@ -150,6 +154,15 @@ function isEditableTarget(target: HTMLElement | null): boolean {
   return Boolean(target?.closest("input, textarea, select, [contenteditable='true']"));
 }
 
+function isTextEditingTarget(target: HTMLElement | null): boolean {
+  const editable = target?.closest<HTMLElement>("input, textarea, select, [contenteditable='true']");
+  if (!editable) return false;
+  if (editable instanceof HTMLInputElement) {
+    return !["button", "checkbox", "radio", "reset", "submit"].includes(editable.type);
+  }
+  return true;
+}
+
 function separatedQuestionPrompts(question: PlayableQuestion): { source: string; target: string } {
   if (question.targetPrompt?.trim()) {
     return { source: question.prompt, target: question.targetPrompt.trim() };
@@ -174,6 +187,7 @@ export function LessonPlayer({
   onAskCoach,
   onExit,
   returnLabel = "Return to lessons",
+  interactionSuspended = false,
   tracingOptions,
 }: LessonPlayerProps) {
   const questionMap = useMemo(() => new Map(lesson.questions.map((question) => [question.id, question])), [lesson.questions]);
@@ -220,12 +234,34 @@ export function LessonPlayer({
   const continueButtonRef = useRef<HTMLButtonElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const autoSpokenQuestionRef = useRef<string | null>(null);
-  const focusKeyboardInputRef = useRef(false);
+  const submittingRef = useRef(false);
+  const continuingRef = useRef(false);
+  const numberBufferRef = useRef("");
+  const numberTimerRef = useRef<number | null>(null);
+  const numberFocusFrameRef = useRef<number | null>(null);
 
   function questionForState(state: RetryState): PlayableQuestion | undefined {
     const slotId = state.queue[0];
     const primary = questionMap.get(slotId);
     return state.alternateQuestionIds.includes(slotId) ? alternateMap.get(slotId) ?? primary : primary;
+  }
+
+  function focusCurrentQuestion() {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const inputs = Array.from(
+      dialog.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
+        "[data-question-answer-input]:not(:disabled)",
+      ),
+    );
+    const input = inputs.find((candidate) => !candidate.value.trim()) ?? inputs[0];
+    if (input) {
+      input.focus({ preventScroll: true });
+      const end = input.value.length;
+      input.setSelectionRange(end, end);
+      return;
+    }
+    dialog.querySelector<HTMLElement>("[data-question-focus-root]")?.focus({ preventScroll: true });
   }
 
   function showRetryState(next: RetryState) {
@@ -235,6 +271,8 @@ export function LessonPlayer({
     setAnswer(nextQuestion ? initialAnswer(nextQuestion) : "");
     setSpeaking(null);
     setEvaluation(null);
+    setSubmitting(false);
+    submittingRef.current = false;
     setError("");
     setCoachDraft("");
     setCoachError("");
@@ -257,6 +295,9 @@ export function LessonPlayer({
     setAnswer(first ? initialAnswer(first) : "");
     setSpeaking(null);
     setEvaluation(null);
+    setSubmitting(false);
+    submittingRef.current = false;
+    continuingRef.current = false;
     setError("");
     setTheoryOpen(false);
     setSpeechOpen(false);
@@ -306,10 +347,7 @@ export function LessonPlayer({
       element.setAttribute("aria-hidden", "true");
     });
     const frame = window.requestAnimationFrame(() => {
-      const initialFocus = dialogRef.current?.querySelector<HTMLElement>(
-        "[data-question-primary-focus], [data-question-answer-input], .answer-composer",
-      ) ?? dialogRef.current;
-      initialFocus?.focus();
+      if (!dialogRef.current?.contains(document.activeElement)) focusCurrentQuestion();
     });
     return () => {
       window.cancelAnimationFrame(frame);
@@ -324,20 +362,38 @@ export function LessonPlayer({
     };
   }, []);
 
-  useEffect(() => {
-    if (!currentQuestion || evaluation) return;
-    const frame = window.requestAnimationFrame(() => {
-      dialogRef.current?.querySelector<HTMLElement>(
-        "[data-question-primary-focus], [data-question-answer-input], .answer-composer",
-      )?.focus({ preventScroll: true });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [currentQuestion?.id, currentSlotId ? retryState.attemptsByQuestion[currentSlotId] : 0]);
+  useLayoutEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    dialog.inert = interactionSuspended;
+    if (interactionSuspended) dialog.setAttribute("aria-hidden", "true");
+    else dialog.removeAttribute("aria-hidden");
+  }, [interactionSuspended]);
 
   useLayoutEffect(() => {
-    if (!evaluation) return;
-    continueButtonRef.current?.focus({ preventScroll: true });
-  }, [evaluation]);
+    if (numberFocusFrameRef.current !== null) {
+      window.cancelAnimationFrame(numberFocusFrameRef.current);
+      numberFocusFrameRef.current = null;
+    }
+    if (evaluation) continueButtonRef.current?.focus({ preventScroll: true });
+  }, [currentQuestion?.id, evaluation]);
+
+  useEffect(() => {
+    if (!evaluation) continuingRef.current = false;
+  }, [currentQuestion?.id, evaluation]);
+
+  useEffect(() => {
+    numberBufferRef.current = "";
+    if (numberTimerRef.current !== null) {
+      window.clearTimeout(numberTimerRef.current);
+      numberTimerRef.current = null;
+    }
+  }, [currentQuestion?.id, evaluation, speechOpen, theoryOpen]);
+
+  useEffect(() => () => {
+    if (numberTimerRef.current !== null) window.clearTimeout(numberTimerRef.current);
+    if (numberFocusFrameRef.current !== null) window.cancelAnimationFrame(numberFocusFrameRef.current);
+  }, []);
 
   useEffect(() => {
     if (!("speechSynthesis" in window)) return;
@@ -440,22 +496,8 @@ export function LessonPlayer({
   }
 
   function handleDialogKeyDownCapture(event: React.KeyboardEvent<HTMLElement>) {
-    if (event.defaultPrevented || recordingSkipShortcut) return;
+    if (interactionSuspended || event.defaultPrevented || recordingSkipShortcut) return;
     const target = event.target instanceof HTMLElement ? event.target : null;
-    const skipShortcut = playerPreference.skipShortcut;
-    if (
-      !event.repeat
-      && !event.nativeEvent.isComposing
-      && event.nativeEvent.keyCode !== 229
-      && !speechOpen
-      && !theoryOpen
-      && lessonShortcutMatches(event.nativeEvent, skipShortcut)
-      && (!isEditableTarget(target) || skipShortcut.altKey || skipShortcut.ctrlKey || skipShortcut.metaKey || skipShortcut.shiftKey)
-    ) {
-      event.preventDefault();
-      skipCurrentQuestion();
-      return;
-    }
     if (event.key === "Escape") {
       if (target?.closest("[data-typeahead-active='true']")) return;
       event.preventDefault();
@@ -467,38 +509,6 @@ export function LessonPlayer({
       } else {
         void requestExit();
       }
-      return;
-    }
-    if (event.key === "Enter") {
-      if (
-        event.repeat
-        || event.nativeEvent.isComposing
-        || event.nativeEvent.keyCode === 229
-        || speechOpen
-        || theoryOpen
-      ) return;
-      const button = target?.closest("button");
-      const coachForm = target?.closest(".lesson-coach-chat form");
-      if (coachForm) {
-        if (button) return;
-        if (target instanceof HTMLTextAreaElement && event.shiftKey) return;
-        event.preventDefault();
-        if (coachDraft.trim() && coachingAvailable && !coachSending) void sendCoachMessage();
-        else if (evaluation) continueLesson();
-        return;
-      }
-      if (evaluation) {
-        if (button && !button.classList.contains("lesson-continue-button") && !button.hasAttribute("disabled")) return;
-        event.preventDefault();
-        continueLesson();
-        return;
-      }
-      if (button && !button.classList.contains("primary-button")) return;
-      if (target instanceof HTMLSelectElement) return;
-      if (target instanceof HTMLTextAreaElement && event.shiftKey) return;
-      if (!currentQuestion) return;
-      event.preventDefault();
-      void submitAnswer();
       return;
     }
     if (event.key !== "Tab") return;
@@ -521,6 +531,145 @@ export function LessonPlayer({
     }
   }
 
+  useEffect(() => {
+    function activateNumberShortcut(index: number) {
+      const control = dialogRef.current?.querySelector<HTMLElement>(
+        `[data-lesson-hotkey-index="${index}"]:not(:disabled)`,
+      );
+      if (!control) return;
+      control.click();
+      if (numberFocusFrameRef.current !== null) window.cancelAnimationFrame(numberFocusFrameRef.current);
+      numberFocusFrameRef.current = window.requestAnimationFrame(() => {
+        numberFocusFrameRef.current = null;
+        dialogRef.current?.querySelector<HTMLElement>("[data-question-focus-root]")?.focus({ preventScroll: true });
+      });
+    }
+
+    function handleLessonKeyDown(event: KeyboardEvent) {
+      if (
+        interactionSuspended
+        || event.defaultPrevented
+        || recordingSkipShortcut
+        || event.repeat
+        || event.isComposing
+        || event.keyCode === 229
+      ) return;
+
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      const skipShortcut = playerPreference.skipShortcut;
+      if (
+        !speechOpen
+        && !theoryOpen
+        && lessonShortcutMatches(event, skipShortcut)
+        && (!isEditableTarget(target) || skipShortcut.altKey || skipShortcut.ctrlKey || skipShortcut.metaKey || skipShortcut.shiftKey)
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        skipCurrentQuestion();
+        return;
+      }
+
+      if (event.key === "Enter") {
+        if (speechOpen || theoryOpen) return;
+        const button = target?.closest<HTMLButtonElement>("button");
+        const coachForm = target?.closest(".lesson-coach-chat form");
+        if (coachForm) {
+          if (button) return;
+          if (target instanceof HTMLTextAreaElement && event.shiftKey) return;
+          event.preventDefault();
+          event.stopPropagation();
+          if (coachDraft.trim() && coachingAvailable && !coachSending) void sendCoachMessage();
+          else if (evaluation) continueLesson();
+          return;
+        }
+        if (evaluation) {
+          if (button && !button.classList.contains("lesson-continue-button") && !button.hasAttribute("disabled")) return;
+          event.preventDefault();
+          event.stopPropagation();
+          continueLesson();
+          return;
+        }
+        if (button && !button.classList.contains("primary-button")) return;
+        if (target instanceof HTMLSelectElement) return;
+        if (target instanceof HTMLTextAreaElement && event.shiftKey) return;
+        if (!currentQuestion) return;
+        event.preventDefault();
+        event.stopPropagation();
+        void submitAnswer();
+        return;
+      }
+
+      if (
+        evaluation
+        || submitting
+        || speechOpen
+        || theoryOpen
+        || isTextEditingTarget(target)
+        || event.altKey
+        || event.ctrlKey
+        || event.metaKey
+      ) return;
+      const digit = event.code.startsWith("Numpad") ? event.code.slice(6) : event.key;
+      if (!/^\d$/.test(digit)) return;
+
+      const controls = Array.from(
+        dialogRef.current?.querySelectorAll<HTMLElement>("[data-lesson-hotkey-index]") ?? [],
+      );
+      const maxIndex = controls.reduce((maximum, control) => (
+        Math.max(maximum, Number(control.dataset.lessonHotkeyIndex) || 0)
+      ), 0);
+      if (!maxIndex) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      if (numberTimerRef.current !== null) window.clearTimeout(numberTimerRef.current);
+      if (maxIndex <= 9) {
+        numberBufferRef.current = "";
+        numberTimerRef.current = null;
+        const numeric = Number(digit);
+        if (numeric >= 1 && numeric <= maxIndex) activateNumberShortcut(numeric);
+        return;
+      }
+      const nextBuffer = `${numberBufferRef.current}${digit}`.replace(/^0+/, "");
+      numberBufferRef.current = nextBuffer;
+      const numeric = Number(nextBuffer);
+      const hasLongerCandidate = nextBuffer.length === 1
+        && Array.from({ length: maxIndex }, (_, index) => String(index + 1)).some((label) => (
+          label.length > nextBuffer.length && label.startsWith(nextBuffer)
+        ));
+      if (numeric >= 1 && numeric <= maxIndex && !hasLongerCandidate) {
+        numberBufferRef.current = "";
+        numberTimerRef.current = null;
+        activateNumberShortcut(numeric);
+        return;
+      }
+      numberTimerRef.current = window.setTimeout(() => {
+        const pending = Number(numberBufferRef.current);
+        numberBufferRef.current = "";
+        numberTimerRef.current = null;
+        if (pending >= 1 && pending <= maxIndex) activateNumberShortcut(pending);
+      }, 420);
+    }
+
+    window.addEventListener("keydown", handleLessonKeyDown, true);
+    return () => window.removeEventListener("keydown", handleLessonKeyDown, true);
+  }, [
+    answer,
+    coachDraft,
+    coachSending,
+    coachingAvailable,
+    currentQuestion,
+    evaluation,
+    interactionSuspended,
+    playerPreference.skipShortcut,
+    recordingSkipShortcut,
+    retryState,
+    speaking,
+    speechOpen,
+    submitting,
+    theoryOpen,
+  ]);
+
   function speak(text: string, preference = speechPreference): boolean {
     if (!("speechSynthesis" in window) || !text.trim()) return false;
     const voice = resolveSpeechVoice(voices, preference, lesson.targetLanguage);
@@ -535,7 +684,7 @@ export function LessonPlayer({
   }
 
   async function submitAnswer(candidateAnswer: QuestionAnswer = answer) {
-    if (!currentQuestion || evaluation || submitting) return;
+    if (!currentQuestion || evaluation || submitting || submittingRef.current) return;
     if (!isAnswerComplete(currentQuestion, candidateAnswer) && !(speaking?.audio || speaking?.transcript)) {
       setError(currentQuestion.type === "matching" || currentQuestion.type === "audioMatching"
         ? "Complete every matching pair before checking the answer."
@@ -553,6 +702,7 @@ export function LessonPlayer({
       return;
     }
     setError("");
+    submittingRef.current = true;
     setSubmitting(true);
     try {
       const local = gradeAnswer(currentQuestion, candidateAnswer);
@@ -568,12 +718,14 @@ export function LessonPlayer({
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The answer could not be evaluated right now.");
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   }
 
   function continueLesson() {
-    if (!currentQuestion || !currentSlotId || !evaluation) return;
+    if (!currentQuestion || !currentSlotId || !evaluation || continuingRef.current) return;
+    continuingRef.current = true;
     window.speechSynthesis?.cancel();
     const attemptNumber = (retryState.attemptsByQuestion[currentSlotId] ?? 0) + 1;
     const nextState = applyAttempt(retryState, currentSlotId, evaluation.status);
@@ -723,6 +875,7 @@ export function LessonPlayer({
     || targetGlossarySample?.term
     || voicePreviewSample(lesson.targetLanguage);
   const speechRateLabel = `${Number(speechPreference.rate.toFixed(2))}x`;
+  const typeaheadTimeoutLabel = `${Number((playerPreference.typeaheadTimeoutMs / 1_000).toFixed(2))}s`;
   const listeningPaused = playerPreference.listeningDisabledUntil > now;
   const automaticallyGraded = currentQuestion
     ? ["matching", "audioMatching", "categorize", "characterTracing"].includes(currentQuestion.type)
@@ -731,14 +884,10 @@ export function LessonPlayer({
   const portalTarget = document.querySelector<HTMLElement>(".app-shell") ?? document.body;
 
   useLayoutEffect(() => {
-    if (!focusKeyboardInputRef.current || answerInputMode !== "keyboard") return;
-    focusKeyboardInputRef.current = false;
-    const input = dialogRef.current?.querySelector<HTMLInputElement | HTMLTextAreaElement>("[data-question-answer-input]");
-    if (!input) return;
-    input.focus({ preventScroll: true });
-    const end = input.value.length;
-    input.setSelectionRange(end, end);
-  }, [answerInputMode, currentQuestion?.id]);
+    if (!currentQuestion || evaluation) return undefined;
+    focusCurrentQuestion();
+    return undefined;
+  }, [answerInputMode, currentQuestion?.id, displayedAttempt, evaluation]);
 
   useEffect(() => {
     if (!presentation?.readQuestion) {
@@ -766,7 +915,6 @@ export function LessonPlayer({
   function switchAnswerInputMode() {
     if (!answerInputMode) return;
     const nextMode: AnswerInputMode = answerInputMode === "keyboard" ? "bank" : "keyboard";
-    focusKeyboardInputRef.current = nextMode === "keyboard";
     setAnswerInputModeOverride(nextMode);
   }
 
@@ -868,7 +1016,7 @@ export function LessonPlayer({
 
         {currentQuestion ? (
           <main className="lesson-question-scroll">
-            <article className="lesson-question-stage">
+            <article className="lesson-question-stage" data-question-focus-root tabIndex={-1}>
               <div className="lesson-question-label-row">
                 <span>{getQuestionFormatDefinition(currentQuestion.type).label}</span>
                 {upcomingRetry ? <span className="retry-badge"><RotateCcw size={13} /> Attempt {displayedAttempt}</span> : null}
@@ -906,6 +1054,7 @@ export function LessonPlayer({
                 onRequireAlternate={() => useCurrentAlternate("This exercise is not supported on this device.")}
                 onComplete={completeInteractiveQuestion}
                 renderText={renderLessonText}
+                typeaheadResetMs={playerPreference.typeaheadTimeoutMs}
                 tracingOptions={tracingOptions}
               />
               {error ? <p className="inline-error" role="alert">{error}</p> : null}
@@ -1119,6 +1268,31 @@ export function LessonPlayer({
               <p className="lesson-shortcut-status" role="status">{shortcutStatus}</p>
             </section>
             <section className="lesson-settings-section">
+              <div className="lesson-settings-section-title"><strong>Word bank</strong><span>Browser setting</span></div>
+              <label className="lesson-range-control lesson-typeahead-control" htmlFor="lesson-typeahead-timeout">
+                <span><b>Typeahead reset time</b><output>{typeaheadTimeoutLabel}</output></span>
+                <input
+                  id="lesson-typeahead-timeout"
+                  type="range"
+                  min="1"
+                  max="10"
+                  step="0.25"
+                  value={playerPreference.typeaheadTimeoutMs / 1_000}
+                  aria-valuetext={typeaheadTimeoutLabel}
+                  onChange={(event) => setPlayerPreference((current) => ({
+                    ...current,
+                    typeaheadTimeoutMs: Math.round(Number(event.target.value) * 1_000),
+                  }))}
+                />
+                <small className="lesson-speed-ticks" aria-hidden="true">
+                  <span style={{ left: "0%" }}>1s</span>
+                  <span style={{ left: "44.444%" }}>5s</span>
+                  <span style={{ left: "100%" }}>10s</span>
+                </small>
+              </label>
+              <p>Controls how long an unfinished word prefix stays active. A unique match is still selected immediately.</p>
+            </section>
+            <section className="lesson-settings-section">
               <div className="lesson-settings-section-title"><strong>Listening</strong>{listeningPaused ? <span>{listeningCountdown(playerPreference.listeningDisabledUntil, now)}</span> : <span>Available</span>}</div>
               <p>{listeningPaused ? "Listening exercises use their non-listening alternatives." : "Listening exercises are enabled."}</p>
               {listeningPaused ? <button className="secondary-button" type="button" onClick={() => setPlayerPreference((current) => enableListening(current))}>Enable listening now</button> : null}
@@ -1150,7 +1324,7 @@ export function LessonPlayer({
                     : `Install a ${lesson.targetLanguage} system voice to use speech.`)}
                 </p>
               </div>
-              <label className="lesson-speed-control" htmlFor="lesson-voice-speed">
+              <label className="lesson-range-control lesson-speed-control" htmlFor="lesson-voice-speed">
                 <span><b>Voice speed</b><output>{speechRateLabel}</output></span>
                 <input
                   id="lesson-voice-speed"

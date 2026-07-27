@@ -1,16 +1,31 @@
-import { LoaderCircle, Play, RotateCcw, Square } from "lucide-react";
+import { LoaderCircle, Play, RotateCcw, Settings2, Square, Volume2 } from "lucide-react";
 import {
   useCallback,
   useEffect,
   useId,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
+  type RefObject,
 } from "react";
 import type { CharacterJson, Point } from "hanzi-writer";
 import type { CharacterTracingQuestion, QuestionAnswer } from "./types";
-import { loadStrokeCharacterData } from "./strokeData";
+import {
+  loadStrokeCharacterData,
+  type LoadedStrokeCharacterData,
+} from "./strokeData";
+import {
+  createStrokeProgressCells,
+  createStrokeGuideSamples,
+  projectPointerToStrokeGuide,
+  strokeGuidePath,
+  strokeGuidePosition,
+  strokeProgressCellPath,
+  type StrokeGuidePoint,
+  type StrokeGuidePosition,
+} from "./strokeGuide";
 
 interface CharacterTracingResponseProps {
   question: CharacterTracingQuestion;
@@ -20,6 +35,9 @@ interface CharacterTracingResponseProps {
   onChange: (answer: QuestionAnswer) => void;
   onUnavailable?: () => void;
   onStart?: () => void;
+  onSpeak?: (character: string) => void;
+  onOpenSettings?: () => void;
+  requireStrokeOrder?: boolean;
   strokeTolerance?: number;
   showStrokeGuide?: boolean;
 }
@@ -28,6 +46,8 @@ interface DrawnStroke {
   points: Point[];
 }
 
+type HanziWriterInstance = import("hanzi-writer").default;
+
 const DRAWING_SIZE = 280;
 const DRAWING_PADDING = 16;
 const CHARACTER_CENTER = { x: 512, y: 388 };
@@ -35,6 +55,28 @@ const MAX_CENTER_OFFSET = 48;
 const TRACING_AVERAGE_DISTANCE_THRESHOLD = 500;
 const FORGIVING_TOLERANCE_THRESHOLD = 1.5;
 const FORGIVING_MISS_LIMIT = 4;
+const STROKE_ANIMATION_COLOR = "#6e5de7";
+const STROKE_HIGHLIGHT_COLOR = "#e2668d";
+const LOGICAL_STROKE_DELAY = 350;
+const LOOP_ANIMATION_DELAY = 800;
+const GUIDE_START_DISTANCE = 44;
+const STROKE_DATA_SCALE = (DRAWING_SIZE - DRAWING_PADDING * 2) / 1_024;
+const STROKE_DATA_BASELINE = DRAWING_SIZE - DRAWING_PADDING - 124 * STROKE_DATA_SCALE;
+const STROKE_PATH_TRANSFORM = [
+  `translate(${DRAWING_PADDING} ${STROKE_DATA_BASELINE})`,
+  `scale(${STROKE_DATA_SCALE} ${-STROKE_DATA_SCALE})`,
+].join(" ");
+const STROKE_PROGRESS_BOUNDS = {
+  minX: 0,
+  minY: 0,
+  maxX: DRAWING_SIZE,
+  maxY: DRAWING_SIZE,
+} as const;
+
+function animationDelay(duration: number): Promise<void> {
+  if (duration <= 0) return Promise.resolve();
+  return new Promise((resolve) => window.setTimeout(resolve, duration));
+}
 
 function quizInstructions(strokeTolerance: number): string {
   return strokeTolerance >= FORGIVING_TOLERANCE_THRESHOLD
@@ -105,45 +147,197 @@ function offsetStyle(offset: TraceOffset): CSSProperties {
   };
 }
 
-function StrokeGuide({ median, offset }: { median?: number[][]; offset: TraceOffset }) {
-  const markerId = `stroke-guide-${useId().replace(/[^a-z0-9_-]/gi, "")}`;
-  if (!median?.length) return null;
-  const points = median.map(internalPointToDrawingPoint);
-  const start = points[0];
-  const directionTarget = points.find(([x, y]) => Math.hypot(x - start[0], y - start[1]) >= 12)
-    ?? points[points.length - 1];
-  const directionLength = Math.max(1, Math.hypot(directionTarget[0] - start[0], directionTarget[1] - start[1]));
-  const directionEnd: [number, number] = [
-    start[0] + ((directionTarget[0] - start[0]) / directionLength) * 22,
-    start[1] + ((directionTarget[1] - start[1]) / directionLength) * 22,
-  ];
+function StrokeGuide({
+  median,
+  strokePath,
+  offset,
+  containerRef,
+}: {
+  median?: number[][];
+  strokePath?: string;
+  offset: TraceOffset;
+  containerRef: RefObject<HTMLDivElement>;
+}) {
+  const id = useId().replace(/[^a-z0-9_-]/gi, "");
+  const markerId = `stroke-guide-marker-${id}`;
+  const clipId = `stroke-guide-clip-${id}`;
+  const svgRef = useRef<SVGSVGElement>(null);
+  const handleRef = useRef<SVGGElement>(null);
+  const progressCellRefs = useRef(new Map<number, SVGPathElement>());
+  const activePointerRef = useRef<number | null>(null);
+  const progressIndexRef = useRef(0);
+  const revealedProgressIndexRef = useRef(-1);
+  const frameRef = useRef<number | null>(null);
+  const pendingPositionRef = useRef<StrokeGuidePosition | null>(null);
+  const pendingRevealIndexRef = useRef(-1);
+  const points = useMemo<StrokeGuidePoint[]>(() => (
+    median?.map((point) => {
+      const [x, y] = internalPointToDrawingPoint(point);
+      return { x, y };
+    }) ?? []
+  ), [median]);
+  const samples = useMemo(() => createStrokeGuideSamples(points), [points]);
+  const path = useMemo(() => strokeGuidePath(samples), [samples]);
+  const progressCells = useMemo(
+    () => createStrokeProgressCells(samples, STROKE_PROGRESS_BOUNDS),
+    [samples],
+  );
+
+  const setProgressCellVisibility = useCallback((nextIndex: number) => {
+    const previousIndex = revealedProgressIndexRef.current;
+    if (nextIndex === previousIndex) return;
+    progressCellRefs.current.forEach((cell, sampleIndex) => {
+      if (
+        (sampleIndex <= previousIndex) === (sampleIndex <= nextIndex)
+      ) {
+        return;
+      }
+      const revealed = sampleIndex <= nextIndex;
+      cell.setAttribute("opacity", revealed ? "1" : "0");
+      cell.dataset.revealed = revealed ? "true" : "false";
+    });
+    revealedProgressIndexRef.current = nextIndex;
+  }, []);
+
+  const queueGuidePosition = useCallback((
+    position: StrokeGuidePosition | null,
+    revealIndex: number,
+  ) => {
+    pendingPositionRef.current = position;
+    pendingRevealIndexRef.current = revealIndex;
+    if (frameRef.current !== null) return;
+    frameRef.current = window.requestAnimationFrame(() => {
+      frameRef.current = null;
+      const next = pendingPositionRef.current;
+      if (!next || !handleRef.current) return;
+      handleRef.current.setAttribute(
+        "transform",
+        `translate(${next.x.toFixed(2)} ${next.y.toFixed(2)}) rotate(${next.angle.toFixed(2)})`,
+      );
+      setProgressCellVisibility(pendingRevealIndexRef.current);
+    });
+  }, [setProgressCellVisibility]);
+
+  useEffect(() => {
+    progressIndexRef.current = 0;
+    revealedProgressIndexRef.current = -1;
+    progressCellRefs.current.forEach((cell) => {
+      cell.setAttribute("opacity", "0");
+      cell.dataset.revealed = "false";
+    });
+    queueGuidePosition(strokeGuidePosition(samples, 0), -1);
+  }, [progressCells, queueGuidePosition, samples]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    const svg = svgRef.current;
+    if (!container || !svg || samples.length < 2) return;
+
+    const pointerInGuide = (event: PointerEvent): StrokeGuidePoint | null => {
+      const bounds = svg.getBoundingClientRect();
+      if (!bounds.width || !bounds.height) return null;
+      return {
+        x: (event.clientX - bounds.left) * DRAWING_SIZE / bounds.width,
+        y: (event.clientY - bounds.top) * DRAWING_SIZE / bounds.height,
+      };
+    };
+    const reset = (event?: PointerEvent) => {
+      if (event && activePointerRef.current !== event.pointerId) return;
+      activePointerRef.current = null;
+      progressIndexRef.current = 0;
+      queueGuidePosition(strokeGuidePosition(samples, 0), -1);
+    };
+    const handlePointerDown = (event: PointerEvent) => {
+      if (event.button > 0 || activePointerRef.current !== null) return;
+      const pointer = pointerInGuide(event);
+      if (!pointer || Math.hypot(pointer.x - samples[0].x, pointer.y - samples[0].y) > GUIDE_START_DISTANCE) {
+        return;
+      }
+      activePointerRef.current = event.pointerId;
+      progressIndexRef.current = 0;
+      const position = projectPointerToStrokeGuide(samples, pointer, 0);
+      queueGuidePosition(position, position?.index ?? -1);
+    };
+    const handlePointerMove = (event: PointerEvent) => {
+      if (activePointerRef.current !== event.pointerId) return;
+      const pointer = pointerInGuide(event);
+      if (!pointer) return;
+      const position = projectPointerToStrokeGuide(samples, pointer, progressIndexRef.current);
+      if (!position) return;
+      progressIndexRef.current = position.index;
+      queueGuidePosition(position, position.index);
+    };
+
+    container.addEventListener("pointerdown", handlePointerDown);
+    container.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", reset);
+    window.addEventListener("pointercancel", reset);
+    return () => {
+      container.removeEventListener("pointerdown", handlePointerDown);
+      container.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", reset);
+      window.removeEventListener("pointercancel", reset);
+      activePointerRef.current = null;
+    };
+  }, [containerRef, queueGuidePosition, samples]);
+
+  useEffect(() => () => {
+    if (frameRef.current !== null) {
+      window.cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
+    }
+  }, []);
+
+  if (!path) return null;
 
   return (
     <svg
+      ref={svgRef}
       className="stroke-guide"
       viewBox={`0 0 ${DRAWING_SIZE} ${DRAWING_SIZE}`}
       style={offsetStyle(offset)}
       aria-hidden="true"
     >
       <defs>
-        <marker id={markerId} markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
-          <path d="M 0 0 L 8 4 L 0 8 Z" />
+        {strokePath ? (
+          <clipPath id={clipId} clipPathUnits="userSpaceOnUse">
+            <path d={strokePath} transform={STROKE_PATH_TRANSFORM} />
+          </clipPath>
+        ) : null}
+        <marker id={markerId} markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+          <path d="M 0 0 L 6 3 L 0 6 Z" />
         </marker>
       </defs>
-      <polyline
+      {strokePath && progressCells.length ? (
+        <g
+          className="stroke-guide-progress-cells"
+          clipPath={`url(#${clipId})`}
+        >
+          {progressCells.map((cell) => (
+            <path
+              key={cell.sampleIndex}
+              ref={(node) => {
+                if (node) progressCellRefs.current.set(cell.sampleIndex, node);
+                else progressCellRefs.current.delete(cell.sampleIndex);
+              }}
+              className="stroke-guide-progress-cell"
+              d={strokeProgressCellPath(cell.points)}
+              data-sample-index={cell.sampleIndex}
+              data-revealed="false"
+              opacity="0"
+            />
+          ))}
+        </g>
+      ) : null}
+      <path
         className="stroke-guide-path"
-        points={points.map(([x, y]) => `${x},${y}`).join(" ")}
+        d={path}
         markerEnd={`url(#${markerId})`}
       />
-      <circle className="stroke-guide-start" cx={start[0]} cy={start[1]} r="11" />
-      <line
-        className="stroke-guide-direction"
-        x1={start[0] - 2}
-        y1={start[1]}
-        x2={directionEnd[0]}
-        y2={directionEnd[1]}
-        markerEnd={`url(#${markerId})`}
-      />
+      <g ref={handleRef} className="stroke-guide-handle">
+        <circle r="9" />
+        <path d="M -4 0 H 3 M 0 -3 L 3 0 L 0 3" />
+      </g>
     </svg>
   );
 }
@@ -268,34 +462,95 @@ export function CharacterTracingResponse({
   onChange,
   onUnavailable,
   onStart,
+  onSpeak,
+  onOpenSettings,
+  requireStrokeOrder: requireStrokeOrderOverride,
   strokeTolerance = 1,
   showStrokeGuide = true,
 }: CharacterTracingResponseProps) {
+  const requireStrokeOrder = requireStrokeOrderOverride ?? question.requireStrokeOrder;
   const gridRef = useRef<HTMLDivElement>(null);
   const targetRef = useRef<HTMLDivElement>(null);
-  const writerRef = useRef<import("hanzi-writer").default | null>(null);
+  const animationTargetRef = useRef<HTMLDivElement>(null);
+  const writerRef = useRef<HanziWriterInstance | null>(null);
+  const animationWriterRef = useRef<HanziWriterInstance | null>(null);
   const animationRunRef = useRef(0);
   const centerOffsetRef = useRef<TraceOffset>({ x: 0, y: 0 });
-  const [data, setData] = useState<CharacterJson | null>(null);
+  const [data, setData] = useState<LoadedStrokeCharacterData | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [error, setError] = useState(question.unavailableReason ?? "");
   const [quizMessage, setQuizMessage] = useState(() => quizInstructions(strokeTolerance));
   const [animating, setAnimating] = useState(false);
+  const [hinting, setHinting] = useState(false);
   const [loopAnimation, setLoopAnimation] = useState(false);
   const [currentStroke, setCurrentStroke] = useState(0);
   const [centerOffset, setCenterOffset] = useState<TraceOffset>({ x: 0, y: 0 });
   const [reducedMotion, setReducedMotion] = useState(false);
   const completed = answer === "passed";
 
-  const startQuiz = useCallback((writer: import("hanzi-writer").default) => {
+  const cancelVisualAnimation = useCallback(() => {
     animationRunRef.current += 1;
+    setHinting(false);
+    void animationWriterRef.current?.hideCharacter({ duration: 0 });
+  }, []);
+
+  const playAnimationGroups = useCallback(async (
+    animationWriter: HanziWriterInstance,
+    groups: number[][],
+    run: number,
+    color: string,
+    groupDelay: number,
+  ): Promise<boolean> => {
+    await animationWriter.updateColor("strokeColor", color, { duration: 0 });
+    await animationWriter.hideCharacter({ duration: 0 });
+    if (animationRunRef.current !== run) return false;
+
+    for (let groupIndex = 0; groupIndex < groups.length; groupIndex += 1) {
+      for (const rawStrokeIndex of groups[groupIndex]) {
+        if (animationRunRef.current !== run) return false;
+        const result = await animationWriter.animateStroke(rawStrokeIndex);
+        if (animationRunRef.current !== run || result?.canceled) return false;
+      }
+      if (groupIndex < groups.length - 1 && groupDelay > 0) {
+        await animationDelay(groupDelay);
+        if (animationRunRef.current !== run) return false;
+      }
+    }
+    return animationRunRef.current === run;
+  }, []);
+
+  const playStrokeHint = useCallback((strokeNum: number) => {
+    const animationWriter = animationWriterRef.current;
+    const group = data?.animationGroups[strokeNum];
+    if (!animationWriter || !group?.length) return;
+    const run = animationRunRef.current + 1;
+    animationRunRef.current = run;
+    setHinting(true);
+    void (async () => {
+      const played = await playAnimationGroups(
+        animationWriter,
+        [group],
+        run,
+        STROKE_HIGHLIGHT_COLOR,
+        0,
+      );
+      if (!played) return;
+      await animationDelay(reducedMotion ? 0 : 240);
+      if (animationRunRef.current !== run) return;
+      await animationWriter.hideCharacter({ duration: 0 });
+      if (animationRunRef.current === run) setHinting(false);
+    })();
+  }, [data, playAnimationGroups, reducedMotion]);
+
+  const startQuiz = useCallback((writer: HanziWriterInstance) => {
+    cancelVisualAnimation();
     setAnimating(false);
     setCurrentStroke(0);
     setQuizMessage(quizInstructions(strokeTolerance));
     void writer.quiz({
       leniency: strokeTolerance,
       averageDistanceThreshold: TRACING_AVERAGE_DISTANCE_THRESHOLD,
-      showHintAfterMisses: 2,
+      showHintAfterMisses: false,
       markStrokeCorrectAfterMisses: strokeTolerance >= FORGIVING_TOLERANCE_THRESHOLD
         ? FORGIVING_MISS_LIMIT
         : false,
@@ -303,9 +558,11 @@ export function CharacterTracingResponse({
       onMistake: ({ strokeNum, mistakesOnStroke }) => {
         if (writerRef.current !== writer) return;
         setQuizMessage(`Stroke ${strokeNum + 1} was not recognized. Miss ${mistakesOnStroke}; follow the highlighted path.`);
+        if (mistakesOnStroke >= 2) playStrokeHint(strokeNum);
       },
       onCorrectStroke: ({ strokeNum, strokesRemaining }) => {
         if (writerRef.current !== writer) return;
+        cancelVisualAnimation();
         setCurrentStroke(strokeNum + 1);
         setQuizMessage(strokesRemaining
           ? `Stroke ${strokeNum + 1} accepted. ${strokesRemaining} remaining.`
@@ -313,11 +570,12 @@ export function CharacterTracingResponse({
       },
       onComplete: () => {
         if (writerRef.current !== writer) return;
+        cancelVisualAnimation();
         setQuizMessage("Tracing complete.");
         onChange("passed");
       },
     });
-  }, [onChange, strokeTolerance]);
+  }, [cancelVisualAnimation, onChange, playStrokeHint, strokeTolerance]);
 
   useEffect(() => {
     const media = window.matchMedia?.("(prefers-reduced-motion: reduce)");
@@ -343,7 +601,7 @@ export function CharacterTracingResponse({
       .then((next) => {
         if (!active) return;
         setData(next);
-        setCenterOffset(characterCenterOffset(next));
+        setCenterOffset(characterCenterOffset(next.logicalData));
         setStatus("ready");
       })
       .catch((caught) => {
@@ -356,17 +614,28 @@ export function CharacterTracingResponse({
       animationRunRef.current += 1;
       writerRef.current?.cancelQuiz();
       void writerRef.current?.hideCharacter({ duration: 0 });
+      void animationWriterRef.current?.hideCharacter({ duration: 0 });
       writerRef.current = null;
+      animationWriterRef.current = null;
     };
   }, [language, question.character, question.unavailableReason]);
 
   useEffect(() => {
-    if (!question.requireStrokeOrder || !data || !targetRef.current || disabled) return;
+    if (
+      !requireStrokeOrder
+      || !data
+      || !targetRef.current
+      || !animationTargetRef.current
+      || disabled
+    ) return;
     let active = true;
     let centerFrame: number | null = null;
     setAnimating(false);
+    setHinting(false);
     const target = targetRef.current;
+    const animationTarget = animationTargetRef.current;
     target.replaceChildren();
+    animationTarget.replaceChildren();
     void import("hanzi-writer").then(({ default: HanziWriter }) => {
       if (!active) return;
       const writer = HanziWriter.create(target, question.character, {
@@ -375,16 +644,31 @@ export function CharacterTracingResponse({
         padding: DRAWING_PADDING,
         showCharacter: false,
         showOutline: true,
-        strokeColor: "#6e5de7",
+        strokeColor: STROKE_ANIMATION_COLOR,
         outlineColor: "#aaa5bb",
-        drawingColor: "#6e5de7",
-        highlightColor: "#e2668d",
+        drawingColor: STROKE_ANIMATION_COLOR,
+        highlightColor: STROKE_HIGHLIGHT_COLOR,
         strokeAnimationSpeed: reducedMotion ? 8 : 1,
-        delayBetweenStrokes: reducedMotion ? 0 : 350,
-        delayBetweenLoops: reducedMotion ? 0 : 800,
-        charDataLoader: () => data,
+        delayBetweenStrokes: reducedMotion ? 0 : LOGICAL_STROKE_DELAY,
+        delayBetweenLoops: reducedMotion ? 0 : LOOP_ANIMATION_DELAY,
+        charDataLoader: () => data.logicalData,
+      });
+      const animationWriter = HanziWriter.create(animationTarget, question.character, {
+        width: DRAWING_SIZE,
+        height: DRAWING_SIZE,
+        padding: DRAWING_PADDING,
+        showCharacter: false,
+        showOutline: false,
+        strokeColor: STROKE_ANIMATION_COLOR,
+        outlineColor: "#000000",
+        strokeAnimationSpeed: reducedMotion ? 8 : 1,
+        delayBetweenStrokes: 0,
+        delayBetweenLoops: 0,
+        charDataLoader: () => data.animationData,
       });
       writerRef.current = writer;
+      animationWriterRef.current = animationWriter;
+      void animationWriter.hideCharacter({ duration: 0 });
       startQuiz(writer);
       const centerRenderedCharacter = (attempt = 0) => {
         centerFrame = window.requestAnimationFrame(() => {
@@ -423,13 +707,16 @@ export function CharacterTracingResponse({
       animationRunRef.current += 1;
       writerRef.current?.cancelQuiz();
       void writerRef.current?.hideCharacter({ duration: 0 });
+      void animationWriterRef.current?.hideCharacter({ duration: 0 });
       writerRef.current = null;
+      animationWriterRef.current = null;
     };
-  }, [data, disabled, question.character, question.requireStrokeOrder, reducedMotion, startQuiz]);
+  }, [data, disabled, question.character, reducedMotion, requireStrokeOrder, startQuiz]);
 
   function toggleAnimation() {
     const writer = writerRef.current;
-    if (!writer) return;
+    const animationWriter = animationWriterRef.current;
+    if (!writer || !animationWriter || !data) return;
     if (animating) {
       startQuiz(writer);
       return;
@@ -442,31 +729,77 @@ export function CharacterTracingResponse({
       ? "Looping the complete stroke order..."
       : "Animating the complete stroke order...");
     writer.cancelQuiz();
-    if (loopAnimation && !reducedMotion) {
-      void writer.loopCharacterAnimation().then(() => {
-        if (writerRef.current !== writer || animationRunRef.current !== run) return;
-        startQuiz(writer);
-      });
-      return;
-    }
-    void writer.animateCharacter({
-      onComplete: ({ canceled }) => {
-        if (writerRef.current !== writer || animationRunRef.current !== run) return;
+    void writer.hideCharacter({ duration: 0 });
+    setHinting(false);
+    void (async () => {
+      const shouldLoop = loopAnimation && !reducedMotion;
+      do {
+        const played = await playAnimationGroups(
+          animationWriter,
+          data.animationGroups,
+          run,
+          STROKE_ANIMATION_COLOR,
+          reducedMotion ? 0 : LOGICAL_STROKE_DELAY,
+        );
+        if (!played) return;
+        if (!shouldLoop) break;
+        await animationDelay(LOOP_ANIMATION_DELAY);
+      } while (
+        writerRef.current === writer
+        && animationWriterRef.current === animationWriter
+        && animationRunRef.current === run
+      );
+      if (
+        writerRef.current !== writer
+        || animationWriterRef.current !== animationWriter
+        || animationRunRef.current !== run
+      ) return;
+      if (disabled || completed) {
         setAnimating(false);
-        if (canceled || disabled || completed) return;
-        startQuiz(writer);
-      },
-    });
+        await animationWriter.hideCharacter({ duration: 0 });
+        return;
+      }
+      startQuiz(writer);
+    })();
+  }
+
+  function handleTracingStart() {
+    if (animating) return;
+    cancelVisualAnimation();
+    onStart?.();
   }
 
   return (
     <section className="character-tracing-response" aria-label={`Trace ${question.character}`}>
       <div className="character-tracing-heading">
-        <div>
-          <strong>{question.character}</strong>
-          {question.reading ? <span>{question.reading}</span> : null}
+        <div className="character-tracing-identity">
+          <div className="character-tracing-glyph">
+            <strong>{question.character}</strong>
+            {question.reading ? <span>{question.reading}</span> : null}
+          </div>
+          {onSpeak ? (
+            <button
+              type="button"
+              aria-label={`Play ${question.character} pronunciation`}
+              title="Play pronunciation"
+              onClick={() => onSpeak(question.character)}
+            >
+              <Volume2 size={18} />
+            </button>
+          ) : null}
         </div>
         {question.meaning ? <p>{question.meaning}</p> : null}
+        {onOpenSettings ? (
+          <button
+            className="character-tracing-settings"
+            type="button"
+            aria-label="Open Letter settings"
+            title="Letter settings"
+            onClick={onOpenSettings}
+          >
+            <Settings2 size={18} />
+          </button>
+        ) : null}
       </div>
       {status === "loading" ? <p className="tracing-loading"><LoaderCircle className="spin" size={18} /> Loading local stroke data...</p> : null}
       {status === "error" ? (
@@ -475,17 +808,28 @@ export function CharacterTracingResponse({
           {onUnavailable ? <button type="button" className="secondary-button" onClick={onUnavailable}><Play size={15} /> Use alternate exercise</button> : null}
         </div>
       ) : null}
-      {status === "ready" && data && question.requireStrokeOrder ? (
+      {status === "ready" && data && requireStrokeOrder ? (
         <>
           <div className="tracing-grid" ref={gridRef}>
             <div
               className="hanzi-writer-target"
               ref={targetRef}
               style={offsetStyle(centerOffset)}
-              onPointerDown={onStart}
+              onPointerDown={handleTracingStart}
             />
-            {showStrokeGuide && !completed && !animating ? (
-              <StrokeGuide median={data.medians[currentStroke]} offset={centerOffset} />
+            <div
+              className="hanzi-writer-animation-target"
+              ref={animationTargetRef}
+              style={offsetStyle(centerOffset)}
+              aria-hidden="true"
+            />
+            {showStrokeGuide && !completed && !animating && !hinting ? (
+              <StrokeGuide
+                median={data.logicalData.medians[currentStroke]}
+                strokePath={data.logicalData.strokes[currentStroke]}
+                offset={centerOffset}
+                containerRef={gridRef}
+              />
             ) : null}
           </div>
           <div className="tracing-instruction">
@@ -517,9 +861,9 @@ export function CharacterTracingResponse({
           </div>
         </>
       ) : null}
-      {status === "ready" && data && !question.requireStrokeOrder ? (
+      {status === "ready" && data && !requireStrokeOrder ? (
         <FreeShapeCanvas
-          data={data}
+          data={data.logicalData}
           disabled={disabled || completed}
           offset={centerOffset}
           onStart={onStart}

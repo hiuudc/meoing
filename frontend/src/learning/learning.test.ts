@@ -5,6 +5,7 @@ import { gradeAnswer, normalizeAnswer } from "./grader";
 import { segmentGlossaryText } from "./glossary";
 import { parseMultiClozeTemplate, validateMultiClozeMarkers } from "./multiCloze";
 import {
+  DEFAULT_TYPEAHEAD_TIMEOUT_MS,
   DEFAULT_SKIP_SHORTCUT,
   LISTENING_PAUSE_DURATION_MS,
   effectivePresentation,
@@ -12,6 +13,7 @@ import {
   lessonShortcutLabel,
   lessonShortcutMatches,
   normalizeLessonPlayerPreference,
+  normalizeTypeaheadTimeoutMs,
   pauseListening,
   resetLessonPlayerPreference,
   resetPresentationOverrides,
@@ -469,6 +471,7 @@ describe("glossary and speech preferences", () => {
       pronunciationMode: "native",
       listeningDisabledUntil: now + LISTENING_PAUSE_DURATION_MS,
       skipShortcut: DEFAULT_SKIP_SHORTCUT,
+      typeaheadTimeoutMs: DEFAULT_TYPEAHEAD_TIMEOUT_MS,
     });
     expect(pauseListening(normalized, now).listeningDisabledUntil).toBe(now + LISTENING_PAUSE_DURATION_MS);
     expect(resetPresentationOverrides(normalized)).not.toHaveProperty("readQuestion");
@@ -478,11 +481,21 @@ describe("glossary and speech preferences", () => {
       pronunciationMode: "romanized",
       listeningDisabledUntil: now + LISTENING_PAUSE_DURATION_MS,
       skipShortcut: DEFAULT_SKIP_SHORTCUT,
+      typeaheadTimeoutMs: DEFAULT_TYPEAHEAD_TIMEOUT_MS,
     });
     expect(effectivePresentation(
       { readQuestion: false, readAnswers: true, wordTooltips: true },
       normalized,
     )).toEqual({ readQuestion: true, readAnswers: true, wordTooltips: false });
+  });
+
+  it("normalizes the browser-wide typeahead timeout to the supported quarter-second range", () => {
+    expect(normalizeTypeaheadTimeoutMs(undefined)).toBe(1_500);
+    expect(normalizeTypeaheadTimeoutMs(900)).toBe(1_000);
+    expect(normalizeTypeaheadTimeoutMs(1_380)).toBe(1_500);
+    expect(normalizeTypeaheadTimeoutMs(9_870)).toBe(9_750);
+    expect(normalizeTypeaheadTimeoutMs(12_000)).toBe(10_000);
+    expect(normalizeLessonPlayerPreference({ typeaheadTimeoutMs: 2_750 }).typeaheadTimeoutMs).toBe(2_750);
   });
 
   it("normalizes and matches safe lesson shortcuts", () => {
