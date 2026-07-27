@@ -70,7 +70,6 @@ async function renderTracing(
   showStrokeGuide?: boolean,
   actions: {
     onSpeak?: (character: string) => void;
-    onOpenSettings?: () => void;
   } = {},
 ) {
   document.body.innerHTML = '<div class="app-shell"><div id="mount"></div></div>';
@@ -119,23 +118,23 @@ afterEach(async () => {
 });
 
 describe("CharacterTracingResponse", () => {
-  it("exposes manual pronunciation and Letter settings actions for the current glyph", async () => {
+  it("places manual pronunciation before the glyph without embedding Letter settings", async () => {
     const onSpeak = vi.fn();
-    const onOpenSettings = vi.fn();
-    await renderTracing(undefined, undefined, { onSpeak, onOpenSettings });
+    await renderTracing(undefined, undefined, { onSpeak });
 
     const speaker = document.querySelector<HTMLButtonElement>(
       `[aria-label="Play ${question.character} pronunciation"]`,
     );
     const settings = document.querySelector<HTMLButtonElement>('[aria-label="Open Letter settings"]');
+    const identity = document.querySelector(".character-tracing-identity");
     expect(speaker).not.toBeNull();
-    expect(settings).not.toBeNull();
+    expect(settings).toBeNull();
+    expect(identity?.firstElementChild).toBe(speaker);
+    expect(speaker?.nextElementSibling?.classList.contains("character-tracing-glyph")).toBe(true);
 
     await act(async () => speaker!.click());
-    await act(async () => settings!.click());
 
     expect(onSpeak).toHaveBeenCalledWith(question.character);
-    expect(onOpenSettings).toHaveBeenCalledTimes(1);
   });
 
   it("uses the live stroke-order override instead of the stored question value", async () => {

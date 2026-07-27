@@ -10,9 +10,9 @@ export const STROKE_TOLERANCE_PRESETS = [
   { label: "Standard", value: DEFAULT_STROKE_TOLERANCE },
   { label: "Forgiving", value: MAX_STROKE_TOLERANCE },
 ] as const;
-export const MIN_LETTERS_PRACTICE_QUESTIONS = 1;
-export const MAX_LETTERS_PRACTICE_QUESTIONS = 20;
-export const DEFAULT_LETTERS_PRACTICE_QUESTIONS = 5;
+export const MIN_LETTERS_PRACTICE_CHARACTERS = 1;
+export const MAX_LETTERS_PRACTICE_CHARACTERS = 10;
+export const DEFAULT_LETTERS_PRACTICE_CHARACTERS = 5;
 
 export type LetterProgressStatus = "practicing" | "mastered";
 export type LettersScript =
@@ -28,7 +28,7 @@ export interface LettersLanguageProgress {
   requireStrokeOrder: boolean;
   strokeTolerance: number;
   showStrokeGuide: boolean;
-  practiceQuestionCount: number;
+  practiceCharacterCount: number;
   characters: Record<string, LetterProgressStatus>;
 }
 
@@ -36,7 +36,6 @@ export interface LetterSettings {
   requireStrokeOrder: boolean;
   strokeTolerance: number;
   showStrokeGuide: boolean;
-  practiceQuestionCount: number;
 }
 
 export interface LettersProgressStore {
@@ -61,7 +60,7 @@ const DEFAULT_LANGUAGE_PROGRESS: LettersLanguageProgress = {
   requireStrokeOrder: true,
   strokeTolerance: DEFAULT_STROKE_TOLERANCE,
   showStrokeGuide: true,
-  practiceQuestionCount: DEFAULT_LETTERS_PRACTICE_QUESTIONS,
+  practiceCharacterCount: DEFAULT_LETTERS_PRACTICE_CHARACTERS,
   characters: {},
 };
 
@@ -118,24 +117,47 @@ export const INTERNAL_CHARACTER_READINGS: ReadonlyMap<string, string> = new Map(
 ]);
 
 const SMALL_HIRAGANA_LABELS = [
-  [0x3041, "small a"],
-  [0x3043, "small i"],
-  [0x3045, "small u"],
-  [0x3047, "small e"],
-  [0x3049, "small o"],
-  [0x3063, "small tsu"],
-  [0x3083, "small ya"],
-  [0x3085, "small yu"],
-  [0x3087, "small yo"],
-  [0x308e, "small wa"],
-  [0x3095, "small ka"],
-  [0x3096, "small ke"],
+  [0x3041, 0x3042, "small a"],
+  [0x3043, 0x3044, "small i"],
+  [0x3045, 0x3046, "small u"],
+  [0x3047, 0x3048, "small e"],
+  [0x3049, 0x304a, "small o"],
+  [0x3063, 0x3064, "small tsu"],
+  [0x3083, 0x3084, "small ya"],
+  [0x3085, 0x3086, "small yu"],
+  [0x3087, 0x3088, "small yo"],
+  [0x308e, 0x308f, "small wa"],
+  [0x3095, 0x304b, "small ka"],
+  [0x3096, 0x3051, "small ke"],
 ] as const;
 
 export const INTERNAL_CHARACTER_DISPLAY_LABELS: ReadonlyMap<string, string> = new Map([
-  ...SMALL_HIRAGANA_LABELS.map(([codePoint, label]) => [String.fromCodePoint(codePoint), label] as const),
-  ...SMALL_HIRAGANA_LABELS.map(([codePoint, label]) => [String.fromCodePoint(codePoint + 0x60), label] as const),
+  ...SMALL_HIRAGANA_LABELS.map(([smallCodePoint, , label]) => [
+    String.fromCodePoint(smallCodePoint),
+    label,
+  ] as const),
+  ...SMALL_HIRAGANA_LABELS.map(([smallCodePoint, , label]) => [
+    String.fromCodePoint(smallCodePoint + 0x60),
+    label,
+  ] as const),
 ]);
+
+const JAPANESE_KANA_PRACTICE_FAMILIES: ReadonlyMap<string, string> = new Map(
+  SMALL_HIRAGANA_LABELS.flatMap(([smallCodePoint, regularCodePoint]) => {
+    const hiraganaFamily = String.fromCodePoint(regularCodePoint);
+    const katakanaFamily = String.fromCodePoint(regularCodePoint + 0x60);
+    return [
+      [String.fromCodePoint(smallCodePoint), hiraganaFamily],
+      [hiraganaFamily, hiraganaFamily],
+      [String.fromCodePoint(smallCodePoint + 0x60), katakanaFamily],
+      [katakanaFamily, katakanaFamily],
+    ] as const;
+  }),
+);
+
+export function lettersPracticeFamilyKey(character: string): string {
+  return JAPANESE_KANA_PRACTICE_FAMILIES.get(character) ?? character;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -198,11 +220,11 @@ export function strokeToleranceLabel(value: number): string {
   return `${preset?.label ?? "Custom"} ${normalized.toFixed(1)}x`;
 }
 
-export function normalizeLettersPracticeQuestionCount(value: unknown): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_LETTERS_PRACTICE_QUESTIONS;
+export function normalizeLettersPracticeCharacterCount(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_LETTERS_PRACTICE_CHARACTERS;
   return Math.min(
-    MAX_LETTERS_PRACTICE_QUESTIONS,
-    Math.max(MIN_LETTERS_PRACTICE_QUESTIONS, Math.round(value)),
+    MAX_LETTERS_PRACTICE_CHARACTERS,
+    Math.max(MIN_LETTERS_PRACTICE_CHARACTERS, Math.round(value)),
   );
 }
 
@@ -218,7 +240,7 @@ function normalizeLanguageProgress(value: unknown): LettersLanguageProgress {
     requireStrokeOrder: typeof value.requireStrokeOrder === "boolean" ? value.requireStrokeOrder : true,
     strokeTolerance: normalizeStrokeTolerance(value.strokeTolerance),
     showStrokeGuide: typeof value.showStrokeGuide === "boolean" ? value.showStrokeGuide : true,
-    practiceQuestionCount: normalizeLettersPracticeQuestionCount(value.practiceQuestionCount),
+    practiceCharacterCount: normalizeLettersPracticeCharacterCount(value.practiceCharacterCount),
     characters,
   };
 }
@@ -278,7 +300,7 @@ export function getLettersLanguageProgress(
       requireStrokeOrder: progress.requireStrokeOrder,
       strokeTolerance: progress.strokeTolerance,
       showStrokeGuide: progress.showStrokeGuide,
-      practiceQuestionCount: progress.practiceQuestionCount,
+      practiceCharacterCount: progress.practiceCharacterCount,
       characters: { ...progress.characters },
     }
     : { ...DEFAULT_LANGUAGE_PROGRESS, characters: {} };

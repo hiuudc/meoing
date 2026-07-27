@@ -62,7 +62,9 @@ export function AnimatedModal({
     const frame = window.requestAnimationFrame(() => {
       const panel = panelRef.current;
       if (!panel || panel.contains(document.activeElement)) return;
-      const target = panel.querySelector<HTMLElement>("[autofocus]") ?? getFocusableElements(panel)[0] ?? panel;
+      const target = panel.querySelector<HTMLElement>("[data-modal-autofocus], [autofocus]")
+        ?? getFocusableElements(panel)[0]
+        ?? panel;
       target.focus();
     });
     return () => window.cancelAnimationFrame(frame);

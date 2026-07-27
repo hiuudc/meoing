@@ -2642,14 +2642,20 @@ input[type="range"] {
 
 .letters-practice-dialog > header {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
   padding: 17px 20px;
   border-bottom: 1px solid var(--border);
 }
 
-.letters-practice-dialog > header > button {
+.letters-practice-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.letters-practice-header-actions > button {
   display: grid;
   width: 38px;
   height: 38px;
@@ -2659,7 +2665,7 @@ input[type="range"] {
   border-radius: 8px;
 }
 
-.letters-practice-dialog > header > button:hover {
+.letters-practice-header-actions > button:hover {
   color: var(--text-primary);
   background: var(--bg-hover);
 }
@@ -2816,7 +2822,7 @@ input[type="range"] {
 
 .letters-lesson-character-list article {
   display: grid;
-  grid-template-columns: 58px minmax(0, 1fr) 36px;
+  grid-template-columns: 36px 58px minmax(0, 1fr);
   align-items: center;
   gap: 12px;
   min-width: 0;
@@ -2870,34 +2876,56 @@ input[type="range"] {
   border-radius: 9px;
 }
 
-.letters-session-length {
+.letters-practice-setup {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
+  margin-top: 20px;
   padding: 14px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: 11px;
 }
 
-.letters-session-length > span {
+.letters-practice-setup > label {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.letters-practice-setup > label > span,
+.letters-practice-setup > output {
   display: grid;
   gap: 3px;
 }
 
-.letters-session-length strong {
+.letters-practice-setup strong {
   font-size: 12px;
 }
 
-.letters-session-length small,
-.letters-session-length output {
+.letters-practice-setup small {
   color: var(--text-muted);
   font-size: 9px;
 }
 
-.letters-session-length output {
-  min-width: 80px;
+.letters-practice-setup input {
+  width: 72px;
+  padding: 8px 9px;
+  color: var(--text-primary);
+  background: var(--bg-main);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.letters-practice-setup > output {
+  min-width: 126px;
+  padding-left: 14px;
+  border-left: 1px solid var(--border);
   color: var(--text-primary);
   font-size: 11px;
   font-weight: 800;
@@ -3160,7 +3188,8 @@ input[type="range"] {
   .letters-lesson-intro > header,
   .letters-lesson-intro > footer { padding-right: 16px; padding-left: 16px; }
   .letters-lesson-intro > main { padding: 20px 16px; }
-  .letters-session-length { grid-template-columns: minmax(0, 1fr) auto; }
+  .letters-practice-setup { grid-template-columns: 1fr; align-items: stretch; }
+  .letters-practice-setup > output { padding: 10px 0 0; border-top: 1px solid var(--border); border-left: 0; text-align: left; }
   .letters-lesson-intro > footer > button { flex: 1; }
   .letter-settings-backdrop { padding: 0; }
   .letter-settings-modal { width: 100%; height: 100%; max-height: none; border: 0; border-radius: 0; }

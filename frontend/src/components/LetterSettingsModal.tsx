@@ -2,12 +2,9 @@ import { X } from "lucide-react";
 import { useEffect, useState, type FormEvent, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import {
-  MAX_LETTERS_PRACTICE_QUESTIONS,
   MAX_STROKE_TOLERANCE,
-  MIN_LETTERS_PRACTICE_QUESTIONS,
   MIN_STROKE_TOLERANCE,
   STROKE_TOLERANCE_PRESETS,
-  normalizeLettersPracticeQuestionCount,
   strokeToleranceForKey,
   strokeToleranceFromPosition,
   strokeToleranceLabel,
@@ -43,7 +40,6 @@ export function LetterSettingsModal({
   }, [
     language,
     open,
-    value.practiceQuestionCount,
     value.requireStrokeOrder,
     value.showStrokeGuide,
     value.strokeTolerance,
@@ -87,35 +83,6 @@ export function LetterSettingsModal({
         </header>
 
         <div className="letter-settings-content">
-          <section aria-labelledby="letter-settings-practice-title">
-            <div className="letter-settings-section-heading">
-              <div>
-                <h3 id="letter-settings-practice-title">Practice</h3>
-                <p>Practice length applies when the next Letters lesson starts.</p>
-              </div>
-            </div>
-            <label className="letter-settings-row" htmlFor="letter-settings-practice-length">
-              <span>
-                <strong>Practice length</strong>
-                <small>Questions in each practice session</small>
-              </span>
-              <input
-                id="letter-settings-practice-length"
-                type="number"
-                min={MIN_LETTERS_PRACTICE_QUESTIONS}
-                max={MAX_LETTERS_PRACTICE_QUESTIONS}
-                step={1}
-                value={draft.practiceQuestionCount}
-                onChange={(event) => setDraft((current) => ({
-                  ...current,
-                  practiceQuestionCount: normalizeLettersPracticeQuestionCount(
-                    event.currentTarget.valueAsNumber,
-                  ),
-                }))}
-              />
-            </label>
-          </section>
-
           <section aria-labelledby="letter-settings-strokes-title">
             <div className="letter-settings-section-heading">
               <div>
@@ -129,7 +96,7 @@ export function LetterSettingsModal({
                 <small>Check each stroke against the bundled character data</small>
               </span>
               <input
-                autoFocus
+                data-modal-autofocus
                 type="checkbox"
                 checked={draft.requireStrokeOrder}
                 onChange={(event) => setDraft((current) => ({

@@ -1,6 +1,7 @@
 import {
-  DEFAULT_LETTERS_PRACTICE_QUESTIONS,
-  normalizeLettersPracticeQuestionCount,
+  DEFAULT_LETTERS_PRACTICE_CHARACTERS,
+  lettersPracticeFamilyKey,
+  normalizeLettersPracticeCharacterCount,
   unicodeLabel,
   type LetterProgressStatus,
   type LettersScript,
@@ -41,10 +42,12 @@ interface BuildLettersPracticeOptions {
   metadata: ReadonlyMap<string, LettersCharacterMetadata>;
   progress: Readonly<Record<string, LetterProgressStatus>>;
   requireStrokeOrder: boolean;
-  questionCount?: number;
+  characterCount?: number;
   sessionId?: string;
   createdAt?: string;
 }
+
+const MATCHING_GROUP_SIZE = 5;
 
 function characterKey(character: string): string {
   return [...character]
@@ -61,15 +64,55 @@ function progressPriority(status?: LetterProgressStatus): number {
 export function selectLettersPracticeCharacters(
   characters: string[],
   progress: Readonly<Record<string, LetterProgressStatus>>,
-  questionCount = DEFAULT_LETTERS_PRACTICE_QUESTIONS,
+  characterCount = DEFAULT_LETTERS_PRACTICE_CHARACTERS,
 ): string[] {
-  const normalizedCount = normalizeLettersPracticeQuestionCount(questionCount);
-  const targetCount = Math.min(characters.length, Math.max(1, Math.min(5, Math.ceil(normalizedCount / 2))));
-  return characters
+  const targetCount = Math.min(
+    characters.length,
+    normalizeLettersPracticeCharacterCount(characterCount),
+  );
+  const ordered = characters
     .map((character, index) => ({ character, index, priority: progressPriority(progress[character]) }))
-    .sort((left, right) => left.priority - right.priority || left.index - right.index)
-    .slice(0, targetCount)
-    .map(({ character }) => character);
+    .sort((left, right) => left.priority - right.priority || left.index - right.index);
+  const selected: string[] = [];
+  const deferred: string[] = [];
+  const selectedFamilies = new Set<string>();
+
+  ordered.forEach(({ character }) => {
+    const family = lettersPracticeFamilyKey(character);
+    if (selected.length < targetCount && !selectedFamilies.has(family)) {
+      selected.push(character);
+      selectedFamilies.add(family);
+    } else {
+      deferred.push(character);
+    }
+  });
+
+  for (const character of deferred) {
+    if (selected.length >= targetCount) break;
+    selected.push(character);
+  }
+  return selected;
+}
+
+export function lettersPracticeExerciseCount(characterCount: number): number {
+  if (!Number.isFinite(characterCount) || characterCount <= 0) return 0;
+  const normalizedCount = normalizeLettersPracticeCharacterCount(characterCount);
+  return normalizedCount * 4 + Math.ceil(normalizedCount / MATCHING_GROUP_SIZE);
+}
+
+function practiceChoicePool(characters: string[], targets: string[]): string[] {
+  const selected = new Set(targets);
+  const usedFamilies = new Set(targets.map(lettersPracticeFamilyKey));
+  const pool = [...targets];
+
+  characters.forEach((character) => {
+    if (selected.has(character)) return;
+    const family = lettersPracticeFamilyKey(character);
+    if (usedFamilies.has(family)) return;
+    usedFamilies.add(family);
+    pool.push(character);
+  });
+  return pool;
 }
 
 function choiceOptions(target: string, characters: string[]): ChoiceOption[] {
@@ -248,51 +291,50 @@ export function buildLettersPracticeSession({
   metadata,
   progress,
   requireStrokeOrder,
-  questionCount = DEFAULT_LETTERS_PRACTICE_QUESTIONS,
+  characterCount = DEFAULT_LETTERS_PRACTICE_CHARACTERS,
   sessionId = `letters-${Date.now()}`,
   createdAt = new Date().toISOString(),
 }: BuildLettersPracticeOptions): LettersPracticeSession {
-  const normalizedCount = normalizeLettersPracticeQuestionCount(questionCount);
-  const targets = selectLettersPracticeCharacters(characters, progress, normalizedCount);
+  const targets = selectLettersPracticeCharacters(characters, progress, characterCount);
   if (!targets.length) throw new Error("No characters are available for this Letters practice.");
+  const choicePool = practiceChoicePool(characters, targets);
 
   const questions: PlayableQuestion[] = [];
   const questionAlternates: PlayableQuestionAlternate[] = [];
   const questionIdsByCharacter = Object.fromEntries(targets.map((character) => [character, [] as string[]]));
+  let questionNumber = 0;
 
   function register(question: PlayableQuestion, relatedCharacters: string[]) {
     questions.push(question);
     relatedCharacters.forEach((character) => questionIdsByCharacter[character]?.push(question.id));
   }
 
-  for (let index = 0; index < normalizedCount; index += 1) {
-    const target = targets[index % targets.length];
-    const id = `${sessionId}-q${index + 1}-${characterKey(target)}`;
-    switch (index % 5) {
-      case 0:
-        register(tracingQuestion(id, target, metadata, requireStrokeOrder), [target]);
-        break;
-      case 1: {
-        const question = listeningQuestion(id, target, characters);
-        register(question, [target]);
-        questionAlternates.push({
-          questionId: question.id,
-          question: visualChoiceQuestion(`${id}-alternate`, target, characters),
-        });
-        break;
-      }
-      case 2:
-        register(visualChoiceQuestion(id, target, characters), [target]);
-        break;
-      case 3:
-        register(descriptorChoiceQuestion(id, target, characters, metadata), [target]);
-        break;
-      default: {
-        const matching = matchingQuestions(id, targets, metadata);
-        register(matching.primary, targets);
-        questionAlternates.push({ questionId: matching.primary.id, question: matching.alternate });
-      }
-    }
+  targets.forEach((target) => {
+    const targetKey = characterKey(target);
+    const tracingId = `${sessionId}-q${++questionNumber}-${targetKey}-trace`;
+    register(tracingQuestion(tracingId, target, metadata, requireStrokeOrder), [target]);
+
+    const listeningId = `${sessionId}-q${++questionNumber}-${targetKey}-listen`;
+    const listening = listeningQuestion(listeningId, target, choicePool);
+    register(listening, [target]);
+    questionAlternates.push({
+      questionId: listening.id,
+      question: visualChoiceQuestion(`${listeningId}-alternate`, target, choicePool),
+    });
+
+    const visualId = `${sessionId}-q${++questionNumber}-${targetKey}-visual`;
+    register(visualChoiceQuestion(visualId, target, choicePool), [target]);
+
+    const descriptorId = `${sessionId}-q${++questionNumber}-${targetKey}-descriptor`;
+    register(descriptorChoiceQuestion(descriptorId, target, choicePool, metadata), [target]);
+  });
+
+  for (let index = 0; index < targets.length; index += MATCHING_GROUP_SIZE) {
+    const group = targets.slice(index, index + MATCHING_GROUP_SIZE);
+    const matchingId = `${sessionId}-q${++questionNumber}-matching-${Math.floor(index / MATCHING_GROUP_SIZE) + 1}`;
+    const matching = matchingQuestions(matchingId, group, metadata);
+    register(matching.primary, group);
+    questionAlternates.push({ questionId: matching.primary.id, question: matching.alternate });
   }
 
   return {
@@ -303,7 +345,7 @@ export function buildLettersPracticeSession({
       id: sessionId,
       unitId: `letters:${collectionId}:${script}`,
       title: `${scriptLabel} practice`,
-      summary: `${normalizedCount} local exercises across tracing, recognition, listening, and matching.`,
+      summary: `${questions.length} local exercises for ${targets.length} characters across tracing, recognition, listening, and matching.`,
       targetLanguage: language,
       sourceLanguage,
       level,

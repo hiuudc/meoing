@@ -5,7 +5,36 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LessonPlayer } from "./LessonPlayer";
 import { LESSON_PLAYER_PREFERENCE_KEY } from "./playerPreferences";
 import { SPEECH_PREFERENCE_KEY } from "./speech";
-import type { Lesson, LessonQuestion } from "./types";
+import type { CharacterTracingQuestion, Lesson, LessonQuestion, PlayableLesson } from "./types";
+
+const tracingMocks = vi.hoisted(() => {
+  const writer = {
+    cancelQuiz: vi.fn(),
+    hideCharacter: vi.fn(),
+    quiz: vi.fn(),
+  };
+  const animationWriter = {
+    animateStroke: vi.fn(),
+    hideCharacter: vi.fn(),
+    updateColor: vi.fn(),
+  };
+  return {
+    animationWriter,
+    create: vi.fn((target: HTMLElement) => (
+      target.classList.contains("hanzi-writer-animation-target") ? animationWriter : writer
+    )),
+    loadStrokeCharacterData: vi.fn(),
+    writer,
+  };
+});
+
+vi.mock("hanzi-writer", () => ({
+  default: { create: tracingMocks.create },
+}));
+
+vi.mock("./strokeData", () => ({
+  loadStrokeCharacterData: tracingMocks.loadStrokeCharacterData,
+}));
 
 const lesson: Lesson = {
   schemaVersion: 7,
@@ -147,6 +176,24 @@ beforeEach(() => {
     },
   });
   Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+  tracingMocks.create.mockClear();
+  tracingMocks.writer.cancelQuiz.mockClear();
+  tracingMocks.writer.hideCharacter.mockReset().mockResolvedValue(undefined);
+  tracingMocks.writer.quiz.mockReset().mockResolvedValue(undefined);
+  tracingMocks.animationWriter.animateStroke.mockReset().mockResolvedValue({ canceled: false });
+  tracingMocks.animationWriter.hideCharacter.mockReset().mockResolvedValue(undefined);
+  tracingMocks.animationWriter.updateColor.mockReset().mockResolvedValue(undefined);
+  tracingMocks.loadStrokeCharacterData.mockReset().mockResolvedValue({
+    logicalData: {
+      strokes: ["M 0 0 L 100 100"],
+      medians: [[[0, 0], [100, 100]]],
+    },
+    animationData: {
+      strokes: ["M 0 0 L 100 100"],
+      medians: [[[0, 0], [100, 100]]],
+    },
+    animationGroups: [[0]],
+  });
 });
 
 afterEach(async () => {
@@ -944,6 +991,50 @@ describe("fullscreen lesson player", () => {
 
     expect(spokenUtterances.map((utterance) => utterance.text)).toEqual(["\u6c34", "\u6c34", "\u304a\u8336"]);
     expect(window.speechSynthesis.cancel).toHaveBeenCalledTimes(4);
+  });
+
+  it("auto-reads each trace presentation and exposes Letter settings in the left header actions", async () => {
+    speechVoices = [speechVoice("Japanese", "ja-JP", "voice-ja", true)];
+    const tracingQuestion: CharacterTracingQuestion = {
+      id: "trace-hiragana-a",
+      type: "characterTracing",
+      prompt: "Trace the character.",
+      explanation: "Follow the stroke order.",
+      evaluationMode: "local",
+      character: "\u3042",
+      reading: "a",
+      requireStrokeOrder: true,
+      presentation: { readQuestion: true, readAnswers: false, wordTooltips: false },
+    };
+    const tracingLesson: PlayableLesson = {
+      ...lesson,
+      id: "trace-player-test",
+      targetLanguage: "Japanese",
+      questions: [tracingQuestion],
+      questionAlternates: [],
+    };
+    const onOpenSettings = vi.fn();
+
+    await renderPlayer({
+      lesson: tracingLesson,
+      tracingOptions: {
+        requireStrokeOrder: true,
+        strokeTolerance: 1,
+        showStrokeGuide: true,
+        onOpenSettings,
+      },
+    });
+    await vi.waitFor(() => expect(tracingMocks.writer.quiz).toHaveBeenCalled());
+    await vi.waitFor(() => expect(spokenUtterances.map((utterance) => utterance.text)).toEqual(["\u3042"]));
+
+    const settings = button("Open Letter settings");
+    expect(settings.closest(".lesson-header-left-actions")).not.toBeNull();
+    await act(async () => settings.click());
+    expect(onOpenSettings).toHaveBeenCalledWith(settings);
+
+    await act(async () => button("Skip").click());
+    await vi.waitFor(() => expect(spokenUtterances.map((utterance) => utterance.text))
+      .toEqual(["\u3042", "\u3042"]));
   });
 
   it("reads the current target text once when Read question is enabled mid-question", async () => {

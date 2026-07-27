@@ -6,7 +6,6 @@ import type { LetterSettings } from "../learning/letters";
 import { LetterSettingsModal } from "./LetterSettingsModal";
 
 const INITIAL_SETTINGS: LetterSettings = {
-  practiceQuestionCount: 5,
   requireStrokeOrder: true,
   showStrokeGuide: true,
   strokeTolerance: 1,
@@ -62,13 +61,6 @@ async function openModal() {
   await vi.waitFor(() => expect(document.querySelector(".letter-settings-modal")).not.toBeNull());
 }
 
-async function setNumberInput(input: HTMLInputElement, value: number) {
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, String(value));
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-}
-
 async function finishExit() {
   const panel = document.querySelector<HTMLElement>(".letter-settings-modal");
   if (!panel) return;
@@ -97,33 +89,26 @@ afterEach(async () => {
 });
 
 describe("LetterSettingsModal", () => {
-  it("shows all four settings and only persists the draft after Apply", async () => {
+  it("shows only stroke settings and persists the draft after Apply", async () => {
     const onPersist = await renderHarness();
     await openModal();
 
-    expect(document.querySelector<HTMLInputElement>("#letter-settings-practice-length")?.value).toBe("5");
+    expect(document.body.textContent).not.toContain("Practice length");
     expect(document.body.textContent).toContain("Require stroke order");
     expect(document.body.textContent).toContain("Stroke tolerance");
     expect(document.body.textContent).toContain("Show drag direction");
 
-    await setNumberInput(
-      document.querySelector<HTMLInputElement>("#letter-settings-practice-length")!,
-      8,
-    );
     await act(async () => button("Forgiving").click());
     expect(onPersist).not.toHaveBeenCalled();
 
     await act(async () => button("Apply settings").click());
 
     expect(onPersist).toHaveBeenCalledWith({
-      practiceQuestionCount: 8,
       requireStrokeOrder: true,
       showStrokeGuide: true,
       strokeTolerance: 2,
     });
-    expect(document.querySelector("#saved-letter-settings")?.textContent).toContain(
-      '"practiceQuestionCount":8',
-    );
+    expect(document.querySelector("#saved-letter-settings")?.textContent).toContain('"strokeTolerance":2');
   });
 
   it("dims dependent controls without deleting their draft values", async () => {
@@ -155,10 +140,7 @@ describe("LetterSettingsModal", () => {
 
     for (const dismiss of ["cancel", "escape", "overlay"] as const) {
       await openModal();
-      await setNumberInput(
-        document.querySelector<HTMLInputElement>("#letter-settings-practice-length")!,
-        9,
-      );
+      await act(async () => button("Forgiving").click());
 
       if (dismiss === "cancel") {
         await act(async () => button("Cancel").click());
@@ -172,13 +154,14 @@ describe("LetterSettingsModal", () => {
       await finishExit();
 
       expect(onPersist).not.toHaveBeenCalled();
-      expect(document.activeElement).toBe(document.querySelector("#letter-settings-opener"));
-      expect(document.querySelector("#saved-letter-settings")?.textContent).toContain(
-        '"practiceQuestionCount":5',
-      );
+      await vi.waitFor(() => {
+        expect(document.activeElement).toBe(document.querySelector("#letter-settings-opener"));
+      });
+      expect(document.querySelector("#saved-letter-settings")?.textContent).toContain('"strokeTolerance":1');
     }
 
     await openModal();
-    expect(document.querySelector<HTMLInputElement>("#letter-settings-practice-length")?.value).toBe("5");
+    expect(document.querySelector<HTMLInputElement>("#letter-settings-stroke-tolerance")?.getAttribute("aria-valuenow"))
+      .toBe("1");
   });
 });

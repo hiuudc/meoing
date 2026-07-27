@@ -90,7 +90,7 @@ interface LessonPlayerProps {
     requireStrokeOrder?: boolean;
     strokeTolerance?: number;
     showStrokeGuide?: boolean;
-    onOpenSettings?: () => void;
+    onOpenSettings?: (trigger: HTMLButtonElement) => void;
     resetRevision?: number;
   };
 }
@@ -234,6 +234,7 @@ export function LessonPlayer({
   const continueButtonRef = useRef<HTMLButtonElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const autoSpokenQuestionRef = useRef<string | null>(null);
+  const autoSpokenTraceRef = useRef<string | null>(null);
   const submittingRef = useRef(false);
   const continuingRef = useRef(false);
   const numberBufferRef = useRef("");
@@ -890,6 +891,7 @@ export function LessonPlayer({
   }, [answerInputMode, currentQuestion?.id, displayedAttempt, evaluation]);
 
   useEffect(() => {
+    if (currentQuestion?.type === "characterTracing") return;
     if (!presentation?.readQuestion) {
       autoSpokenQuestionRef.current = null;
       return;
@@ -900,6 +902,24 @@ export function LessonPlayer({
     autoSpokenQuestionRef.current = speechKey;
     speak(questionSpeech);
   }, [currentQuestion?.id, presentation?.readQuestion, questionSpeech, targetVoiceAvailable]);
+
+  useEffect(() => {
+    if (currentQuestion?.type !== "characterTracing") {
+      autoSpokenTraceRef.current = null;
+      return;
+    }
+    if (!targetVoiceAvailable) return;
+    const skipCount = retryState.skipsByQuestion[currentQuestion.id] ?? 0;
+    const speechKey = `${currentQuestion.id}\u0000${displayedAttempt}\u0000${skipCount}`;
+    if (autoSpokenTraceRef.current === speechKey) return;
+    if (speak(currentQuestion.character)) autoSpokenTraceRef.current = speechKey;
+  }, [
+    currentQuestion?.id,
+    currentQuestion?.type,
+    displayedAttempt,
+    retryState.skipsByQuestion,
+    targetVoiceAvailable,
+  ]);
 
   function speakActivatedAnswer(text: string) {
     if (!currentQuestion || !presentation?.readAnswers) return;
@@ -988,9 +1008,22 @@ export function LessonPlayer({
         onKeyDownCapture={handleDialogKeyDownCapture}
       >
         <header className="lesson-fullscreen-header">
-          <button className="lesson-close-button" type="button" aria-label="Exit lesson" onClick={() => void requestExit()} disabled={exiting}>
-            <X size={22} />
-          </button>
+          <div className="lesson-header-left-actions">
+            <button className="lesson-close-button" type="button" aria-label="Exit lesson" onClick={() => void requestExit()} disabled={exiting}>
+              <X size={22} />
+            </button>
+            {currentQuestion?.type === "characterTracing" && tracingOptions?.onOpenSettings ? (
+              <button
+                className="letter-settings-context-trigger"
+                type="button"
+                aria-label="Open Letter settings"
+                title="Letter settings"
+                onClick={(event) => tracingOptions.onOpenSettings?.(event.currentTarget)}
+              >
+                <Settings2 size={18} />
+              </button>
+            ) : null}
+          </div>
           <div className="lesson-fullscreen-progress">
             <div className="lesson-progress-track" role="progressbar" aria-label="Lesson position" aria-valuemin={1} aria-valuemax={total} aria-valuenow={masteredPosition}>
               <span style={{ width: `${displayedProgress}%` }} />

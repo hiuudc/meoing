@@ -1,4 +1,4 @@
-import { LoaderCircle, Play, RotateCcw, Settings2, Square, Volume2 } from "lucide-react";
+import { LoaderCircle, Play, RotateCcw, Square, Volume2 } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -36,7 +36,6 @@ interface CharacterTracingResponseProps {
   onUnavailable?: () => void;
   onStart?: () => void;
   onSpeak?: (character: string) => void;
-  onOpenSettings?: () => void;
   requireStrokeOrder?: boolean;
   strokeTolerance?: number;
   showStrokeGuide?: boolean;
@@ -463,7 +462,6 @@ export function CharacterTracingResponse({
   onUnavailable,
   onStart,
   onSpeak,
-  onOpenSettings,
   requireStrokeOrder: requireStrokeOrderOverride,
   strokeTolerance = 1,
   showStrokeGuide = true,
@@ -773,10 +771,6 @@ export function CharacterTracingResponse({
     <section className="character-tracing-response" aria-label={`Trace ${question.character}`}>
       <div className="character-tracing-heading">
         <div className="character-tracing-identity">
-          <div className="character-tracing-glyph">
-            <strong>{question.character}</strong>
-            {question.reading ? <span>{question.reading}</span> : null}
-          </div>
           {onSpeak ? (
             <button
               type="button"
@@ -787,19 +781,12 @@ export function CharacterTracingResponse({
               <Volume2 size={18} />
             </button>
           ) : null}
+          <div className="character-tracing-glyph">
+            <strong>{question.character}</strong>
+            {question.reading ? <span>{question.reading}</span> : null}
+          </div>
         </div>
         {question.meaning ? <p>{question.meaning}</p> : null}
-        {onOpenSettings ? (
-          <button
-            className="character-tracing-settings"
-            type="button"
-            aria-label="Open Letter settings"
-            title="Letter settings"
-            onClick={onOpenSettings}
-          >
-            <Settings2 size={18} />
-          </button>
-        ) : null}
       </div>
       {status === "loading" ? <p className="tracing-loading"><LoaderCircle className="spin" size={18} /> Loading local stroke data...</p> : null}
       {status === "error" ? (

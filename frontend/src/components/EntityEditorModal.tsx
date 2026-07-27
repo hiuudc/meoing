@@ -348,7 +348,11 @@ function Field({
   return (
     <label className="form-field">
       <span>{label}</span>
-      <input value={value} onChange={(event) => onChange(event.target.value)} autoFocus={autoFocus} />
+      <input
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        data-modal-autofocus={autoFocus ? "" : undefined}
+      />
       {hint ? <small>{hint}</small> : null}
     </label>
   );

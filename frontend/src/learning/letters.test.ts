@@ -6,9 +6,10 @@ import {
   createLettersProgressStore,
   getCharacterWindow,
   getLettersLanguageProgress,
+  lettersPracticeFamilyKey,
   loadLettersProgress,
   matchesCharacterQuery,
-  normalizeLettersPracticeQuestionCount,
+  normalizeLettersPracticeCharacterCount,
   normalizeLettersProgressStore,
   normalizeStrokeTolerance,
   saveLettersProgress,
@@ -53,7 +54,8 @@ describe("letters progress", () => {
             requireStrokeOrder: false,
             strokeTolerance: 1.36,
             showStrokeGuide: false,
-            practiceQuestionCount: 9.7,
+            practiceCharacterCount: 9.7,
+            practiceQuestionCount: 2,
             characters: { "水": "mastered", "日": "practicing", word: "mastered", "火": "unknown" },
           },
         },
@@ -63,14 +65,14 @@ describe("letters progress", () => {
       requireStrokeOrder: false,
       strokeTolerance: 1.4,
       showStrokeGuide: false,
-      practiceQuestionCount: 10,
+      practiceCharacterCount: 10,
       characters: { "水": "mastered", "日": "practicing" },
     });
     expect(getLettersLanguageProgress(normalized, "collectionB", "Japanese")).toEqual({
       requireStrokeOrder: true,
       strokeTolerance: 1,
       showStrokeGuide: true,
-      practiceQuestionCount: 5,
+      practiceCharacterCount: 5,
       characters: {},
     });
 
@@ -108,10 +110,10 @@ describe("letters progress", () => {
     expect(strokeToleranceForKey(1.2, "Home")).toBe(0.1);
     expect(strokeToleranceForKey(1.2, "End")).toBe(2);
     expect(strokeToleranceForKey(1.2, "Tab")).toBeNull();
-    expect(normalizeLettersPracticeQuestionCount(undefined)).toBe(5);
-    expect(normalizeLettersPracticeQuestionCount(0)).toBe(1);
-    expect(normalizeLettersPracticeQuestionCount(7.6)).toBe(8);
-    expect(normalizeLettersPracticeQuestionCount(99)).toBe(20);
+    expect(normalizeLettersPracticeCharacterCount(undefined)).toBe(5);
+    expect(normalizeLettersPracticeCharacterCount(0)).toBe(1);
+    expect(normalizeLettersPracticeCharacterCount(7.6)).toBe(8);
+    expect(normalizeLettersPracticeCharacterCount(99)).toBe(10);
 
     const legacy = normalizeLettersProgressStore({
       version: 1,
@@ -119,6 +121,7 @@ describe("letters progress", () => {
         collectionA: {
           Japanese: {
             requireStrokeOrder: true,
+            practiceQuestionCount: 9,
             characters: {},
           },
         },
@@ -127,7 +130,8 @@ describe("letters progress", () => {
     expect(legacy.version).toBe(1);
     expect(legacy.collections.collectionA.Japanese.strokeTolerance).toBe(1);
     expect(legacy.collections.collectionA.Japanese.showStrokeGuide).toBe(true);
-    expect(legacy.collections.collectionA.Japanese.practiceQuestionCount).toBe(5);
+    expect(legacy.collections.collectionA.Japanese.practiceCharacterCount).toBe(5);
+    expect("practiceQuestionCount" in legacy.collections.collectionA.Japanese).toBe(false);
   });
 
   it("falls back safely for invalid or future storage", () => {
@@ -138,6 +142,33 @@ describe("letters progress", () => {
 });
 
 describe("letters catalog helpers", () => {
+  it("groups every supported small kana with its regular Hiragana and Katakana form", () => {
+    const pairs = [
+      [0x3041, 0x3042],
+      [0x3043, 0x3044],
+      [0x3045, 0x3046],
+      [0x3047, 0x3048],
+      [0x3049, 0x304a],
+      [0x3063, 0x3064],
+      [0x3083, 0x3084],
+      [0x3085, 0x3086],
+      [0x3087, 0x3088],
+      [0x308e, 0x308f],
+      [0x3095, 0x304b],
+      [0x3096, 0x3051],
+    ] as const;
+
+    pairs.forEach(([small, regular]) => {
+      const hiraganaFamily = String.fromCodePoint(regular);
+      const katakanaFamily = String.fromCodePoint(regular + 0x60);
+      expect(lettersPracticeFamilyKey(String.fromCodePoint(small))).toBe(hiraganaFamily);
+      expect(lettersPracticeFamilyKey(hiraganaFamily)).toBe(hiraganaFamily);
+      expect(lettersPracticeFamilyKey(String.fromCodePoint(small + 0x60))).toBe(katakanaFamily);
+      expect(lettersPracticeFamilyKey(katakanaFamily)).toBe(katakanaFamily);
+    });
+    expect(lettersPracticeFamilyKey("\u6c34")).toBe("\u6c34");
+  });
+
   it("classifies scripts and searches characters, metadata, and Unicode codes", () => {
     expect(INTERNAL_CHARACTER_DISPLAY_LABELS.get("\u3041")).toBe("small a");
     expect(INTERNAL_CHARACTER_DISPLAY_LABELS.get("\u3042")).toBeUndefined();

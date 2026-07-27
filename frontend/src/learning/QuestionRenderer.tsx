@@ -48,7 +48,6 @@ interface QuestionRendererProps {
     requireStrokeOrder?: boolean;
     strokeTolerance?: number;
     showStrokeGuide?: boolean;
-    onOpenSettings?: () => void;
     resetRevision?: number;
   };
 }
@@ -1872,7 +1871,6 @@ export function QuestionRenderer({
           answer={answer}
           disabled={disabled}
           onSpeak={onSpeakTarget}
-          onOpenSettings={tracingOptions?.onOpenSettings}
           requireStrokeOrder={tracingOptions?.requireStrokeOrder}
           strokeTolerance={tracingOptions?.strokeTolerance}
           showStrokeGuide={tracingOptions?.showStrokeGuide}

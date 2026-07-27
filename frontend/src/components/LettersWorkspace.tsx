@@ -25,13 +25,16 @@ import { loadLocalLearningCache } from "../integration/learningStorage";
 import { CharacterTracingResponse } from "../learning/CharacterTracingResponse";
 import { LessonPlayer } from "../learning/LessonPlayer";
 import {
-  DEFAULT_LETTERS_PRACTICE_QUESTIONS,
+  DEFAULT_LETTERS_PRACTICE_CHARACTERS,
+  MAX_LETTERS_PRACTICE_CHARACTERS,
+  MIN_LETTERS_PRACTICE_CHARACTERS,
   getLettersLanguageProgress,
   getCharacterWindow,
   INTERNAL_CHARACTER_DISPLAY_LABELS,
   INTERNAL_CHARACTER_READINGS,
   loadLettersProgress,
   matchesCharacterQuery,
+  normalizeLettersPracticeCharacterCount,
   saveLettersProgress,
   scriptForCharacter,
   scriptsForLanguage,
@@ -44,6 +47,7 @@ import {
 } from "../learning/letters";
 import {
   buildLettersPracticeSession,
+  lettersPracticeExerciseCount,
   selectLettersPracticeCharacters,
   type LettersCharacterMetadata,
   type LettersPracticeSession,
@@ -92,7 +96,7 @@ interface LettersPracticeProps {
   onStart: (character: string) => void;
   onMastered: (character: string) => void;
   onSpeak?: (character: string) => void;
-  onOpenSettings: () => void;
+  onOpenSettings: (trigger: HTMLButtonElement) => void;
   settingsActive: boolean;
   settingsRevision: number;
 }
@@ -103,7 +107,10 @@ interface LettersLessonIntroProps {
   scriptLabel: string;
   characters: string[];
   metadata: ReadonlyMap<string, LettersCharacterMetadata>;
-  questionCount: number;
+  characterCount: number;
+  exerciseCount: number;
+  maxCharacterCount: number;
+  onCharacterCountChange: (count: number) => void;
   onClose: () => void;
   onExited: () => void;
   onStart: () => void;
@@ -257,13 +264,16 @@ function supportsCharacterSpeech(): boolean {
   return "speechSynthesis" in window && typeof SpeechSynthesisUtterance !== "undefined";
 }
 
-function LettersLessonIntro({
+export function LettersLessonIntro({
   open,
   language,
   scriptLabel,
   characters,
   metadata,
-  questionCount,
+  characterCount,
+  exerciseCount,
+  maxCharacterCount,
+  onCharacterCountChange,
   onClose,
   onExited,
   onStart,
@@ -293,16 +303,38 @@ function LettersLessonIntro({
             There are no hearts. A missed exercise returns later in the session until you answer it correctly.
           </p>
         </div>
+        <div className="letters-practice-setup">
+          <label htmlFor="letters-practice-character-count">
+            <span>
+              <strong>Characters per practice</strong>
+              <small>Saved for this Collection and language when you start.</small>
+            </span>
+            <input
+              id="letters-practice-character-count"
+              type="number"
+              min={MIN_LETTERS_PRACTICE_CHARACTERS}
+              max={maxCharacterCount}
+              step={1}
+              value={characterCount}
+              onChange={(event) => {
+                if (!Number.isFinite(event.currentTarget.valueAsNumber)) return;
+                onCharacterCountChange(Math.min(
+                  maxCharacterCount,
+                  normalizeLettersPracticeCharacterCount(event.currentTarget.valueAsNumber),
+                ));
+              }}
+            />
+          </label>
+          <output aria-live="polite">
+            <strong>{characters.length} characters</strong>
+            <small>{exerciseCount} exercises before retries</small>
+          </output>
+        </div>
         <div className="letters-lesson-character-list" aria-label="Characters in this practice">
           {characters.map((character) => {
             const characterMetadata = metadata.get(character);
             return (
               <article key={character}>
-                <strong lang={languageTagForSpeech(language)}>{character}</strong>
-                <div>
-                  <b>{characterDisplayLabel(character, characterMetadata)}</b>
-                  {characterMetadata?.meaning ? <span>{characterMetadata.meaning}</span> : null}
-                </div>
                 <button
                   type="button"
                   aria-label={`Play ${character}`}
@@ -311,16 +343,14 @@ function LettersLessonIntro({
                 >
                   <Volume2 size={17} />
                 </button>
+                <strong lang={languageTagForSpeech(language)}>{character}</strong>
+                <div>
+                  <b>{characterDisplayLabel(character, characterMetadata)}</b>
+                  {characterMetadata?.meaning ? <span>{characterMetadata.meaning}</span> : null}
+                </div>
               </article>
             );
           })}
-        </div>
-        <div className="letters-session-length" aria-label={`Practice length: ${questionCount} questions`}>
-          <span>
-            <strong>Practice length</strong>
-            <small>Saved for this Collection and language. Change it in Letter settings.</small>
-          </span>
-          <output>{questionCount} questions</output>
         </div>
       </main>
       <footer>
@@ -334,7 +364,7 @@ function LettersLessonIntro({
   );
 }
 
-function LettersPractice({
+export function LettersPractice({
   characters,
   character,
   language,
@@ -356,6 +386,7 @@ function LettersPractice({
   const closeHandlerRef = useRef(onClose);
   const startHandlerRef = useRef(onStart);
   const masteredHandlerRef = useRef(onMastered);
+  const speakHandlerRef = useRef(onSpeak);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const settingsActiveRef = useRef(settingsActive);
   const [answer, setAnswer] = useState<QuestionAnswer>("");
@@ -366,6 +397,7 @@ function LettersPractice({
     closeHandlerRef.current = onClose;
     startHandlerRef.current = onStart;
     masteredHandlerRef.current = onMastered;
+    speakHandlerRef.current = onSpeak;
   });
   settingsActiveRef.current = settingsActive;
 
@@ -382,6 +414,10 @@ function LettersPractice({
     setAnswer("");
     setRunId((current) => current + 1);
   }, [character, settingsRevision]);
+
+  useEffect(() => {
+    speakHandlerRef.current?.(character);
+  }, [character]);
 
   useLayoutEffect(() => {
     const dialog = dialogRef.current;
@@ -444,7 +480,20 @@ function LettersPractice({
     <div className="letters-practice-backdrop">
       <section ref={dialogRef} className="letters-practice-dialog" role="dialog" aria-modal="true" aria-labelledby="letters-practice-title">
         <header>
-          <button ref={closeRef} type="button" aria-label="Close character practice" onClick={onClose}><X size={21} /></button>
+          <div className="letters-practice-header-actions">
+            <button ref={closeRef} type="button" aria-label="Close character practice" onClick={onClose}>
+              <X size={21} />
+            </button>
+            <button
+              className="letter-settings-context-trigger"
+              type="button"
+              aria-label="Open Letter settings"
+              title="Letter settings"
+              onClick={(event) => onOpenSettings(event.currentTarget)}
+            >
+              <Settings2 size={18} />
+            </button>
+          </div>
           <div>
             <p>{language} letters</p>
             <h1 id="letters-practice-title">Trace the character</h1>
@@ -460,7 +509,6 @@ function LettersPractice({
             onStart={handleStart}
             onChange={handleAnswerChange}
             onSpeak={onSpeak}
-            onOpenSettings={onOpenSettings}
             strokeTolerance={strokeTolerance}
             showStrokeGuide={showStrokeGuide}
           />
@@ -477,6 +525,7 @@ function LettersPractice({
           <button className="secondary-button" type="button" onClick={() => {
             setAnswer("");
             setRunId((current) => current + 1);
+            speakHandlerRef.current?.(character);
           }}>
             <RotateCcw size={15} /> Retry
           </button>
@@ -516,12 +565,15 @@ export function LettersWorkspace({
   const [query, setQuery] = useState("");
   const [selectedCharacter, setSelectedCharacter] = useState("");
   const [practiceIntroOpen, setPracticeIntroOpen] = useState(false);
+  const [practiceCharacterCountDraft, setPracticeCharacterCountDraft] = useState(
+    DEFAULT_LETTERS_PRACTICE_CHARACTERS,
+  );
   const [pendingPracticeSession, setPendingPracticeSession] = useState<LettersPracticeSession | null>(null);
   const [practiceSession, setPracticeSession] = useState<LettersPracticeSession | null>(null);
   const [letterSettingsOpen, setLetterSettingsOpen] = useState(false);
   const [letterSettingsActive, setLetterSettingsActive] = useState(false);
   const [traceSettingsRevision, setTraceSettingsRevision] = useState(0);
-  const letterSettingsSourceRef = useRef<"topbar" | "trace">("topbar");
+  const letterSettingsReturnFocusRef = useRef<HTMLButtonElement | null>(null);
   const restoreLetterSettingsFocusRef = useRef(false);
   const [progressStore, setProgressStore] = useState<LettersProgressStore>(() => loadLettersProgress(window.localStorage));
   const unitIds = useMemo(() => new Set(units.map((unit) => unit.id)), [units]);
@@ -534,12 +586,10 @@ export function LettersWorkspace({
     [collection.id, language, progressStore],
   );
   const letterSettings = useMemo<LetterSettings>(() => ({
-    practiceQuestionCount: languageProgress.practiceQuestionCount,
     requireStrokeOrder: languageProgress.requireStrokeOrder,
     showStrokeGuide: languageProgress.showStrokeGuide,
     strokeTolerance: languageProgress.strokeTolerance,
   }), [
-    languageProgress.practiceQuestionCount,
     languageProgress.requireStrokeOrder,
     languageProgress.showStrokeGuide,
     languageProgress.strokeTolerance,
@@ -565,11 +615,9 @@ export function LettersWorkspace({
   useEffect(() => {
     if (letterSettingsActive || !restoreLetterSettingsFocusRef.current) return;
     restoreLetterSettingsFocusRef.current = false;
-    const selector = letterSettingsSourceRef.current === "trace"
-      ? '.character-tracing-settings[aria-label="Open Letter settings"]'
-      : ".letters-settings-trigger";
+    const trigger = letterSettingsReturnFocusRef.current;
     const frame = window.requestAnimationFrame(() => {
-      document.querySelector<HTMLButtonElement>(selector)?.focus();
+      if (trigger?.isConnected) trigger.focus();
     });
     return () => window.cancelAnimationFrame(frame);
   }, [letterSettingsActive]);
@@ -624,18 +672,23 @@ export function LettersWorkspace({
   ).length;
   const selectedMetadata = metadata.get(selectedCharacter);
   const activeScriptLabel = scriptDefinitions.find((script) => script.id === activeScript)?.label ?? "characters";
+  const maxPracticeCharacterCount = Math.max(
+    MIN_LETTERS_PRACTICE_CHARACTERS,
+    Math.min(MAX_LETTERS_PRACTICE_CHARACTERS, scriptCharacters.length),
+  );
   const practiceCharacters = useMemo(
     () => selectLettersPracticeCharacters(
       scriptCharacters,
       languageProgress.characters,
-      languageProgress.practiceQuestionCount ?? DEFAULT_LETTERS_PRACTICE_QUESTIONS,
+      practiceCharacterCountDraft,
     ),
     [
       languageProgress.characters,
-      languageProgress.practiceQuestionCount,
+      practiceCharacterCountDraft,
       scriptCharacters,
     ],
   );
+  const practiceExerciseCount = lettersPracticeExerciseCount(practiceCharacters.length);
 
   function updateProgress(
     update: (progress: ReturnType<typeof getLettersLanguageProgress>) => ReturnType<typeof getLettersLanguageProgress>,
@@ -643,8 +696,8 @@ export function LettersWorkspace({
     setProgressStore((current) => updateLettersLanguageProgress(current, collection.id, language, update));
   }
 
-  function openLetterSettings(source: "topbar" | "trace") {
-    letterSettingsSourceRef.current = source;
+  function openLetterSettings(trigger: HTMLButtonElement) {
+    letterSettingsReturnFocusRef.current = trigger;
     setLetterSettingsActive(true);
     setLetterSettingsOpen(true);
   }
@@ -661,7 +714,6 @@ export function LettersWorkspace({
     );
     updateProgress((current) => ({
       ...current,
-      practiceQuestionCount: settings.practiceQuestionCount,
       requireStrokeOrder: settings.requireStrokeOrder,
       showStrokeGuide: settings.showStrokeGuide,
       strokeTolerance: settings.strokeTolerance,
@@ -682,7 +734,19 @@ export function LettersWorkspace({
     });
   }
 
+  function openPracticeIntro() {
+    setPracticeCharacterCountDraft(Math.min(
+      maxPracticeCharacterCount,
+      normalizeLettersPracticeCharacterCount(languageProgress.practiceCharacterCount),
+    ));
+    setPracticeIntroOpen(true);
+  }
+
   function preparePracticeSession() {
+    const characterCount = Math.min(
+      maxPracticeCharacterCount,
+      normalizeLettersPracticeCharacterCount(practiceCharacterCountDraft),
+    );
     const next = buildLettersPracticeSession({
       collectionId: collection.id,
       language,
@@ -694,10 +758,11 @@ export function LettersWorkspace({
       metadata,
       progress: languageProgress.characters,
       requireStrokeOrder: languageProgress.requireStrokeOrder,
-      questionCount: languageProgress.practiceQuestionCount,
+      characterCount,
     });
     updateProgress((current) => ({
       ...current,
+      practiceCharacterCount: characterCount,
       characters: Object.fromEntries([
         ...Object.entries(current.characters),
         ...next.targetCharacters.map((character) => [
@@ -740,7 +805,7 @@ export function LettersWorkspace({
             <button
               className="letters-settings-trigger"
               type="button"
-              onClick={() => openLetterSettings("topbar")}
+              onClick={(event) => openLetterSettings(event.currentTarget)}
               aria-haspopup="dialog"
             >
               <Settings2 size={16} /> <span>Letter settings</span>
@@ -763,7 +828,7 @@ export function LettersWorkspace({
               <button
                 className="primary-button"
                 type="button"
-                onClick={() => setPracticeIntroOpen(true)}
+                onClick={openPracticeIntro}
                 disabled={!scriptCharacters.length}
               >
                 <Play size={16} /> Learn the characters
@@ -888,7 +953,7 @@ export function LettersWorkspace({
           onStart={(character) => markCharacter(character, "practicing")}
           onMastered={(character) => markCharacter(character, "mastered")}
           onSpeak={speechAvailable ? speakCurrentCharacter : undefined}
-          onOpenSettings={() => openLetterSettings("trace")}
+          onOpenSettings={openLetterSettings}
           settingsActive={letterSettingsActive}
           settingsRevision={traceSettingsRevision}
         />
@@ -900,7 +965,13 @@ export function LettersWorkspace({
         scriptLabel={activeScriptLabel}
         characters={practiceCharacters}
         metadata={metadata}
-        questionCount={languageProgress.practiceQuestionCount}
+        characterCount={practiceCharacterCountDraft}
+        exerciseCount={practiceExerciseCount}
+        maxCharacterCount={maxPracticeCharacterCount}
+        onCharacterCountChange={(count) => setPracticeCharacterCountDraft(Math.min(
+          maxPracticeCharacterCount,
+          normalizeLettersPracticeCharacterCount(count),
+        ))}
         onClose={() => setPracticeIntroOpen(false)}
         onExited={() => {
           if (!pendingPracticeSession) return;
@@ -919,7 +990,7 @@ export function LettersWorkspace({
             requireStrokeOrder: languageProgress.requireStrokeOrder,
             strokeTolerance: languageProgress.strokeTolerance,
             showStrokeGuide: languageProgress.showStrokeGuide,
-            onOpenSettings: () => openLetterSettings("trace"),
+            onOpenSettings: openLetterSettings,
             resetRevision: traceSettingsRevision,
           }}
           returnLabel="Return to Letters"
