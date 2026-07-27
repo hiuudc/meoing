@@ -145,12 +145,13 @@ function visualChoiceQuestion(
   target: string,
   characters: string[],
 ): SingleChoiceQuestion {
+  const options = choiceOptions(target, characters);
   return {
     ...baseQuestion(id, "singleChoice", "Select the matching character."),
     type: "singleChoice",
     targetPrompt: target,
-    glossaryTargets: [target],
-    options: choiceOptions(target, characters),
+    glossaryTargets: options.map((option) => option.label),
+    options,
     correctOptionId: `character-${characterKey(target)}`,
   };
 }
@@ -166,6 +167,7 @@ function descriptorChoiceQuestion(
     ?? characterMetadata?.reading
     ?? characterMetadata?.meaning;
   if (!descriptor) return visualChoiceQuestion(id, target, characters);
+  const options = choiceOptions(target, characters);
   return {
     ...baseQuestion(
       id,
@@ -177,7 +179,8 @@ function descriptorChoiceQuestion(
         : `Which character means "${descriptor}"?`,
     ),
     type: "singleChoice",
-    options: choiceOptions(target, characters),
+    glossaryTargets: options.map((option) => option.label),
+    options,
     correctOptionId: `character-${characterKey(target)}`,
   };
 }
@@ -187,12 +190,13 @@ function listeningQuestion(
   target: string,
   characters: string[],
 ): ListenSelectQuestion {
+  const options = choiceOptions(target, characters);
   return {
     ...baseQuestion(id, "listenSelect", "Listen and select the character you hear."),
     type: "listenSelect",
     audioText: target,
-    glossaryTargets: [target],
-    options: choiceOptions(target, characters),
+    glossaryTargets: options.map((option) => option.label),
+    options,
     correctOptionId: `character-${characterKey(target)}`,
   };
 }
@@ -254,6 +258,7 @@ function matchingQuestions(
   const alternate: MatchingQuestion = {
     ...baseQuestion(`${id}-alternate`, "matching", "Match each reading or code to its character."),
     type: "matching",
+    glossaryTargets: [...targets],
     pairs: targets.map((character) => ({
       leftId: `descriptor-${characterKey(character)}`,
       left: matchingDescriptor(character, metadata, usedDescriptors),

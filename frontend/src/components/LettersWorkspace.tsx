@@ -985,6 +985,7 @@ export function LettersWorkspace({
         <LessonPlayer
           lesson={practiceSession.lesson}
           coachingAvailable={false}
+          variant="lettersPractice"
           interactionSuspended={letterSettingsActive}
           tracingOptions={{
             requireStrokeOrder: languageProgress.requireStrokeOrder,

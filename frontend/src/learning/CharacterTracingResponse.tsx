@@ -624,7 +624,6 @@ export function CharacterTracingResponse({
       || !data
       || !targetRef.current
       || !animationTargetRef.current
-      || disabled
     ) return;
     let active = true;
     let centerFrame: number | null = null;
@@ -709,7 +708,7 @@ export function CharacterTracingResponse({
       writerRef.current = null;
       animationWriterRef.current = null;
     };
-  }, [data, disabled, question.character, reducedMotion, requireStrokeOrder, startQuiz]);
+  }, [data, question.character, reducedMotion, requireStrokeOrder, startQuiz]);
 
   function toggleAnimation() {
     const writer = writerRef.current;
@@ -799,10 +798,11 @@ export function CharacterTracingResponse({
         <>
           <div className="tracing-grid" ref={gridRef}>
             <div
-              className="hanzi-writer-target"
+              className={`hanzi-writer-target${disabled || completed ? " is-disabled" : ""}`}
               ref={targetRef}
               style={offsetStyle(centerOffset)}
               onPointerDown={handleTracingStart}
+              aria-disabled={disabled || completed}
             />
             <div
               className="hanzi-writer-animation-target"

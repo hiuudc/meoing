@@ -3,7 +3,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CharacterTracingResponse, characterCenterOffset } from "./CharacterTracingResponse";
-import type { CharacterTracingQuestion } from "./types";
+import type { CharacterTracingQuestion, QuestionAnswer } from "./types";
 
 const mocks = vi.hoisted(() => {
   const writer = {
@@ -69,6 +69,7 @@ async function renderTracing(
   strokeTolerance?: number,
   showStrokeGuide?: boolean,
   actions: {
+    onChange?: (answer: QuestionAnswer) => void;
     onSpeak?: (character: string) => void;
   } = {},
 ) {
@@ -79,10 +80,10 @@ async function renderTracing(
       question,
       language: "Japanese",
       answer: "",
-      onChange: vi.fn(),
+      onChange: actions.onChange ?? vi.fn(),
       strokeTolerance,
       showStrokeGuide,
-      ...actions,
+      onSpeak: actions.onSpeak,
     }));
   });
   await vi.waitFor(() => expect(mocks.writer.quiz).toHaveBeenCalled());
@@ -135,6 +136,31 @@ describe("CharacterTracingResponse", () => {
     await act(async () => speaker!.click());
 
     expect(onSpeak).toHaveBeenCalledWith(question.character);
+  });
+
+  it("keeps accepted strokes mounted when completion disables the response", async () => {
+    const onChange = vi.fn();
+    await renderTracing(undefined, undefined, { onChange });
+    const createdWriters = mocks.create.mock.calls.length;
+    const quizOptions = mocks.writer.quiz.mock.calls[0][0];
+
+    await act(async () => quizOptions.onComplete());
+    expect(onChange).toHaveBeenCalledWith("passed");
+
+    await act(async () => {
+      root!.render(createElement(CharacterTracingResponse, {
+        question,
+        language: "Japanese",
+        answer: "passed",
+        disabled: true,
+        onChange,
+      }));
+    });
+
+    expect(mocks.create).toHaveBeenCalledTimes(createdWriters);
+    expect(mocks.writer.hideCharacter).not.toHaveBeenCalled();
+    expect(document.querySelector(".hanzi-writer-target")?.classList.contains("is-disabled")).toBe(true);
+    expect(document.querySelector(".tracing-instruction [role=status]")?.textContent).toBe("Tracing complete.");
   });
 
   it("uses the live stroke-order override instead of the stored question value", async () => {

@@ -993,6 +993,45 @@ describe("fullscreen lesson player", () => {
     expect(window.speechSynthesis.cancel).toHaveBeenCalledTimes(4);
   });
 
+  it("hides readings but speaks every activated glyph in Letters practice", async () => {
+    speechVoices = [speechVoice("Japanese", "ja-JP", "voice-ja", true)];
+    const question = {
+      ...lesson.questions[0],
+      id: "letters-choice-speech",
+      prompt: "Select the matching character.",
+      targetPrompt: "\u3043",
+      options: [
+        { id: "small-i", label: "\u3043" },
+        { id: "u", label: "\u3046" },
+      ],
+      correctOptionId: "small-i",
+      glossaryTargets: ["\u3043", "\u3046"],
+      presentation: { readQuestion: false, readAnswers: false, wordTooltips: false },
+    } as LessonQuestion;
+    await renderPlayer({
+      lesson: {
+        ...lessonWithQuestions("letters-choice-speech-test", [question], undefined, [
+          { term: "\u3043", meaning: "small i", pronunciation: { romanized: "i" } },
+          { term: "\u3046", meaning: "u", pronunciation: { romanized: "u" } },
+        ]),
+        targetLanguage: "Japanese",
+      },
+      variant: "lettersPractice",
+    });
+
+    expect(document.querySelector("ruby")).toBeNull();
+    const distractor = document.querySelector<HTMLInputElement>('input[value="u"]')!;
+    const target = document.querySelector<HTMLInputElement>('input[value="small-i"]')!;
+    await act(async () => distractor.click());
+    await act(async () => target.click());
+    await act(async () => target.click());
+
+    expect(spokenUtterances.map((utterance) => utterance.text)).toEqual(["\u3046", "\u3043", "\u3043"]);
+    await act(async () => button("Check answer").click());
+    expect(document.querySelector(".lesson-feedback-tray.is-correct")).not.toBeNull();
+    expect(document.querySelector("ruby")).toBeNull();
+  });
+
   it("auto-reads each trace presentation and exposes Letter settings in the left header actions", async () => {
     speechVoices = [speechVoice("Japanese", "ja-JP", "voice-ja", true)];
     const tracingQuestion: CharacterTracingQuestion = {
@@ -1017,6 +1056,7 @@ describe("fullscreen lesson player", () => {
 
     await renderPlayer({
       lesson: tracingLesson,
+      variant: "lettersPractice",
       tracingOptions: {
         requireStrokeOrder: true,
         strokeTolerance: 1,
@@ -1026,6 +1066,7 @@ describe("fullscreen lesson player", () => {
     });
     await vi.waitFor(() => expect(tracingMocks.writer.quiz).toHaveBeenCalled());
     await vi.waitFor(() => expect(spokenUtterances.map((utterance) => utterance.text)).toEqual(["\u3042"]));
+    expect(document.querySelector(".character-tracing-glyph span")?.textContent).toBe("a");
 
     const settings = button("Open Letter settings");
     expect(settings.closest(".lesson-header-left-actions")).not.toBeNull();

@@ -163,16 +163,22 @@ function NumericChoiceResponse({
     if (numberTimerRef.current !== null) window.clearTimeout(numberTimerRef.current);
   }, []);
 
-  function activate(index: number) {
+  function changeSelection(index: number) {
     const option = options[index - 1];
     if (!option) return;
     const selected = selectedIds.includes(option.id);
-    onAnswerActivate?.(option.label);
     onChange(multiple
       ? selected
         ? selectedIds.filter((candidate) => candidate !== option.id)
         : [...selectedIds, option.id]
       : [option.id]);
+  }
+
+  function activate(index: number) {
+    const option = options[index - 1];
+    if (!option) return;
+    if (!multiple || !selectedIds.includes(option.id)) onAnswerActivate?.(option.label);
+    changeSelection(index);
   }
 
   function focusGroup() {
@@ -238,7 +244,10 @@ function NumericChoiceResponse({
               name={multiple ? undefined : id}
               value={option.id}
               checked={selected}
-              onChange={() => activate(index + 1)}
+              onClick={() => {
+                if (!multiple || !selected) onAnswerActivate?.(option.label);
+              }}
+              onChange={() => changeSelection(index + 1)}
               data-lesson-hotkey-index={index + 1}
             />
             <span className="choice-index" aria-hidden="true">{index + 1}</span>
@@ -1826,21 +1835,17 @@ export function QuestionRenderer({
       return (
         <div className="listening-choice-response">
           <AudioPrompt text={question.audioText} onSpeak={onSpeakTarget} />
-          <fieldset className="choice-list" disabled={disabled}>
-            <legend className="sr-only">Choose the text you heard</legend>
-            {question.options.map((option) => (
-              <label key={option.id} className={selectedId === option.id ? "is-selected" : ""}>
-                <input
-                  type="radio"
-                  name={question.id}
-                  checked={selectedId === option.id}
-                  onClick={() => onAnswerActivate?.(option.label)}
-                  onChange={() => onChange(option.id)}
-                />
-                <span>{render(option.label, answerInteractive)}</span>
-              </label>
-            ))}
-          </fieldset>
+          <NumericChoiceResponse
+            id={question.id}
+            options={question.options}
+            selectedIds={selectedId ? [selectedId] : []}
+            legend="Choose the text you heard"
+            disabled={disabled}
+            evaluated={evaluated}
+            onChange={(ids) => onChange(ids[0] ?? "")}
+            onAnswerActivate={onAnswerActivate}
+            renderText={render}
+          />
         </div>
       );
     }

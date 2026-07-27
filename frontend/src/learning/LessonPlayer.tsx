@@ -75,6 +75,7 @@ export interface CoachChatMessage {
 interface LessonPlayerProps {
   lesson: PlayableLesson;
   coachingAvailable: boolean;
+  variant?: "standard" | "lettersPractice";
   onEvaluate?: (question: LessonQuestion, answer: QuestionAnswer, speaking?: SpeakingSubmission | null) => Promise<Evaluation>;
   onProgressBatch?: (attempts: AttemptRecord[], snapshot: LessonProgressSnapshot) => void | Promise<void>;
   onAskCoach?: (
@@ -182,6 +183,7 @@ function separatedQuestionPrompts(question: PlayableQuestion): { source: string;
 export function LessonPlayer({
   lesson,
   coachingAvailable,
+  variant = "standard",
   onEvaluate,
   onProgressBatch,
   onAskCoach,
@@ -190,6 +192,7 @@ export function LessonPlayer({
   interactionSuspended = false,
   tracingOptions,
 }: LessonPlayerProps) {
+  const lettersPractice = variant === "lettersPractice";
   const questionMap = useMemo(() => new Map(lesson.questions.map((question) => [question.id, question])), [lesson.questions]);
   const alternateMap = useMemo(
     () => new Map((lesson.questionAlternates ?? []).map((alternate) => [alternate.questionId, alternate.question])),
@@ -881,7 +884,8 @@ export function LessonPlayer({
   const automaticallyGraded = currentQuestion
     ? ["matching", "audioMatching", "categorize", "characterTracing"].includes(currentQuestion.type)
     : false;
-  const renderGlossaryText = Boolean(presentation?.wordTooltips || playerPreference.showPronunciation);
+  const showCurrentPronunciation = playerPreference.showPronunciation && !lettersPractice;
+  const renderGlossaryText = Boolean(presentation?.wordTooltips || showCurrentPronunciation);
   const portalTarget = document.querySelector<HTMLElement>(".app-shell") ?? document.body;
 
   useLayoutEffect(() => {
@@ -922,7 +926,7 @@ export function LessonPlayer({
   ]);
 
   function speakActivatedAnswer(text: string) {
-    if (!currentQuestion || !presentation?.readAnswers) return;
+    if (!currentQuestion || (!lettersPractice && !presentation?.readAnswers)) return;
     const targetText = answerActivationSpeechText(currentQuestion, text);
     if (targetText) speak(targetText);
   }
@@ -971,7 +975,7 @@ export function LessonPlayer({
         text={text}
         glossary={lesson.glossary}
         tooltipsEnabled={presentation?.wordTooltips}
-        showPronunciation={playerPreference.showPronunciation}
+        showPronunciation={showCurrentPronunciation}
         pronunciationMode={playerPreference.pronunciationMode}
         interactive={interactive}
         termClassName={isExactTargetText ? undefined : "lesson-target-text"}

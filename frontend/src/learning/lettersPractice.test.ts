@@ -69,6 +69,26 @@ describe("Letters practice sessions", () => {
     });
   });
 
+  it("marks every glyph choice as target-language speech content", () => {
+    const session = build(1);
+    const choiceQuestions = session.lesson.questions.filter((question) => (
+      question.type === "singleChoice" || question.type === "listenSelect"
+    ));
+
+    choiceQuestions.forEach((question) => {
+      expect(question.glossaryTargets).toEqual(question.options.map((option) => option.label));
+    });
+
+    const matchingAlternate = session.lesson.questionAlternates
+      .map((alternate) => alternate.question)
+      .find((question) => question.type === "matching");
+    expect(matchingAlternate?.glossaryTargets).toEqual(
+      matchingAlternate?.type === "matching"
+        ? matchingAlternate.pairs.map((pair) => pair.right)
+        : [],
+    );
+  });
+
   it("clamps the custom character count and splits matching into groups of five", () => {
     const manyCharacters = Array.from({ length: 12 }, (_, index) => String.fromCodePoint(0x4e00 + index));
     const session = buildLettersPracticeSession({

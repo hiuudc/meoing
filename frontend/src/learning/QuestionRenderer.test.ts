@@ -194,6 +194,20 @@ describe("QuestionRenderer interactions", () => {
         key: "2",
         expected: "false",
       },
+      {
+        question: {
+          id: "listen-select-numeric",
+          type: "listenSelect",
+          prompt: "Listen and choose",
+          explanation: "Choose what you heard.",
+          evaluationMode: "local",
+          audioText: "\u3044",
+          options: [{ id: "i", label: "\u3044" }, { id: "u", label: "\u3046" }],
+          correctOptionId: "i",
+        },
+        key: "2",
+        expected: '"u"',
+      },
     ];
 
     await render(createElement(Harness, { key: cases[0].question.id, question: cases[0].question }));
@@ -242,6 +256,33 @@ describe("QuestionRenderer interactions", () => {
     });
 
     expect(document.querySelector("#answer-value")?.textContent).toBe("true");
+  });
+
+  it("speaks a selected choice again without changing the answer", async () => {
+    const onAnswerActivate = vi.fn();
+    const question: LessonQuestion = {
+      id: "single-choice-speech",
+      type: "singleChoice",
+      prompt: "Choose a drink",
+      explanation: "Water is a drink.",
+      evaluationMode: "local",
+      options: [
+        { id: "water", label: "water" },
+        { id: "tea", label: "tea" },
+      ],
+      correctOptionId: "water",
+    };
+    await render(createElement(Harness, { question, onAnswerActivate }));
+
+    const water = document.querySelector<HTMLInputElement>('input[value="water"]')!;
+    await act(async () => water.click());
+    expect(onAnswerActivate).toHaveBeenCalledTimes(1);
+    expect(onAnswerActivate).toHaveBeenLastCalledWith("water");
+    expect(document.querySelector("#answer-value")?.textContent).toBe('"water"');
+
+    await act(async () => water.click());
+    expect(document.querySelector("#answer-value")?.textContent).toBe('"water"');
+    expect(onAnswerActivate).toHaveBeenCalledTimes(2);
   });
 
   it("keeps duplicate-label bank tokens distinct and supports keyboard reordering", async () => {
