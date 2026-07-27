@@ -14,6 +14,13 @@ Meoing is a monorepo. The current implementation lives in `frontend/`, which con
 - Do not commit `.qa`, `.tools`, dependencies, build output, caches, or TypeScript build metadata.
 - Preserve existing Git history and keep changes focused on the relevant package.
 
+## Git Workflow
+
+- When a task is complete and no other active task is modifying any of the same files, create a focused local commit before reporting completion.
+- Stage only files that belong to the completed task, and use a concise commit message that accurately describes what was implemented.
+- If another active task overlaps any file, wait until the overlap is resolved before committing so unrelated or partial work is not mixed.
+- Do not push unless the user explicitly asks. A local commit does not imply permission to push.
+
 ## Verification
 
 For frontend changes, run:
