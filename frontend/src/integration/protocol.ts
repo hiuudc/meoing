@@ -211,6 +211,19 @@ function byteLength(value: string): number {
   return new TextEncoder().encode(value).byteLength;
 }
 
+function truncateUtf8(value: string, maximumBytes: number): string {
+  if (byteLength(value) <= maximumBytes) return value;
+  let low = 0;
+  let high = value.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (byteLength(value.slice(0, middle)) <= maximumBytes) low = middle;
+    else high = middle - 1;
+  }
+  const end = low > 0 && /[\uD800-\uDBFF]/.test(value[low - 1]) ? low - 1 : low;
+  return value.slice(0, end);
+}
+
 export function buildOperationPrompt(operation: OperationPromptInput): string {
   const material = JSON.stringify(operation.input, null, 2);
   const boundary = operation.operationId;
@@ -246,11 +259,21 @@ export function buildResultRepairPrompt(
   operationId: string,
   kind: ChatOperationKind,
   reason: string,
+  expectation?: OperationExpectation,
 ): string {
-  const boundedReason = reason.replace(/[\r\n]+/g, " ").slice(0, 1_000);
+  const boundedReason = truncateUtf8(reason.replace(/[\r\n]+/g, " "), 4 * 1024);
+  const lessonRequirements = kind === "create_lesson" && expectation
+    ? [
+        "Repair checklist for the full lesson:",
+        `- Return exactly ${expectation.questionCount} primary questions and exactly ${expectation.questionCount} questionAlternates, one alternate for every primary question.`,
+        "- Every answerBank must contain 2-30 unique tokens.",
+        "- Every targetPrompt and every visible target-language string must have complete glossaryTargets and glossary coverage.",
+      ]
+    : [];
   return [
     `Repair the previous response for Meoi operation ${operationId} (${kind}).`,
     `Validation problem: ${boundedReason}.`,
+    ...lessonRequirements,
     "Do not redo the learning task and do not invoke any tool, app, connector, API, MCP, or persistence action.",
     "Preserve the actual result from your previous response, but return the corrected full meoi.operation.result object for the same operation and kind.",
     "Return exactly one standalone ```json fenced block only, with no raw JSON, commentary, or extra fields. Keep every JSON string escape inside the code block.",

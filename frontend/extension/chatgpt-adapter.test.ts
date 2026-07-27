@@ -5,7 +5,10 @@ import { DEFAULT_LEARNING_PROFILE } from "../src/learning/profile";
 import { LESSON_QUESTION_FORMATS, type LessonQuestion } from "../src/learning/types";
 import type { ChatOperationKind, OperationExpectation } from "../src/integration/protocol";
 import {
+  ASSISTANT_RESPONSE_FALLBACK_MS,
+  ASSISTANT_RESPONSE_SETTLE_MS,
   CHAT_RESULT_MAX_BYTES,
+  assistantResponseReady,
   assistantTurnText,
   composerTextMatchesExpected,
   composerTextMismatchSummary,
@@ -17,6 +20,7 @@ import {
   quotaReached,
   repairAttemptNumbers,
   responseGenerationActive,
+  responseTextLooksClosed,
   resultParseFailureReason,
 } from "./chatgpt-adapter";
 
@@ -143,6 +147,38 @@ describe("ChatGPT selector adapter", () => {
     document.querySelector("button")!.setAttribute("style", "display:none");
     expect(responseGenerationActive()).toBe(false);
   });
+
+  it("waits for a completed turn action and does not treat a 1.2 second stream pause as completion", () => {
+    const raw = '{"type":"meoi.operation.result","protocolVersion":8}';
+    document.body.innerHTML = `
+      <article data-testid="conversation-turn-5">
+        <div data-message-author-role="assistant">${raw}</div>
+      </article>
+    `;
+    const turn = findAssistantTurns()[0];
+    expect(responseTextLooksClosed(raw)).toBe(true);
+    expect(assistantResponseReady(turn, raw, 1_300)).toBe(false);
+    expect(assistantResponseReady(turn, raw, ASSISTANT_RESPONSE_FALLBACK_MS - 1)).toBe(false);
+    expect(assistantResponseReady(turn, raw, ASSISTANT_RESPONSE_FALLBACK_MS)).toBe(true);
+
+    document.querySelector("article")!.insertAdjacentHTML(
+      "beforeend",
+      '<button aria-label="Copy response">Copy</button>',
+    );
+    expect(assistantResponseReady(turn, raw, ASSISTANT_RESPONSE_SETTLE_MS - 1)).toBe(false);
+    expect(assistantResponseReady(turn, raw, ASSISTANT_RESPONSE_SETTLE_MS)).toBe(true);
+  });
+
+  it("never accepts incomplete JSON through the stable-response fallback", () => {
+    document.body.innerHTML = `
+      <article data-testid="conversation-turn-6">
+        <div data-message-author-role="assistant">{"type":"meoi.operation.result"</div>
+      </article>
+    `;
+    const turn = findAssistantTurns()[0];
+    expect(responseTextLooksClosed('```json\n{"type":"meoi.operation.result"\n```')).toBe(false);
+    expect(assistantResponseReady(turn, assistantTurnText(turn), ASSISTANT_RESPONSE_FALLBACK_MS + 1_000)).toBe(false);
+  });
 });
 
 describe("strict ChatGPT result parsing", () => {
@@ -263,6 +299,40 @@ describe("strict ChatGPT result parsing", () => {
     };
     expect(parse(envelope(missingCoverage), "op-1", "create_lesson"))
       .toMatchObject({ ok: false, code: "INVALID_RESULT_SCHEMA" });
+  });
+
+  it("reports alternate-count and answer-bank issues together for repair", () => {
+    const lesson = generatedPreviewLesson();
+    const bankIndex = lesson.questions.findIndex((question) => "answerBank" in question && question.answerBank);
+    expect(bankIndex).toBeGreaterThanOrEqual(0);
+    const brokenLesson = {
+      ...lesson,
+      questions: lesson.questions.map((question, index) => {
+        if (index !== bankIndex || !("answerBank" in question) || !question.answerBank) return question;
+        return {
+          ...question,
+          answerBank: { ...question.answerBank, tokens: question.answerBank.tokens.slice(0, 1) },
+        };
+      }),
+      questionAlternates: lesson.questionAlternates?.slice(0, 1),
+    };
+    const parsed = parse(JSON.stringify({
+      type: "meoi.operation.result",
+      protocolVersion: 8,
+      operationId: "op-1",
+      kind: "create_lesson",
+      outcome: "completed",
+      result: { lesson: brokenLesson },
+    }), "op-1", "create_lesson");
+
+    expect(parsed).toMatchObject({ ok: false, code: "INVALID_RESULT_SCHEMA" });
+    if (!parsed.ok) {
+      const reason = resultParseFailureReason(parsed);
+      expect(parsed.details.length).toBeGreaterThan(2);
+      expect(reason).toContain("questionAlternates");
+      expect(reason).toContain("answerBank");
+      expect(new TextEncoder().encode(reason).byteLength).toBeLessThanOrEqual(4 * 1024);
+    }
   });
 
   it("deeply validates evaluation fields and rejects extras", () => {

@@ -59,6 +59,14 @@ import {
   type StoredLessonEntry,
 } from "../integration/learningStorage";
 import {
+  loadPendingLearningOperations,
+  pendingLearningOperationForUnit,
+  putPendingLearningOperation,
+  removePendingLearningOperation,
+  savePendingLearningOperations,
+  type PendingLearningOperation,
+} from "../integration/pendingLearningOperations";
+import {
   buildOperationPrompt,
   MEOI_EXTENSION_PROTOCOL_VERSION,
   MEOI_TEXT_FIELD_MAX_BYTES,
@@ -92,8 +100,14 @@ interface RetryAttempt {
   failed: boolean;
 }
 
+interface SendOperationOptions {
+  beforeDispatch?: (operationId: string) => void | Promise<void>;
+  retainFailedResult?: boolean;
+}
+
 type LearningView = "choose" | "new" | "lesson";
 type BridgeGateState = ExtensionCompatibility | { state: "checking" };
+type PendingLessonState = "idle" | "recovering" | "save_failed" | "failed" | "missing";
 
 interface UnitLearningView {
   unitId?: string;
@@ -242,7 +256,9 @@ export function LearningWorkspace({
   const [youtubeUrl, setYoutubeUrl] = useState("");
   const [transcript, setTranscript] = useState("");
   const [sourceRequest, setSourceRequest] = useState("");
+  const [pendingLessonState, setPendingLessonState] = useState<PendingLessonState>("idle");
   const activeAbortRef = useRef<AbortController | null>(null);
+  const recoveryAbortRef = useRef<AbortController | null>(null);
   const retryAttemptsRef = useRef<Partial<Record<ChatOperationKind, RetryAttempt>>>({});
   const learningCacheRef = useRef(learningCache);
   const learningScrollRef = useRef<HTMLDivElement>(null);
@@ -257,10 +273,14 @@ export function LearningWorkspace({
   const currentProgress = lesson ? session.progressByLesson[lesson.id] : undefined;
   const extensionConnected = bridgeGate.state === "ready";
 
-  useEffect(() => () => activeAbortRef.current?.abort(), []);
+  useEffect(() => () => {
+    activeAbortRef.current?.abort();
+    recoveryAbortRef.current?.abort();
+  }, []);
 
   useEffect(() => {
     activeAbortRef.current?.abort();
+    recoveryAbortRef.current?.abort();
     learningScrollRef.current?.scrollTo({ top: 0 });
     retryAttemptsRef.current = {};
     setBusy(false);
@@ -269,6 +289,7 @@ export function LearningWorkspace({
     setYoutubeUrl("");
     setTranscript("");
     setSourceRequest("");
+    setPendingLessonState("idle");
     setError("");
     setWarning("");
   }, [unit?.id]);
@@ -281,6 +302,23 @@ export function LearningWorkspace({
     });
     return () => { active = false; };
   }, [unit?.id]);
+
+  useEffect(() => {
+    if (bridgeGate.state !== "ready" || !unit) return;
+    const pending = pendingLearningOperationForUnit(
+      loadPendingLearningOperations(window.localStorage),
+      unit.id,
+    );
+    if (!pending) return;
+    const controller = new AbortController();
+    recoveryAbortRef.current?.abort();
+    recoveryAbortRef.current = controller;
+    void recoverPendingLesson(pending, controller.signal);
+    return () => {
+      controller.abort();
+      if (recoveryAbortRef.current === controller) recoveryAbortRef.current = null;
+    };
+  }, [bridgeGate.state, unit?.id]);
 
   async function refreshConnection() {
     setBusy(true);
@@ -307,6 +345,144 @@ export function LearningWorkspace({
       setLearningCache(next);
     }
     return saved;
+  }
+
+  function pendingOperationForUnit(unitId: string): PendingLearningOperation | undefined {
+    return pendingLearningOperationForUnit(
+      loadPendingLearningOperations(window.localStorage),
+      unitId,
+    );
+  }
+
+  function rememberPendingOperation(operation: PendingLearningOperation): boolean {
+    const current = loadPendingLearningOperations(window.localStorage);
+    return savePendingLearningOperations(
+      putPendingLearningOperation(current, operation),
+      window.localStorage,
+    );
+  }
+
+  function forgetPendingOperation(operation: PendingLearningOperation): boolean {
+    const current = loadPendingLearningOperations(window.localStorage);
+    const next = removePendingLearningOperation(current, operation.unitId, operation.operationId);
+    return next === current || savePendingLearningOperations(next, window.localStorage);
+  }
+
+  async function acknowledgeAndForgetPending(operation: PendingLearningOperation): Promise<boolean> {
+    const acknowledged = await extensionBridge.acknowledgeOperation(operation.operationId).catch(() => false);
+    return acknowledged && forgetPendingOperation(operation);
+  }
+
+  function showPendingFailure(message: string) {
+    setPendingLessonState("failed");
+    setError(message);
+    setWarning("");
+    setStatus("The lesson result failed validation. Create the lesson again after reviewing the error.");
+  }
+
+  async function acceptPendingLessonResult(
+    operation: PendingLearningOperation,
+    result: ChatOperationResult,
+  ): Promise<boolean> {
+    if (!unit || operation.unitId !== unit.id) return false;
+    if (result.outcome === "failed") {
+      showPendingFailure(result.error?.message ?? "ChatGPT could not create a valid lesson.");
+      return false;
+    }
+    if (result.outcome === "needs_source") {
+      const request = result.result?.sourceRequest ?? "Add a transcript or notes to continue.";
+      setSourceRequest(request);
+      setStatus(request);
+      setPendingLessonState("idle");
+      if (!await acknowledgeAndForgetPending(operation)) {
+        setWarning("The source request was received, but Meoi Bridge could not clear its retained result yet.");
+      }
+      return true;
+    }
+    if (result.outcome !== "completed" || !result.result?.lesson) {
+      showPendingFailure("ChatGPT did not return a valid lesson.");
+      return false;
+    }
+
+    let preparedLesson: StoredLessonEntry["lesson"];
+    try {
+      const parsedLesson = parseLesson(result.result.lesson);
+      if (parsedLesson.unitId !== operation.unitId) {
+        throw new Error("The returned lesson does not match the unit that requested it.");
+      }
+      preparedLesson = decorateLessonPresentation(parsedLesson, collection.questionSettings, profile);
+    } catch (caught) {
+      showPendingFailure(`Meoi Bridge returned a lesson that this page could not validate: ${publicError(caught)}`);
+      return false;
+    }
+
+    const nextCache = putStoredLesson(learningCacheRef.current, preparedLesson);
+    if (!commitLearningCache(nextCache)) {
+      setPendingLessonState("save_failed");
+      setError("The lesson is ready in Meoi Bridge, but this browser could not save it to localStorage.");
+      setWarning("The Bridge result was kept. Free browser storage if needed, then choose Retry local save.");
+      setStatus("Lesson received but not acknowledged because local saving failed.");
+      return false;
+    }
+
+    startLesson(preparedLesson, "Lesson received from ChatGPT and saved locally in this browser.");
+    setPendingLessonState("idle");
+    if (!await acknowledgeAndForgetPending(operation)) {
+      setWarning("The lesson is saved locally, but Meoi Bridge could not clear its retained result. Meoi will retry recovery when this unit is opened again.");
+    }
+    return true;
+  }
+
+  async function recoverPendingLesson(
+    operation: PendingLearningOperation,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (!unit || operation.unitId !== unit.id) return;
+    setBusy(true);
+    setError("");
+    setWarning("");
+    setPendingLessonState("recovering");
+    setStatus("Reconnecting to the pending lesson operation in Meoi Bridge...");
+    try {
+      let state = await extensionBridge.getOperationState(operation.operationId);
+      if (signal?.aborted) throw signal.reason ?? new DOMException("Operation aborted", "AbortError");
+      if (state.phase === "failed") {
+        showPendingFailure(state.error?.message ?? "Meoi Bridge could not create a valid lesson.");
+        return;
+      }
+      if (state.phase !== "completed") {
+        state = await extensionBridge.waitForOperation(operation.operationId, {
+          signal,
+          onState: (nextState) => setStatus(operationPhaseStatus(nextState)),
+        });
+      }
+      if (!state.result) throw new Error("The extension completed without a ChatGPT result.");
+      await acceptPendingLessonResult(operation, state.result);
+    } catch (caught) {
+      if (isAbortError(caught)) return;
+      if (caught instanceof ExtensionBridgeError && caught.code === "OPERATION_STATE_NOT_FOUND") {
+        forgetPendingOperation(operation);
+        setPendingLessonState("missing");
+        setError("Meoi Bridge was reloaded or updated and no longer has this lesson operation. Create the lesson again.");
+        setStatus("The pending operation is no longer available in the extension.");
+        return;
+      }
+      if (caught instanceof ExtensionBridgeError && caught.state?.phase === "failed") {
+        showPendingFailure(caught.state.error?.message ?? caught.message);
+        return;
+      }
+      setError(publicError(caught));
+      setStatus("Meoi could not reconnect to the pending lesson operation.");
+    } finally {
+      if (!signal?.aborted) setBusy(false);
+    }
+  }
+
+  async function discardFailedPendingOperation(operation: PendingLearningOperation): Promise<void> {
+    await extensionBridge.acknowledgeOperation(operation.operationId).catch(() => false);
+    forgetPendingOperation(operation);
+    delete retryAttemptsRef.current.create_lesson;
+    setPendingLessonState("idle");
   }
 
   function resetLessonPanels() {
@@ -394,7 +570,11 @@ export function LearningWorkspace({
     };
   }
 
-  async function sendOperation(kind: ChatOperationKind, input: unknown): Promise<ChatOperationResult> {
+  async function sendOperation(
+    kind: ChatOperationKind,
+    input: unknown,
+    operationOptions: SendOperationOptions = {},
+  ): Promise<ChatOperationResult> {
     if (!unit) throw new Error("Select a unit first.");
     if (bridgeGate.state !== "ready") throw new Error("Meoi Bridge v8 is required before Learn can run.");
     const expectation = currentExpectation();
@@ -403,6 +583,7 @@ export function LearningWorkspace({
     const retrying = Boolean(previous?.failed && previous.fingerprint === fingerprint);
     const operationId = retrying && previous ? previous.operationId : crypto.randomUUID();
     const prompt = buildOperationPrompt({ operationId, kind, expectation, input });
+    await operationOptions.beforeDispatch?.(operationId);
     retryAttemptsRef.current[kind] = { fingerprint, operationId, failed: false };
 
     activeAbortRef.current?.abort();
@@ -432,8 +613,10 @@ export function LearningWorkspace({
       delete retryAttemptsRef.current[kind];
       if (!state.result) throw new Error("The extension completed without a ChatGPT result.");
       if (state.result.outcome === "failed") {
-        await extensionBridge.acknowledgeOperation(operationId).catch(() => false);
-        throw new Error(state.result.error?.message ?? "ChatGPT could not complete this request.");
+        if (!operationOptions.retainFailedResult) {
+          await extensionBridge.acknowledgeOperation(operationId).catch(() => false);
+          throw new Error(state.result.error?.message ?? "ChatGPT could not complete this request.");
+        }
       }
       return state.result;
     } catch (caught) {
@@ -468,11 +651,20 @@ export function LearningWorkspace({
       setError("The transcript or notes must be 500 KiB or smaller.");
       return;
     }
+
+    const existingPending = pendingOperationForUnit(unit.id);
+    if (existingPending && pendingLessonState !== "failed") {
+      await recoverPendingLesson(existingPending);
+      return;
+    }
+
     setBusy(true);
     setError("");
     setWarning("");
     setSourceRequest("");
+    let pendingOperation: PendingLearningOperation | undefined;
     try {
+      if (existingPending) await discardFailedPendingOperation(existingPending);
       const result = await sendOperation("create_lesson", {
         context: currentUnitContext(),
         request: {
@@ -481,32 +673,38 @@ export function LearningWorkspace({
           youtubeUrl: youtubeUrl.trim() || undefined,
           transcript: transcript.trim() || undefined,
         },
+      }, {
+        retainFailedResult: true,
+        beforeDispatch: (operationId) => {
+          pendingOperation = {
+            operationId,
+            unitId: unit.id,
+            kind: "create_lesson",
+            createdAt: new Date().toISOString(),
+          };
+          if (!rememberPendingOperation(pendingOperation)) {
+            pendingOperation = undefined;
+            throw new Error("The browser could not record the pending lesson operation. Nothing was sent.");
+          }
+          setPendingLessonState("recovering");
+        },
       });
-      if (result.outcome === "needs_source") {
-        const request = result.result?.sourceRequest ?? "Add a transcript or notes to continue.";
-        setSourceRequest(request);
-        await extensionBridge.acknowledgeOperation(result.operationId).catch(() => false);
-        setStatus(request);
-        return;
+      const recorded = pendingOperation ?? pendingOperationForUnit(unit.id);
+      if (!recorded || recorded.operationId !== result.operationId) {
+        throw new Error("Meoi lost the pending operation metadata before it could save the lesson.");
       }
-      if (result.outcome !== "completed" || !result.result?.lesson) throw new Error("ChatGPT did not return a valid lesson.");
-      const parsedLesson = parseLesson(result.result.lesson);
-      if (parsedLesson.unitId !== unit.id) throw new Error("The returned lesson does not match the active unit.");
-      const preparedLesson = decorateLessonPresentation(parsedLesson, collection.questionSettings, profile);
-      const nextCache = putStoredLesson(learningCacheRef.current, preparedLesson);
-      const stored = commitLearningCache(nextCache);
-      startLesson(
-        preparedLesson,
-        stored
-          ? "Lesson received from ChatGPT and saved locally in this browser."
-          : "Lesson received from ChatGPT and loaded for this session.",
-      );
-      if (!stored) {
-        setWarning("This lesson is available now, but the browser could not save it to localStorage. Existing saved lessons were not removed.");
-      }
-      await extensionBridge.acknowledgeOperation(result.operationId).catch(() => false);
+      await acceptPendingLessonResult(recorded, result);
     } catch (caught) {
-      if (!isAbortError(caught)) setError(publicError(caught));
+      if (!isAbortError(caught)) {
+        if (caught instanceof ExtensionBridgeError && caught.state?.phase === "failed") {
+          showPendingFailure(caught.state.error?.message ?? caught.message);
+        } else {
+          setError(publicError(caught));
+          if (pendingOperation) {
+            setStatus("The lesson operation remains recorded and Meoi will reconnect to it.");
+          }
+        }
+      }
     } finally {
       setBusy(false);
     }
@@ -645,9 +843,9 @@ export function LearningWorkspace({
               </h1>
               <p>
                 {bridgeGate.state === "outdated"
-                  ? `Learn is locked because protocol v${bridgeGate.version} was detected. Install Meoi Bridge 8.0.0, reload the extension, then reload this page.`
+                  ? `Learn is locked because protocol v${bridgeGate.version} was detected. Install Meoi Bridge 8.0.1, reload the extension, then reload this page.`
                   : bridgeGate.state === "unavailable"
-                    ? "Install or enable Meoi Bridge 8.0.0, reload the extension, then reload this page. Library and Letters remain available."
+                    ? "Install or enable Meoi Bridge 8.0.1, reload the extension, then reload this page. Library and Letters remain available."
                     : "Meoi is checking protocol v8 and older v4-v7 status channels. Older versions are detected only for upgrade guidance and cannot run operations."}
               </p>
               {bridgeGate.state !== "checking" ? (
@@ -728,6 +926,19 @@ export function LearningWorkspace({
               <button className="secondary-button" type="button" onClick={usePreviewLesson} disabled={busy}>
                 <Play size={16} /> Player demo
               </button>
+              {pendingLessonState === "save_failed" ? (
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => {
+                    const pending = pendingOperationForUnit(unit.id);
+                    if (pending) void recoverPendingLesson(pending);
+                  }}
+                  disabled={busy}
+                >
+                  <RefreshCw size={16} /> Retry local save
+                </button>
+              ) : null}
               <button
                 className="primary-button"
                 type="button"
@@ -735,7 +946,11 @@ export function LearningWorkspace({
                 disabled={busy || Boolean(sourceRequest && !transcript.trim())}
               >
                 {busy ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}
-                {sourceRequest ? "Send source and try again" : "Create lesson"}
+                {sourceRequest
+                  ? "Send source and try again"
+                  : pendingLessonState === "failed" || pendingLessonState === "missing"
+                    ? "Create lesson again"
+                    : "Create lesson"}
               </button>
             </div>
           </section>
@@ -780,7 +995,7 @@ export function LearningWorkspace({
           <p className="control-copy">
             {bridgeGate.state === "ready"
               ? "Meoi Bridge v8 is ready. Sign in at chatgpt.com to create lessons and use coaching."
-              : "Install Meoi Bridge 8.0.0, reload the extension, then reload this page. Learn remains locked until protocol v8 responds."}
+              : "Install Meoi Bridge 8.0.1, reload the extension, then reload this page. Learn remains locked until protocol v8 responds."}
           </p>
           <button className="primary-button wide-button" type="button" onClick={() => void refreshConnection()} disabled={busy}>
             {busy ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />} Check again

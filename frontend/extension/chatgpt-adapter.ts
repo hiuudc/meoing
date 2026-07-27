@@ -12,6 +12,10 @@ export type Composer = HTMLTextAreaElement | HTMLElement;
 
 export const CHAT_RESULT_MAX_BYTES = 1024 * 1024;
 export const CHAT_RESULT_MAX_REPAIR_ATTEMPTS = 3;
+export const ASSISTANT_RESPONSE_SETTLE_MS = 400;
+export const ASSISTANT_RESPONSE_FALLBACK_MS = 8_000;
+const CHAT_RESULT_MAX_ISSUES = 20;
+const CHAT_RESULT_REPAIR_DETAIL_MAX_BYTES = 4 * 1024;
 
 export function repairAttemptNumbers(maximum = CHAT_RESULT_MAX_REPAIR_ATTEMPTS): number[] {
   return Array.from({ length: Math.max(0, Math.floor(maximum)) }, (_, index) => index + 1);
@@ -141,13 +145,62 @@ export function assistantTurnText(turn: HTMLElement): string {
 
 export function responseGenerationActive(root: ParentNode = document): boolean {
   const controls = Array.from(root.querySelectorAll<HTMLElement>(
-    'button[data-testid="stop-button"], button[aria-label*="stop generating" i], button[aria-label*="stop response" i]',
+    'button[data-testid="stop-button"], button[aria-label*="stop generating" i], button[aria-label*="stop response" i], button[aria-label*="stop streaming" i]',
   ));
   return controls.some(visibleControl);
 }
 
 function byteLength(value: string): number {
   return new TextEncoder().encode(value).byteLength;
+}
+
+function truncateBytes(value: string, maximum: number): string {
+  if (maximum <= 0) return "";
+  if (byteLength(value) <= maximum) return value;
+  let low = 0;
+  let high = value.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (byteLength(value.slice(0, middle)) <= maximum) low = middle;
+    else high = middle - 1;
+  }
+  const end = low > 0 && /[\uD800-\uDBFF]/.test(value[low - 1]) ? low - 1 : low;
+  return value.slice(0, end);
+}
+
+export function assistantTurnHasCompletionAction(turn: HTMLElement): boolean {
+  let scope: HTMLElement | null = turn;
+  for (let depth = 0; scope && depth < 5; depth += 1) {
+    const actions = Array.from(scope.querySelectorAll<HTMLElement>(
+      'button[aria-label="Copy response" i], button[aria-label="Good response" i], button[aria-label="Bad response" i]',
+    ));
+    if (actions.some(visibleControl)) return true;
+    if (scope.matches('article[data-testid^="conversation-turn-"]')) break;
+    scope = scope.parentElement;
+  }
+  return false;
+}
+
+export function responseTextLooksClosed(text: string): boolean {
+  const candidate = jsonCandidate(text);
+  if (!candidate.ok) return false;
+  try {
+    JSON.parse(candidate.value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function assistantResponseReady(
+  turn: HTMLElement,
+  text: string,
+  stableForMs: number,
+  root: ParentNode = document,
+): boolean {
+  if (!text || responseGenerationActive(root)) return false;
+  if (assistantTurnHasCompletionAction(turn)) return stableForMs >= ASSISTANT_RESPONSE_SETTLE_MS;
+  return stableForMs >= ASSISTANT_RESPONSE_FALLBACK_MS && responseTextLooksClosed(text);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -161,10 +214,20 @@ function hasExactKeys(record: Record<string, unknown>, expected: string[]): bool
 }
 
 function failure(code: ResultParseErrorCode, ...details: string[]): ResultParseFailure {
+  let remaining = CHAT_RESULT_REPAIR_DETAIL_MAX_BYTES;
+  const boundedDetails: string[] = [];
+  for (const detail of details.filter(Boolean).slice(0, CHAT_RESULT_MAX_ISSUES)) {
+    const normalized = detail.replace(/[\r\n]+/g, " ").trim();
+    if (!normalized || remaining <= 0) break;
+    const bounded = truncateBytes(normalized, remaining);
+    if (!bounded) break;
+    boundedDetails.push(bounded);
+    remaining -= byteLength(bounded);
+  }
   return {
     ok: false,
     code,
-    details: details.filter(Boolean).slice(0, 6).map((detail) => detail.replace(/[\r\n]+/g, " ").slice(0, 220)),
+    details: boundedDetails,
   };
 }
 
@@ -192,7 +255,7 @@ function jsonCandidate(text: string): { ok: true; value: string } | ResultParseF
 }
 
 function schemaDetails(issues: Array<{ path: PropertyKey[]; message: string }>): string[] {
-  return issues.slice(0, 6).map((issue) => {
+  return issues.slice(0, CHAT_RESULT_MAX_ISSUES).map((issue) => {
     const path = issue.path.length ? issue.path.map(String).join(".") : "result";
     return `${path}: ${issue.message}`;
   });
@@ -222,7 +285,7 @@ function validateCompletedResult(
 }
 
 export function resultParseFailureReason(parsed: ResultParseFailure): string {
-  return [parsed.code, ...parsed.details].join(": ").slice(0, 1_000);
+  return truncateBytes([parsed.code, ...parsed.details].join(": "), CHAT_RESULT_REPAIR_DETAIL_MAX_BYTES);
 }
 
 export function parseChatOperationResult(

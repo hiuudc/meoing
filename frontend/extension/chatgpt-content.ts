@@ -7,6 +7,7 @@ import {
 import type { ChatCommandResponse, ChatOperationEvent, QueuedOperation } from "./shared";
 import { extensionError } from "./shared";
 import {
+  assistantResponseReady,
   assistantTurnText,
   composerText,
   composerTextMatchesExpected,
@@ -19,7 +20,6 @@ import {
   parseChatOperationResult,
   quotaReached,
   repairAttemptNumbers,
-  responseGenerationActive,
   resultParseFailureReason,
   visibleControl as visible,
   type Composer,
@@ -27,7 +27,6 @@ import {
 
 const SELECTOR_TIMEOUT_MS = 8_000;
 const OPERATION_TIMEOUT_MS = 10 * 60_000;
-const RESPONSE_STABLE_MS = 1_200;
 const OBSERVER_POLL_MS = 200;
 const EVENT_DELIVERY_GRACE_MS = 10_000;
 const COMPOSER_PAYLOAD_PREFIX = "meoi-composer-payload-";
@@ -328,7 +327,7 @@ function submitOperation(operation: QueuedOperation, deadline: number): Promise<
 
 function submitRepair(operation: QueuedOperation, reason: string, deadline: number): Promise<ChatCommandResponse> {
   return submitText(
-    buildResultRepairPrompt(operation.operationId, operation.kind, reason),
+    buildResultRepairPrompt(operation.operationId, operation.kind, reason, operation.expectation),
     "Meoi cannot find the ChatGPT composer for JSON result repair.",
     deadline,
   );
@@ -385,7 +384,7 @@ async function waitForAssistantResponse(baseline: AssistantBaseline, deadline: n
       if (text !== lastText) {
         lastText = text;
         stableSince = Date.now();
-      } else if (text && !responseGenerationActive() && Date.now() - stableSince >= RESPONSE_STABLE_MS) {
+      } else if (assistantResponseReady(turn, text, Date.now() - stableSince)) {
         return text;
       }
     }

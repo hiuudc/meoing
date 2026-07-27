@@ -80,7 +80,7 @@ describe("extension protocol v8 prompts", () => {
   });
 
   it("repairs the previous result without redoing the task or invoking tools", () => {
-    const prompt = buildResultRepairPrompt("operation-1", "evaluate_answer", "INVALID_JSON: unexpected token\nmore detail");
+    const prompt = buildResultRepairPrompt("operation-1", "evaluate_answer", "INVALID_JSON: unexpected token\nmore detail", expectation);
     expect(prompt).toContain("Do not redo the learning task");
     expect(prompt).toContain("do not invoke any tool");
     expect(prompt).toContain("INVALID_JSON: unexpected token more detail");
@@ -88,5 +88,16 @@ describe("extension protocol v8 prompts", () => {
     expect(prompt).toContain("evaluate_answer");
     expect(prompt).toContain("Return exactly one standalone ```json fenced block only");
     expect(prompt).toContain("Keep every JSON string escape inside the code block");
+  });
+
+  it("gives lesson repair enough bounded detail to fix counts, answer banks, and glossary coverage", () => {
+    const reason = Array.from({ length: 20 }, (_, index) => `questions.${index}.answerBank.tokens: issue ${index}`).join("\n");
+    const prompt = buildResultRepairPrompt("operation-lesson", "create_lesson", reason, expectation);
+    expect(prompt).toContain("exactly 10 primary questions and exactly 10 questionAlternates");
+    expect(prompt).toContain("Every answerBank must contain 2-30 unique tokens");
+    expect(prompt).toContain("targetPrompt");
+    expect(prompt).toContain("glossary coverage");
+    expect(prompt).toContain("questions.19.answerBank.tokens");
+    expect(new TextEncoder().encode(prompt).byteLength).toBeLessThan(6 * 1024);
   });
 });
