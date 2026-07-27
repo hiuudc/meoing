@@ -335,6 +335,42 @@ describe("strict ChatGPT result parsing", () => {
     }
   });
 
+  it("rejects a Translation bank that uses a whole answer token or sentence punctuation", () => {
+    const lesson = generatedPreviewLesson();
+    const brokenLesson = {
+      ...lesson,
+      questions: lesson.questions.map((question) => {
+        if (question.type !== "translation") return question;
+        return {
+          ...question,
+          answerBank: {
+            tokens: [
+              { id: "whole-answer", label: question.referenceAnswer.replace(/[.!?]+$/u, "") },
+              { id: "punctuated-distractor", label: "tea." },
+            ],
+            separator: "space" as const,
+            defaultMode: "bank" as const,
+          },
+        };
+      }),
+    };
+    const parsed = parse(JSON.stringify({
+      type: "meoi.operation.result",
+      protocolVersion: 8,
+      operationId: "op-1",
+      kind: "create_lesson",
+      outcome: "completed",
+      result: { lesson: brokenLesson },
+    }), "op-1", "create_lesson");
+
+    expect(parsed).toMatchObject({ ok: false, code: "INVALID_RESULT_SCHEMA" });
+    if (!parsed.ok) {
+      const reason = resultParseFailureReason(parsed);
+      expect(reason).toContain("complete multi-word reference answer");
+      expect(reason).toContain("sentence-ending punctuation");
+    }
+  });
+
   it("deeply validates evaluation fields and rejects extras", () => {
     const evaluation = {
       status: "partial",

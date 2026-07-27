@@ -55,6 +55,55 @@ const glossaryEntrySchema = z.object({
   example: plainText.optional(),
 }).strict();
 
+const sentenceEndingPunctuation = /[.!?。！？…]+$/u;
+
+function normalizeBankComposition(value: string): string {
+  return value
+    .normalize("NFKC")
+    .toLocaleLowerCase()
+    .replace(/[\p{P}\p{S}\s]+/gu, "");
+}
+
+function answerBankCanCompose(
+  referenceAnswer: string,
+  tokens: ReadonlyArray<{ id: string; label: string }>,
+  minimumTokenCount = 1,
+): boolean {
+  const target = normalizeBankComposition(referenceAnswer);
+  if (!target) return false;
+  const parts = tokens
+    .map((token, index) => ({
+      id: `${index}:${token.id}`,
+      text: normalizeBankComposition(token.label),
+    }))
+    .filter((token) => token.text);
+  const failed = new Set<string>();
+
+  function visit(offset: number, used: Set<string>, count: number): boolean {
+    if (offset === target.length) return count >= minimumTokenCount;
+    const key = `${offset}|${count}|${[...used].sort().join(",")}`;
+    if (failed.has(key)) return false;
+    for (const token of parts) {
+      if (used.has(token.id) || !target.startsWith(token.text, offset)) continue;
+      const nextUsed = new Set(used);
+      nextUsed.add(token.id);
+      if (visit(offset + token.text.length, nextUsed, count + 1)) return true;
+    }
+    failed.add(key);
+    return false;
+  }
+
+  return visit(0, new Set(), 0);
+}
+
+function hasWholeReferenceToken(
+  referenceAnswer: string,
+  tokens: ReadonlyArray<{ label: string }>,
+): boolean {
+  const reference = normalizeBankComposition(referenceAnswer);
+  return tokens.some((token) => normalizeBankComposition(token.label) === reference);
+}
+
 const baseFields = {
   id,
   prompt: plainText,
@@ -166,6 +215,38 @@ export const lessonQuestionSchema = z.discriminatedUnion("type", [
         });
       }
     }
+    question.answerBank.tokens.forEach((token, index) => {
+      if (sentenceEndingPunctuation.test(token.label.trim())) {
+        context.addIssue({
+          code: "custom",
+          path: ["answerBank", "tokens", index, "label"],
+          message: "Answer-bank tokens must not include sentence-ending punctuation.",
+        });
+      }
+    });
+    if (question.type === "translation" || question.type === "shortAnswer") {
+      const referenceWordCount = question.referenceAnswer.trim().split(/\s+/u).filter(Boolean).length;
+      const needsMultipleTokens = referenceWordCount > 1
+        || sentenceEndingPunctuation.test(question.referenceAnswer.trim());
+      if (needsMultipleTokens && hasWholeReferenceToken(question.referenceAnswer, question.answerBank.tokens)) {
+        context.addIssue({
+          code: "custom",
+          path: ["answerBank", "tokens"],
+          message: `${question.type} answer banks cannot contain the complete multi-word reference answer in one token.`,
+        });
+      }
+      if (!answerBankCanCompose(
+        question.referenceAnswer,
+        question.answerBank.tokens,
+        needsMultipleTokens ? 2 : 1,
+      )) {
+        context.addIssue({
+          code: "custom",
+          path: ["answerBank", "tokens"],
+          message: `${question.type} answer-bank tokens must compose the referenceAnswer exactly in the same order.`,
+        });
+      }
+    }
   }
   if (question.type === "selectBlank") {
     const blankCount = question.template.split("{{blank}}").length - 1;
@@ -218,13 +299,40 @@ function validateSchemaSevenQuestion(
   if (!["Japanese", "Chinese", "Korean"].includes(lesson.targetLanguage)) return errors;
   const missingPronunciation = new Set<string>();
   (question.glossaryTargets ?? []).forEach((target) => {
-    segmentGlossaryText(stripBlankMarkers(target), lesson.glossary).forEach((segment) => {
+    const visibleTarget = stripBlankMarkers(target);
+    const lexicalSegments = segmentGlossaryText(visibleTarget, lesson.glossary, { mode: "lexical-cjk" });
+    if (
+      sentenceEndingPunctuation.test(visibleTarget.trim())
+      && (
+        lexicalSegments.filter((segment) => segment.entry).length < 2
+        || lexicalSegments.some((segment) => !segment.entry && /[\p{L}\p{N}\p{M}]/u.test(segment.text))
+      )
+    ) {
+      errors.push(`CJK glossary target ${target} needs word- and particle-level entries instead of only a whole-sentence entry.`);
+    }
+    lexicalSegments.forEach((segment) => {
       if (!segment.entry || !/[\p{L}\p{N}\p{M}]/u.test(segment.text)) return;
       if (!segment.entry.pronunciation?.native && !segment.entry.pronunciation?.romanized) {
         missingPronunciation.add(segment.entry.term);
       }
     });
   });
+  if (question.type === "translation" && question.answerBank) {
+    const lexicalSegments = segmentGlossaryText(
+      question.referenceAnswer,
+      lesson.glossary,
+      { mode: "lexical-cjk" },
+    );
+    const lexicalCount = lexicalSegments.filter((segment) => segment.entry).length;
+    if (lexicalCount >= 2) {
+      if (hasWholeReferenceToken(question.referenceAnswer, question.answerBank.tokens)) {
+        errors.push(`Translation question ${question.id} cannot put the complete CJK reference answer in one bank token.`);
+      }
+      if (!answerBankCanCompose(question.referenceAnswer, question.answerBank.tokens, 2)) {
+        errors.push(`Translation question ${question.id} answer-bank tokens must compose the CJK reference answer from lexical tokens.`);
+      }
+    }
+  }
   missingPronunciation.forEach((term) => {
     errors.push(`Target-language glossary term ${term} needs pronunciation metadata.`);
   });

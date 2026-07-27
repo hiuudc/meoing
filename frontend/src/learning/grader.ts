@@ -11,11 +11,22 @@ import type {
 const punctuationPattern = /[\p{P}\p{S}]/gu;
 const diacriticPattern = /\p{M}/gu;
 
+export interface GradeContext {
+  inputMode?: "keyboard" | "bank";
+}
+
 export function normalizeAnswer(value: string, options: TextMatchOptions = {}): string {
   let normalized = value.normalize("NFKC").trim().replace(/\s+/g, " ");
   if (options.ignorePunctuation) normalized = normalized.replace(punctuationPattern, "").replace(/\s+/g, " ").trim();
   if (options.ignoreDiacritics) normalized = normalized.normalize("NFD").replace(diacriticPattern, "");
   return options.caseSensitive ? normalized : normalized.toLocaleLowerCase();
+}
+
+export function normalizeBankAnswer(value: string): string {
+  return value
+    .normalize("NFKC")
+    .toLocaleLowerCase()
+    .replace(/[\p{P}\p{S}\s]+/gu, "");
 }
 
 function asString(answer: QuestionAnswer): string {
@@ -82,7 +93,11 @@ function ai(reason: AiGradeRequest["reason"]): AiGradeRequest {
   return { requiresAi: true, reason };
 }
 
-export function gradeAnswer(question: PlayableQuestion, answer: QuestionAnswer): GradeResult {
+export function gradeAnswer(
+  question: PlayableQuestion,
+  answer: QuestionAnswer,
+  context: GradeContext = {},
+): GradeResult {
   switch (question.type) {
     case "singleChoice": {
       const actual = asString(answer);
@@ -135,8 +150,15 @@ export function gradeAnswer(question: PlayableQuestion, answer: QuestionAnswer):
       return localResult(question, correct / question.items.length, question.items.map((item) => `${item.label} → ${categories.get(item.categoryId) ?? item.categoryId}`).join("; "), "One or more items are in the wrong category.");
     }
     case "translation":
-      return ai("semantic");
     case "shortAnswer":
+      if (context.inputMode === "bank") {
+        return localResult(
+          question,
+          normalizeBankAnswer(asString(answer)) === normalizeBankAnswer(question.referenceAnswer) ? 1 : 0,
+          question.referenceAnswer,
+          "The selected words do not match the reference answer or its order.",
+        );
+      }
       return ai("semantic");
     case "errorCorrection":
       return localResult(question, matchesAccepted(asString(answer), question.acceptedAnswers, question.match) ? 1 : 0, question.acceptedAnswers[0]);

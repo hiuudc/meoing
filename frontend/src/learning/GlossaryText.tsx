@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { segmentGlossaryText } from "./glossary";
+import { segmentGlossaryText, type GlossarySegmentationOptions } from "./glossary";
 import type { GlossaryEntry } from "./types";
 
 interface GlossaryTextProps {
@@ -13,6 +13,7 @@ interface GlossaryTextProps {
   termClassName?: string;
   termLang?: string;
   onTermActivate?: (text: string) => void;
+  segmentationMode?: GlossarySegmentationOptions["mode"];
 }
 
 interface OpenGlossary {
@@ -33,8 +34,9 @@ export function GlossaryText({
   termClassName,
   termLang,
   onTermActivate,
+  segmentationMode,
 }: GlossaryTextProps) {
-  const segments = segmentGlossaryText(text, glossary);
+  const segments = segmentGlossaryText(text, glossary, { mode: segmentationMode });
   const [openGlossary, setOpenGlossary] = useState<OpenGlossary | null>(null);
   const [position, setPosition] = useState({ top: 0, left: 0 });
   const tooltipRef = useRef<HTMLDivElement>(null);

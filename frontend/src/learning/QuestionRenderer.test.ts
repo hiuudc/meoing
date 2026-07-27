@@ -3,7 +3,12 @@ import { act, createElement, useState, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GlossaryText } from "./GlossaryText";
-import { AudioWaveform, QuestionRenderer, type AnswerInputMode } from "./QuestionRenderer";
+import {
+  AudioWaveform,
+  QuestionRenderer,
+  verticalInsertionIndex,
+  type AnswerInputMode,
+} from "./QuestionRenderer";
 import type { LessonQuestion, QuestionAnswer } from "./types";
 
 let root: Root | null = null;
@@ -258,7 +263,7 @@ describe("QuestionRenderer interactions", () => {
     expect(document.querySelector("#answer-value")?.textContent).toBe("true");
   });
 
-  it("speaks a selected choice again without changing the answer", async () => {
+  it("speaks only when a single-choice option becomes selected", async () => {
     const onAnswerActivate = vi.fn();
     const question: LessonQuestion = {
       id: "single-choice-speech",
@@ -282,7 +287,75 @@ describe("QuestionRenderer interactions", () => {
 
     await act(async () => water.click());
     expect(document.querySelector("#answer-value")?.textContent).toBe('"water"');
+    expect(onAnswerActivate).toHaveBeenCalledTimes(1);
+
+    const tea = document.querySelector<HTMLInputElement>('input[value="tea"]')!;
+    await act(async () => tea.click());
+    expect(document.querySelector("#answer-value")?.textContent).toBe('"tea"');
     expect(onAnswerActivate).toHaveBeenCalledTimes(2);
+    expect(onAnswerActivate).toHaveBeenLastCalledWith("tea");
+  });
+
+  it("does not speak when a multiple-choice option is deselected", async () => {
+    const onAnswerActivate = vi.fn();
+    const question: LessonQuestion = {
+      id: "multiple-choice-speech",
+      type: "multipleChoice",
+      prompt: "Choose drinks",
+      explanation: "Water and tea are drinks.",
+      evaluationMode: "local",
+      options: [
+        { id: "water", label: "water" },
+        { id: "tea", label: "tea" },
+      ],
+      correctOptionIds: ["water", "tea"],
+    };
+    await render(createElement(Harness, { question, onAnswerActivate }));
+
+    const water = document.querySelector<HTMLInputElement>('input[value="water"]')!;
+    await act(async () => water.click());
+    expect(onAnswerActivate).toHaveBeenCalledTimes(1);
+    expect(document.querySelector("#answer-value")?.textContent).toBe('["water"]');
+
+    await act(async () => water.click());
+    expect(document.querySelector("#answer-value")?.textContent).toBe("[]");
+    expect(onAnswerActivate).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the same selection-only speech rule for number-key activation", async () => {
+    const onAnswerActivate = vi.fn();
+    const question: LessonQuestion = {
+      id: "multiple-choice-number-speech",
+      type: "multipleChoice",
+      prompt: "Choose drinks",
+      explanation: "Water and tea are drinks.",
+      evaluationMode: "local",
+      options: [
+        { id: "water", label: "water" },
+        { id: "tea", label: "tea" },
+      ],
+      correctOptionIds: ["water", "tea"],
+    };
+    await render(createElement(Harness, { question, onAnswerActivate }));
+    const choices = document.querySelector<HTMLFieldSetElement>(".choice-list")!;
+
+    async function pressNumber(digit: string) {
+      await act(async () => choices.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        code: `Digit${digit}`,
+        key: digit,
+      })));
+    }
+
+    await pressNumber("1");
+    await pressNumber("1");
+    await pressNumber("2");
+
+    expect(document.querySelector("#answer-value")?.textContent).toBe('["tea"]');
+    expect(onAnswerActivate).toHaveBeenCalledTimes(2);
+    expect(onAnswerActivate).toHaveBeenNthCalledWith(1, "water");
+    expect(onAnswerActivate).toHaveBeenNthCalledWith(2, "tea");
   });
 
   it("keeps duplicate-label bank tokens distinct and supports keyboard reordering", async () => {
@@ -719,6 +792,12 @@ describe("QuestionRenderer interactions", () => {
     };
     await render(createElement(Harness, { question, onComplete }));
 
+    expect(Array.from(document.querySelectorAll<HTMLElement>(".categorize-matching [data-lesson-hotkey-index]"))
+      .map((element) => element.dataset.lessonHotkeyIndex))
+      .toEqual(["1", "2", "3", "4", "5"]);
+    expect(Array.from(document.querySelectorAll(".categorize-matching .pair-index")).map((element) => element.textContent))
+      .toEqual(["1", "2", "3", "4", "5"]);
+
     await act(async () => button("red").click());
     await act(async () => button("Warm colors").click());
     expect(button("Warm colors").disabled).toBe(false);
@@ -753,12 +832,29 @@ describe("QuestionRenderer interactions", () => {
     };
     await render(createElement(Harness, { question, onAnswerActivate }));
 
+    expect(document.querySelectorAll(".dialogue-bank-turn")).toHaveLength(2);
+    expect(document.querySelector(".dialogue-turn")).toBeNull();
+
     await act(async () => button("Good morning.").click());
+    expect(document.querySelectorAll(".dialogue-turn")).toHaveLength(1);
+    expect(document.querySelectorAll(".dialogue-bank-turn")).toHaveLength(1);
     await act(async () => button("Good morning, Aki.").click());
     expect(document.querySelector(".dialogue-turn.is-left small")?.textContent).toBe("Aki");
     expect(document.querySelector(".dialogue-turn.is-right small")?.textContent).toBe("Mina");
     expect(onAnswerActivate).toHaveBeenNthCalledWith(1, "Good morning.");
     expect(onAnswerActivate).toHaveBeenNthCalledWith(2, "Good morning, Aki.");
+  });
+
+  it("uses vertical midpoints for dialogue insertion before the first and after the last turn", () => {
+    const rects = [
+      { top: 100, height: 50 },
+      { top: 180, height: 50 },
+      { top: 260, height: 50 },
+    ];
+    expect(verticalInsertionIndex(rects, 40)).toBe(0);
+    expect(verticalInsertionIndex(rects, 175)).toBe(1);
+    expect(verticalInsertionIndex(rects, 245)).toBe(2);
+    expect(verticalInsertionIndex(rects, 400)).toBe(3);
   });
 
   it("keeps the Flashcard Recall voice control visible when recognition is unavailable", async () => {

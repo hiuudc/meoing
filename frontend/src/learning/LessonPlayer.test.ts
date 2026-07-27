@@ -378,6 +378,51 @@ describe("fullscreen lesson player", () => {
     expect(document.querySelector(".lesson-feedback-tray.is-correct")).not.toBeNull();
   });
 
+  it("uses global number badges for Categorize and reuses categories", async () => {
+    const categorize: LessonQuestion = {
+      id: "number-categorize-player",
+      type: "categorize",
+      prompt: "Categorize the words",
+      explanation: "Each word belongs to its category.",
+      evaluationMode: "local",
+      categories: [
+        { id: "drink", label: "Drink" },
+        { id: "person", label: "Person" },
+      ],
+      items: [
+        { id: "water", label: "water", categoryId: "drink" },
+        { id: "student", label: "student", categoryId: "person" },
+      ],
+    };
+    await renderPlayer({
+      lesson: lessonWithQuestions("number-categorize-player-test", [categorize]),
+    });
+    const stage = document.querySelector<HTMLElement>("[data-question-focus-root]")!;
+
+    async function pressNumber(digit: string, numpad = false) {
+      await act(async () => {
+        stage.dispatchEvent(new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          code: numpad ? `Numpad${digit}` : `Digit${digit}`,
+          key: digit,
+        }));
+        await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+      });
+    }
+
+    await pressNumber("1");
+    await pressNumber("3");
+    expect(document.querySelectorAll(".categorize-items button.is-locked")).toHaveLength(1);
+    expect(document.activeElement).toBe(stage);
+    expect(document.querySelector<HTMLButtonElement>('[data-lesson-hotkey-index="3"]')?.disabled).toBe(false);
+
+    await pressNumber("2", true);
+    await pressNumber("4", true);
+    expect(document.querySelectorAll(".categorize-items button.is-locked")).toHaveLength(2);
+    expect(document.querySelector(".lesson-feedback-tray.is-correct")).not.toBeNull();
+  });
+
   it("checks an answer textarea with Enter and preserves Shift+Enter for a newline", async () => {
     const writing: LessonQuestion = {
       id: "enter-writing",
@@ -426,6 +471,104 @@ describe("fullscreen lesson player", () => {
     });
     expect(enter.defaultPrevented).toBe(true);
     expect(onEvaluate).toHaveBeenCalledTimes(1);
+    expect(document.querySelector(".lesson-feedback-tray.is-correct")).not.toBeNull();
+  });
+
+  it("grades a Translation word bank locally but keeps keyboard input on ChatGPT evaluation", async () => {
+    const translation: LessonQuestion = {
+      id: "translation-input-mode",
+      type: "translation",
+      prompt: "Translate into English",
+      sourceText: "Tôi uống nước.",
+      targetLanguage: "English",
+      referenceAnswer: "I drink water.",
+      rubric: ["Meaning"],
+      explanation: "The word order matches the model answer.",
+      evaluationMode: "ai",
+      answerBank: {
+        tokens: [
+          { id: "i", label: "I" },
+          { id: "drink", label: "drink" },
+          { id: "water", label: "water" },
+          { id: "tea", label: "tea" },
+        ],
+        separator: "space",
+        defaultMode: "bank",
+      },
+    };
+    const onEvaluate = vi.fn(async () => ({
+      status: "correct" as const,
+      score: 1,
+      correctParts: ["Meaning"],
+      errors: [],
+      correction: "I drink water.",
+      explanation: "The translation is correct.",
+      nextHint: "",
+    }));
+
+    await renderPlayer({
+      lesson: lessonWithQuestions("translation-bank-local", [translation]),
+      onEvaluate,
+    });
+    await act(async () => button("I").click());
+    await act(async () => button("drink").click());
+    await act(async () => button("water").click());
+    await act(async () => button("Check answer").click());
+
+    expect(onEvaluate).not.toHaveBeenCalled();
+    expect(document.querySelector(".lesson-feedback-tray.is-correct")).not.toBeNull();
+
+    await act(async () => root?.unmount());
+    root = null;
+    await renderPlayer({
+      lesson: lessonWithQuestions("translation-keyboard-ai", [translation]),
+      onEvaluate,
+    });
+    await act(async () => button("Use keyboard").click());
+    const textarea = document.querySelector<HTMLTextAreaElement>(".open-response textarea")!;
+    await setTextValue(textarea, "I drink water.");
+    await act(async () => button("Check answer").click());
+
+    expect(onEvaluate).toHaveBeenCalledTimes(1);
+    expect(document.querySelector(".lesson-feedback-tray.is-correct")).not.toBeNull();
+  });
+
+  it("grades a Short Answer word bank locally without calling ChatGPT", async () => {
+    const shortAnswer: LessonQuestion = {
+      id: "short-answer-input-mode",
+      type: "shortAnswer",
+      prompt: "Explain the sentence",
+      referenceAnswer: "Because it is polite.",
+      requiredIdeas: ["polite"],
+      rubric: ["Meaning"],
+      explanation: "The selected words match the reference answer.",
+      evaluationMode: "ai",
+      answerBank: {
+        tokens: [
+          { id: "because", label: "Because" },
+          { id: "it", label: "it" },
+          { id: "is", label: "is" },
+          { id: "polite", label: "polite" },
+          { id: "casual", label: "casual" },
+        ],
+        separator: "space",
+        defaultMode: "keyboard",
+      },
+    };
+    const onEvaluate = vi.fn();
+    await renderPlayer({
+      lesson: lessonWithQuestions("short-answer-bank-local", [shortAnswer]),
+      onEvaluate,
+    });
+
+    await act(async () => button("Use word bank").click());
+    await act(async () => button("Because").click());
+    await act(async () => button("it").click());
+    await act(async () => button("is").click());
+    await act(async () => button("polite").click());
+    await act(async () => button("Check answer").click());
+
+    expect(onEvaluate).not.toHaveBeenCalled();
     expect(document.querySelector(".lesson-feedback-tray.is-correct")).not.toBeNull();
   });
 

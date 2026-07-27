@@ -25,7 +25,7 @@ import {
   type ChatOperationState,
 } from "../integration/protocol";
 import { createSeedState } from "../store";
-import { LearningWorkspace } from "./LearningWorkspace";
+import { LearningWorkspace, publicLearningError } from "./LearningWorkspace";
 
 let root: Root | null = null;
 
@@ -138,6 +138,13 @@ afterEach(async () => {
 });
 
 describe("LearningWorkspace bridge v8 gate", () => {
+  it("turns a missing extension receiver into an actionable retry message", () => {
+    expect(publicLearningError(new Error("Could not establish connection. Receiving end does not exist.")))
+      .toContain("Reload this page");
+    expect(publicLearningError(new ExtensionBridgeError("EXTENSION_NOT_READY", "Bridge missing.")))
+      .toContain("current answer is still here");
+  });
+
   it("locks Learn completely when no extension responds", async () => {
     await renderWithCompatibility({ state: "unavailable" });
     expect(document.querySelector(".learning-bridge-gate")?.textContent).toContain("Meoi Bridge v8 required");
@@ -157,18 +164,18 @@ describe("LearningWorkspace bridge v8 gate", () => {
     expect(document.body.textContent).not.toContain("Learning profile");
   });
 
-  it("locks Learn when protocol v8 comes from extension 8.0.1", async () => {
+  it("locks Learn when protocol v8 comes from extension 8.0.2", async () => {
     await renderWithCompatibility({
       state: "outdated",
       version: 8,
       integration: {
         installed: true,
-        extensionVersion: "8.0.1",
+        extensionVersion: "8.0.2",
         pausedForQuota: false,
         queueLength: 0,
       },
     });
-    expect(document.querySelector(".learning-bridge-gate")?.textContent).toContain("Version 8.0.1 was detected");
+    expect(document.querySelector(".learning-bridge-gate")?.textContent).toContain("Version 8.0.2 was detected");
     expect(document.body.textContent).toContain(`Update Meoi Bridge to ${MEOI_EXTENSION_MIN_VERSION}`);
     expect(document.body.textContent).not.toContain("Player demo");
   });

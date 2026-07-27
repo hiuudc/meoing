@@ -709,7 +709,7 @@ export function LessonPlayer({
     submittingRef.current = true;
     setSubmitting(true);
     try {
-      const local = gradeAnswer(currentQuestion, candidateAnswer);
+      const local = gradeAnswer(currentQuestion, candidateAnswer, { inputMode: answerInputMode });
       if (!local.requiresAi) {
         setEvaluation(local);
       } else if (currentQuestion.type === "characterTracing") {
@@ -964,6 +964,7 @@ export function LessonPlayer({
   function renderLessonText(text: string, interactive = true) {
     const normalizedText = text.trim();
     const targetLanguageTag = languageTagForSpeech(lesson.targetLanguage);
+    const lexicalCjk = ["Japanese", "Chinese", "Korean"].includes(lesson.targetLanguage);
     const isExactTargetText = Boolean(normalizedText && currentQuestion?.glossaryTargets?.some(
       (target) => target.trim() === normalizedText,
     ));
@@ -981,6 +982,7 @@ export function LessonPlayer({
         termClassName={isExactTargetText ? undefined : "lesson-target-text"}
         termLang={isExactTargetText ? undefined : targetLanguageTag}
         onTermActivate={speak}
+        segmentationMode={lexicalCjk ? "lexical-cjk" : "longest"}
       />
     ) : text;
     return isExactTargetText ? (
@@ -1086,6 +1088,7 @@ export function LessonPlayer({
                 onChange={setAnswer}
                 answerInputMode={answerInputMode}
                 onAnswerActivate={speakActivatedAnswer}
+                repeatSelectedChoiceSpeech={lettersPractice}
                 onSpeakTarget={targetVoiceAvailable ? speak : undefined}
                 onSpeakingChange={setSpeaking}
                 onRequireAlternate={() => useCurrentAlternate("This exercise is not supported on this device.")}

@@ -8,6 +8,8 @@ import type {
   QuestionFormat,
 } from "./types";
 
+type DemoTokenConcept = "subject" | "drink" | "water" | "topicMarker" | "objectMarker";
+
 interface DemoLanguageContent {
   nativeName: string;
   hello: string;
@@ -20,9 +22,14 @@ interface DemoLanguageContent {
   drinkWater: string;
   drinkTea: string;
   askWater: string;
-  tokens: [string, string, string];
-  tokenConcepts: ["subject" | "drink" | "water", "subject" | "drink" | "water", "subject" | "drink" | "water"];
+  tokens: string[];
+  tokenConcepts: DemoTokenConcept[];
   tokenPronunciations?: Array<{ native?: string; romanized?: string }>;
+  lexicalExtras?: Array<{
+    term: string;
+    meaning: string;
+    pronunciation?: { native?: string; romanized?: string };
+  }>;
   separator: "space" | "none";
   pronunciation?: Partial<Record<keyof DemoLanguageContent, { native?: string; romanized?: string }>>;
 }
@@ -86,12 +93,17 @@ const TARGET_CONTENT: Record<SupportedLanguage, DemoLanguageContent> = {
     drinkWater: "私は水を飲みます。",
     drinkTea: "私はお茶を飲みます。",
     askWater: "水を飲みますか。",
-    tokens: ["私は", "水を", "飲みます"],
-    tokenConcepts: ["subject", "water", "drink"],
+    tokens: ["私", "は", "水", "を", "飲みます"],
+    tokenConcepts: ["subject", "topicMarker", "water", "objectMarker", "drink"],
     tokenPronunciations: [
-      { native: "わたしは", romanized: "watashi wa" },
-      { native: "みずを", romanized: "mizu o" },
+      { native: "わたし", romanized: "watashi" },
+      { native: "は", romanized: "wa" },
+      { native: "みず", romanized: "mizu" },
+      { native: "を", romanized: "o" },
       { native: "のみます", romanized: "nomimasu" },
+    ],
+    lexicalExtras: [
+      { term: "か", meaning: "question marker", pronunciation: { native: "か", romanized: "ka" } },
     ],
     separator: "none",
     pronunciation: {
@@ -122,11 +134,6 @@ const TARGET_CONTENT: Record<SupportedLanguage, DemoLanguageContent> = {
     askWater: "¿Bebes agua?",
     tokens: ["Yo", "bebo", "agua"],
     tokenConcepts: ["subject", "drink", "water"],
-    tokenPronunciations: [
-      { native: "wǒ", romanized: "wo" },
-      { native: "hē", romanized: "he" },
-      { native: "shuǐ", romanized: "shui" },
-    ],
     separator: "space",
   },
   Chinese: {
@@ -143,6 +150,15 @@ const TARGET_CONTENT: Record<SupportedLanguage, DemoLanguageContent> = {
     askWater: "你喝水吗？",
     tokens: ["我", "喝", "水"],
     tokenConcepts: ["subject", "drink", "water"],
+    tokenPronunciations: [
+      { native: "wǒ", romanized: "wo" },
+      { native: "hē", romanized: "he" },
+      { native: "shuǐ", romanized: "shui" },
+    ],
+    lexicalExtras: [
+      { term: "你", meaning: "you", pronunciation: { native: "nǐ", romanized: "ni" } },
+      { term: "吗", meaning: "question marker", pronunciation: { native: "ma", romanized: "ma" } },
+    ],
     separator: "none",
     pronunciation: {
       nativeName: { native: "zhōng wén", romanized: "zhong wen" },
@@ -170,14 +186,19 @@ const TARGET_CONTENT: Record<SupportedLanguage, DemoLanguageContent> = {
     drinkWater: "저는 물을 마셔요.",
     drinkTea: "저는 차를 마셔요.",
     askWater: "물을 마셔요?",
-    tokens: ["저는", "물을", "마셔요"],
-    tokenConcepts: ["subject", "water", "drink"],
+    tokens: ["저", "는", "물", "을", "마셔요"],
+    tokenConcepts: ["subject", "topicMarker", "water", "objectMarker", "drink"],
     tokenPronunciations: [
-      { native: "저는", romanized: "jeoneun" },
-      { native: "물을", romanized: "mureul" },
+      { native: "저", romanized: "jeo" },
+      { native: "는", romanized: "neun" },
+      { native: "물", romanized: "mul" },
+      { native: "을", romanized: "eul" },
       { native: "마셔요", romanized: "masyeoyo" },
     ],
-    separator: "space",
+    lexicalExtras: [
+      { term: "를", meaning: "object marker", pronunciation: { native: "를", romanized: "reul" } },
+    ],
+    separator: "none",
     pronunciation: {
       nativeName: { native: "한국어", romanized: "hangugeo" },
       hello: { native: "안녕하세요", romanized: "annyeonghaseyo" },
@@ -448,6 +469,10 @@ function uniqueGlossary(target: DemoLanguageContent, source: DemoLanguageContent
   const sourceTokensByConcept = new Map(
     source.tokenConcepts.map((concept, index) => [concept, source.tokens[index]]),
   );
+  const structuralMeanings: Partial<Record<DemoTokenConcept, string>> = {
+    topicMarker: "topic marker",
+    objectMarker: "object marker",
+  };
   const entries = keys.flatMap((key): GlossaryEntry[] => {
     const term = target[key];
     if (typeof term !== "string" || seen.has(term)) return [];
@@ -456,6 +481,10 @@ function uniqueGlossary(target: DemoLanguageContent, source: DemoLanguageContent
     return [{
       term,
       meaning: typeof sourceMeaning === "string" ? sourceMeaning : term,
+      forms: (() => {
+        const withoutTerminalPunctuation = term.replace(/[.!?。！？…]+$/u, "");
+        return withoutTerminalPunctuation === term ? undefined : [withoutTerminalPunctuation];
+      })(),
       pronunciation: target.pronunciation?.[key],
       example: key === "water" ? target.drinkWater : undefined,
     }];
@@ -465,9 +494,16 @@ function uniqueGlossary(target: DemoLanguageContent, source: DemoLanguageContent
     seen.add(term);
     entries.push({
       term,
-      meaning: sourceTokensByConcept.get(target.tokenConcepts[index]) ?? term,
+      meaning: sourceTokensByConcept.get(target.tokenConcepts[index])
+        ?? structuralMeanings[target.tokenConcepts[index]]
+        ?? term,
       pronunciation: target.tokenPronunciations?.[index],
     });
+  });
+  target.lexicalExtras?.forEach((entry) => {
+    if (seen.has(entry.term)) return;
+    seen.add(entry.term);
+    entries.push(entry);
   });
   return entries;
 }
@@ -499,7 +535,10 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
     idPrefix: string,
     defaultMode: "keyboard" | "bank" = "bank",
   ) => ({
-    tokens: [...new Set(values)].map((label, index) => ({ id: `${idPrefix}-${index}`, label })),
+    tokens: [...new Set(values
+      .map((label) => label.trim().replace(/[.!?。！？…]+$/u, "").trim())
+      .filter(Boolean))]
+      .map((label, index) => ({ id: `${idPrefix}-${index}`, label })),
     separator: target.separator,
     defaultMode,
   } as const);
@@ -585,7 +624,7 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
       evaluationMode: "local",
       prompt: copy.prompts.wordBank,
       tokens: target.tokens.map((label, index) => ({ id: `token-${index}`, label })),
-      correctOrderIds: ["token-0", "token-1", "token-2"],
+      correctOrderIds: target.tokens.map((_, index) => `token-${index}`),
       glossaryTargets: [...target.tokens],
     }, 7),
     question({
@@ -604,7 +643,7 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
       evaluationMode: "local",
       prompt: copy.prompts.reorderTokens,
       tokens: target.tokens.map((label, index) => ({ id: `order-${index}`, label })),
-      correctOrderIds: ["order-0", "order-1", "order-2"],
+      correctOrderIds: target.tokens.map((_, index) => `order-${index}`),
       glossaryTargets: [...target.tokens],
     }, 9),
     question({
@@ -643,8 +682,8 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
       targetLanguage: profile.targetLanguage,
       referenceAnswer: target.drinkWater,
       rubric: [copy.objective],
-      answerBank: answerBank([target.drinkWater, ...target.tokens, target.drinkTea], "translation"),
-      glossaryTargets: [target.drinkWater, ...target.tokens, target.drinkTea],
+      answerBank: answerBank([...target.tokens, target.tea, target.student], "translation"),
+      glossaryTargets: [...target.tokens, target.tea, target.student],
     }, 12),
     question({
       type: "shortAnswer",
@@ -655,7 +694,8 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
       requiredIdeas: [source.water],
       rubric: [copy.objective],
       answerBank: {
-        tokens: [source.drinkWater, source.water, source.tea, source.student]
+        tokens: [...source.tokens, source.tea, source.student]
+          .map((label) => label.trim().replace(/[.!?。！？…]+$/u, "").trim())
           .map((label, index) => ({ id: `short-${index}`, label })),
         separator: source.separator,
         defaultMode: "keyboard",
@@ -683,7 +723,12 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
       acceptedAnswers: [target.askWater],
       match: { ignorePunctuation: true },
       answerBank: answerBank([target.askWater, target.drinkWater, target.water, target.tea], "transform"),
-      glossaryTargets: [target.drinkWater, target.askWater, target.water, target.tea],
+      glossaryTargets: [
+        target.drinkWater,
+        target.askWater.trim().replace(/[.!?。！？…]+$/u, ""),
+        target.water,
+        target.tea,
+      ],
     }, 15),
     question({
       type: "dictation",

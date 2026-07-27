@@ -135,6 +135,51 @@ describe("the question graders", () => {
     expect(normalizeAnswer("  HÉLLO,   bạn!  ", { ignorePunctuation: true, ignoreDiacritics: true })).toBe("hello ban");
   });
 
+  it("grades Translation and Short Answer locally only in word-bank mode", () => {
+    const translation = {
+      ...common,
+      id: "bank-translation",
+      type: "translation" as const,
+      prompt: "Translate",
+      sourceText: "Tôi uống nước.",
+      targetLanguage: "English",
+      referenceAnswer: "I drink water.",
+      rubric: ["Meaning"],
+      evaluationMode: "ai" as const,
+    };
+    const shortAnswer = {
+      ...common,
+      id: "bank-short-answer",
+      type: "shortAnswer" as const,
+      prompt: "Answer",
+      referenceAnswer: "Because it is polite.",
+      requiredIdeas: ["polite"],
+      rubric: ["Meaning"],
+      evaluationMode: "ai" as const,
+    };
+
+    expect(gradeAnswer(translation, "I drink water", { inputMode: "bank" })).toMatchObject({
+      requiresAi: false,
+      status: "correct",
+    });
+    expect(gradeAnswer(shortAnswer, "because it is polite!", { inputMode: "bank" })).toMatchObject({
+      requiresAi: false,
+      status: "correct",
+    });
+    expect(gradeAnswer(translation, "water drink I", { inputMode: "bank" })).toMatchObject({
+      requiresAi: false,
+      status: "incorrect",
+    });
+    expect(gradeAnswer(translation, "I drink water", { inputMode: "keyboard" })).toEqual({
+      requiresAi: true,
+      reason: "semantic",
+    });
+    expect(gradeAnswer(shortAnswer, "Because it is polite.", { inputMode: "keyboard" })).toEqual({
+      requiresAi: true,
+      reason: "semantic",
+    });
+  });
+
 });
 
 describe("lesson schema", () => {
@@ -218,6 +263,58 @@ describe("lesson schema", () => {
       segments: ["", " drinks ", "."],
     });
     expect(parseMultiClozeTemplate("__ drinks __.", ["subject", "object"])).toBeNull();
+  });
+
+  it("rejects sentence-sized, punctuated, or incomplete Translation banks", () => {
+    const translation = lesson.questions.find(
+      (question): question is Extract<LessonQuestion, { type: "translation" }> => question.type === "translation",
+    )!;
+    const bank = translation.answerBank!;
+
+    expect(() => lessonQuestionSchema.parse({
+      ...translation,
+      answerBank: {
+        ...bank,
+        tokens: [
+          { id: "whole-answer", label: "I drink water" },
+          { id: "distractor", label: "tea" },
+        ],
+      },
+    })).toThrow(/complete multi-word reference answer/);
+
+    expect(() => lessonQuestionSchema.parse({
+      ...translation,
+      answerBank: {
+        ...bank,
+        tokens: bank.tokens.map((token, index) => (
+          index === 0 ? { ...token, label: `${token.label}.` } : token
+        )),
+      },
+    })).toThrow(/sentence-ending punctuation/);
+
+    expect(() => lessonQuestionSchema.parse({
+      ...translation,
+      answerBank: {
+        ...bank,
+        tokens: bank.tokens.filter((token) => token.label.toLocaleLowerCase() !== "water"),
+      },
+    })).toThrow(/compose the referenceAnswer exactly/);
+  });
+
+  it("rejects CJK sentence coverage that only has a whole-sentence glossary entry", () => {
+    const japaneseLesson = createLocalPreviewLesson("unit-ja", "Japanese schema", {
+      ...DEFAULT_LEARNING_PROFILE,
+      sourceLanguage: "English",
+      targetLanguage: "Japanese",
+      speakingEnabled: false,
+      lessonQuestionCount: 15,
+    });
+    const lexicalTerms = new Set(["私", "は", "水", "を", "飲みます"]);
+
+    expect(() => lessonSchema.parse({
+      ...japaneseLesson,
+      glossary: japaneseLesson.glossary.filter((entry) => !lexicalTerms.has(entry.term)),
+    })).toThrow(/word- and particle-level entries/);
   });
 });
 
@@ -373,6 +470,23 @@ describe("glossary and speech preferences", () => {
   it("matches glossary terms inside languages that do not use whitespace boundaries", () => {
     const segments = segmentGlossaryText("私は朝ごはんを食べます。", [{ term: "朝ごはん", meaning: "breakfast" }]);
     expect(segments.find((segment) => segment.entry)?.text).toBe("朝ごはん");
+  });
+
+  it("segments CJK sentences lexically instead of letting a whole-sentence entry mask words and particles", () => {
+    const sentence = "私は水を飲みます。";
+    const segments = segmentGlossaryText(sentence, [
+      { term: sentence, meaning: "I drink water.", forms: ["私は水を飲みます", "私"] },
+      { term: "私", meaning: "I" },
+      { term: "は", meaning: "topic marker" },
+      { term: "水", meaning: "water" },
+      { term: "を", meaning: "object marker" },
+      { term: "飲みます", meaning: "drink" },
+    ], { mode: "lexical-cjk" });
+
+    expect(segments.filter((segment) => segment.entry).map((segment) => segment.text))
+      .toEqual(["私", "は", "水", "を", "飲みます"]);
+    expect(segments.some((segment) => segment.entry?.term === sentence)).toBe(false);
+    expect(segments.map((segment) => segment.text).join("")).toBe(sentence);
   });
 
   it("clamps browser speech preferences and drops unsafe fields", () => {

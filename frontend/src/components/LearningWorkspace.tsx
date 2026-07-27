@@ -156,8 +156,19 @@ function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
 
+export function publicLearningError(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+  if (
+    (error instanceof ExtensionBridgeError && error.code === "EXTENSION_NOT_READY")
+    || /receiving end does not exist|extension context invalidated/i.test(message)
+  ) {
+    return "Meoi Bridge disconnected after an extension reload. Reload this page, then check the answer again. Your current answer is still here.";
+  }
+  return message || "This action could not be completed right now.";
+}
+
 function publicError(error: unknown): string {
-  return error instanceof Error ? error.message : "This action could not be completed right now.";
+  return publicLearningError(error);
 }
 
 function textByteLength(value: string): number {
@@ -716,20 +727,25 @@ export function LearningWorkspace({
     if (!unit || !lesson) throw new Error("No active lesson was found.");
     const metadata = speakingMetadata(speaking);
     setWarning(speaking?.audio ? "Audio remains in this browser. Meoi sends only the transcript and timing metadata for content feedback." : "");
-    const result = await sendOperation("evaluate_answer", {
-      unit: { id: unit.id, name: unit.name },
-      collection: { id: collection.id, name: collection.name, learningProfile: profile },
-      lesson: {
-        id: lesson.id,
-        title: lesson.title,
-        targetLanguage: lesson.targetLanguage,
-        sourceLanguage: lesson.sourceLanguage ?? "English",
-        level: lesson.level,
-      },
-      question,
-      answer,
-      speaking: metadata,
-    });
+    let result: ChatOperationResult;
+    try {
+      result = await sendOperation("evaluate_answer", {
+        unit: { id: unit.id, name: unit.name },
+        collection: { id: collection.id, name: collection.name, learningProfile: profile },
+        lesson: {
+          id: lesson.id,
+          title: lesson.title,
+          targetLanguage: lesson.targetLanguage,
+          sourceLanguage: lesson.sourceLanguage ?? "English",
+          level: lesson.level,
+        },
+        question,
+        answer,
+        speaking: metadata,
+      });
+    } catch (caught) {
+      throw new Error(publicLearningError(caught));
+    }
     if (result.outcome !== "completed" || !result.result?.evaluation) throw new Error("ChatGPT did not return a valid evaluation.");
     const evaluation = parseEvaluation(result.result.evaluation);
     const normalized = metadata && !metadata.pronunciationAvailable

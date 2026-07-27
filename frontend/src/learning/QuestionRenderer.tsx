@@ -37,6 +37,7 @@ interface QuestionRendererProps {
   evaluated?: boolean;
   onChange: (answer: QuestionAnswer) => void;
   onAnswerActivate?: (text: string) => void;
+  repeatSelectedChoiceSpeech?: boolean;
   onSpeakTarget?: (text: string) => void;
   onSpeakingChange?: (submission: SpeakingSubmission | null) => void;
   onRequireAlternate?: () => void;
@@ -138,6 +139,7 @@ function NumericChoiceResponse({
   evaluated,
   onChange,
   onAnswerActivate,
+  repeatSelectedSpeech,
   renderText,
   renderOption,
 }: {
@@ -152,6 +154,7 @@ function NumericChoiceResponse({
   evaluated?: boolean;
   onChange: (ids: string[]) => void;
   onAnswerActivate?: (text: string) => void;
+  repeatSelectedSpeech?: boolean;
   renderText: TextRenderer;
   renderOption?: (option: ChoiceOption, interactive: boolean) => ReactNode;
 }) {
@@ -167,6 +170,7 @@ function NumericChoiceResponse({
     const option = options[index - 1];
     if (!option) return;
     const selected = selectedIds.includes(option.id);
+    if (!selected || (!multiple && repeatSelectedSpeech)) onAnswerActivate?.(option.label);
     onChange(multiple
       ? selected
         ? selectedIds.filter((candidate) => candidate !== option.id)
@@ -175,9 +179,6 @@ function NumericChoiceResponse({
   }
 
   function activate(index: number) {
-    const option = options[index - 1];
-    if (!option) return;
-    if (!multiple || !selectedIds.includes(option.id)) onAnswerActivate?.(option.label);
     changeSelection(index);
   }
 
@@ -245,7 +246,9 @@ function NumericChoiceResponse({
               value={option.id}
               checked={selected}
               onClick={() => {
-                if (!multiple || !selected) onAnswerActivate?.(option.label);
+                if (selected && !multiple && repeatSelectedSpeech) {
+                  onAnswerActivate?.(option.label);
+                }
               }}
               onChange={() => changeSelection(index + 1)}
               data-lesson-hotkey-index={index + 1}
@@ -295,6 +298,9 @@ interface DragInsertion {
   beforeId: string | null;
 }
 
+type AnswerComposerLayout = "flow" | "vertical";
+type AnswerComposerLocation = "tray" | "bank";
+
 const DRAG_DROP_MARGIN = 32;
 const DEFAULT_TYPEAHEAD_RESET_MS = 1_500;
 
@@ -313,6 +319,14 @@ function normalizeTypeahead(value: string): string {
     .toLocaleLowerCase();
 }
 
+export function verticalInsertionIndex(
+  rects: ReadonlyArray<Pick<DOMRect, "top" | "height">>,
+  clientY: number,
+): number {
+  const index = rects.findIndex((rect) => clientY < rect.top + rect.height / 2);
+  return index < 0 ? rects.length : index;
+}
+
 export function OrderedAnswerComposer({
   options,
   value,
@@ -324,6 +338,7 @@ export function OrderedAnswerComposer({
   renderOption,
   maxSelections,
   typeaheadResetMs = DEFAULT_TYPEAHEAD_RESET_MS,
+  layout = "flow",
 }: {
   options: ChoiceOption[];
   value: string[];
@@ -332,9 +347,14 @@ export function OrderedAnswerComposer({
   disabled?: boolean;
   evaluated?: boolean;
   renderText: TextRenderer;
-  renderOption?: (option: ChoiceOption, interactive: boolean) => ReactNode;
+  renderOption?: (
+    option: ChoiceOption,
+    interactive: boolean,
+    location: AnswerComposerLocation,
+  ) => ReactNode;
   maxSelections?: number;
   typeaheadResetMs?: number;
+  layout?: AnswerComposerLayout;
 }) {
   const labels = useMemo(() => new Map(options.map((option) => [option.id, option.label])), [options]);
   const optionsById = useMemo(() => new Map(options.map((option) => [option.id, option])), [options]);
@@ -438,6 +458,20 @@ export function OrderedAnswerComposer({
       trayRef.current?.querySelectorAll<HTMLElement>("[data-answer-token-id]") ?? [],
     ).filter((element) => element.dataset.answerTokenId !== excludedId);
     if (!elements.length) return { index: 0, beforeId: null };
+    if (layout === "vertical") {
+      const verticalItems = elements
+        .map((element) => ({ element, rect: element.getBoundingClientRect() }))
+        .sort((left, right) => left.rect.top - right.rect.top);
+      const verticalIndex = verticalInsertionIndex(
+        verticalItems.map((item) => item.rect),
+        clientY,
+      );
+      const before = verticalItems[verticalIndex]?.element;
+      return {
+        index: before ? elements.indexOf(before) : elements.length,
+        beforeId: before?.dataset.answerTokenId ?? null,
+      };
+    }
     const rows: Array<Array<{ element: HTMLElement; rect: DOMRect }>> = [];
     elements.forEach((element) => {
       const rect = element.getBoundingClientRect();
@@ -606,7 +640,7 @@ export function OrderedAnswerComposer({
   const portalTarget = document.querySelector<HTMLElement>(".app-shell") ?? document.body;
   return (
     <div
-      className="answer-composer"
+      className={`answer-composer${layout === "vertical" ? " is-vertical" : ""}`}
       ref={composerRef}
       tabIndex={0}
       onKeyDownCapture={handleComposerKey}
@@ -638,7 +672,11 @@ export function OrderedAnswerComposer({
             }}
             disabled={disabled}
           >
-            {renderOption?.(optionsById.get(id) ?? { id, label: labels.get(id) ?? id }, Boolean(evaluated))
+            {renderOption?.(
+              optionsById.get(id) ?? { id, label: labels.get(id) ?? id },
+              Boolean(evaluated),
+              "tray",
+            )
               ?? renderText(labels.get(id) ?? id, Boolean(evaluated))}
             </button>
           </Fragment>
@@ -671,7 +709,7 @@ export function OrderedAnswerComposer({
               : undefined}
             disabled={disabled || (maxSelections !== undefined && value.length >= maxSelections)}
           >
-            {renderOption?.(option, Boolean(evaluated)) ?? renderText(option.label, Boolean(evaluated))}
+            {renderOption?.(option, Boolean(evaluated), "bank") ?? renderText(option.label, Boolean(evaluated))}
           </button>
         ))}
       </div>
@@ -1425,10 +1463,15 @@ function CategorizeResponse({
   const [selectedCategoryId, setSelectedCategoryId] = useState("");
   const [wrong, setWrong] = useState<string[]>([]);
   const timeoutRef = useRef<number | null>(null);
+  const groupRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => () => {
     if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
   }, []);
+
+  function restoreGroupFocus() {
+    window.requestAnimationFrame(() => groupRef.current?.focus({ preventScroll: true }));
+  }
 
   function tryCategory(itemId: string, categoryId: string) {
     const item = question.items.find((candidate) => candidate.id === itemId);
@@ -1440,14 +1483,17 @@ function CategorizeResponse({
       if (question.items.every((candidate) => next[candidate.id] === candidate.categoryId)) {
         window.queueMicrotask(() => onComplete?.(next));
       }
+      restoreGroupFocus();
       return;
     }
     setWrong([itemId, categoryId]);
+    restoreGroupFocus();
     if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
     timeoutRef.current = window.setTimeout(() => {
       setWrong([]);
       setSelectedItemId("");
       setSelectedCategoryId("");
+      restoreGroupFocus();
     }, 420);
   }
 
@@ -1455,17 +1501,30 @@ function CategorizeResponse({
     if (value[item.id]) return;
     onAnswerActivate?.(item.label);
     if (selectedCategoryId) tryCategory(item.id, selectedCategoryId);
-    else setSelectedItemId(item.id);
+    else {
+      setSelectedItemId(item.id);
+      restoreGroupFocus();
+    }
   }
 
   function chooseCategory(category: Extract<LessonQuestion, { type: "categorize" }>["categories"][number]) {
     onAnswerActivate?.(category.label);
     if (selectedItemId) tryCategory(selectedItemId, category.id);
-    else setSelectedCategoryId(category.id);
+    else {
+      setSelectedCategoryId(category.id);
+      restoreGroupFocus();
+    }
   }
 
   return (
-    <div className="categorize-matching" role="group" aria-label="Select an item, then its category" tabIndex={0} data-question-primary-focus>
+    <div
+      ref={groupRef}
+      className="categorize-matching"
+      role="group"
+      aria-label="Select an item, then its category"
+      tabIndex={0}
+      data-question-primary-focus
+    >
       <div className="categorize-items">
         {question.items.map((item, index) => {
           const locked = Boolean(value[item.id]);
@@ -1477,6 +1536,7 @@ function CategorizeResponse({
               aria-pressed={selectedItemId === item.id}
               onClick={() => chooseItem(item)}
               disabled={disabled || locked}
+              data-lesson-hotkey-index={index + 1}
             >
               <span className="pair-index">{index + 1}</span>
               {renderText(item.label, Boolean(evaluated))}
@@ -1485,7 +1545,7 @@ function CategorizeResponse({
         })}
       </div>
       <div className="categorize-categories" aria-label="Categories">
-        {question.categories.map((category) => (
+        {question.categories.map((category, index) => (
           <button
             type="button"
             key={category.id}
@@ -1493,7 +1553,9 @@ function CategorizeResponse({
             aria-pressed={selectedCategoryId === category.id}
             onClick={() => chooseCategory(category)}
             disabled={disabled}
+            data-lesson-hotkey-index={question.items.length + index + 1}
           >
+            <span className="pair-index" aria-hidden="true">{question.items.length + index + 1}</span>
             {category.label}
           </button>
         ))}
@@ -1593,6 +1655,7 @@ export function QuestionRenderer({
   evaluated,
   onChange,
   onAnswerActivate,
+  repeatSelectedChoiceSpeech,
   onSpeakTarget,
   onSpeakingChange,
   onRequireAlternate,
@@ -1617,6 +1680,7 @@ export function QuestionRenderer({
           evaluated={evaluated}
           onChange={(ids) => onChange(ids[0] ?? "")}
           onAnswerActivate={onAnswerActivate}
+          repeatSelectedSpeech={repeatSelectedChoiceSpeech}
           renderText={render}
         />
       );
@@ -1634,6 +1698,7 @@ export function QuestionRenderer({
           evaluated={evaluated}
           onChange={onChange}
           onAnswerActivate={onAnswerActivate}
+          repeatSelectedSpeech={repeatSelectedChoiceSpeech}
           renderText={render}
         />
       );
@@ -1651,6 +1716,7 @@ export function QuestionRenderer({
           evaluated={evaluated}
           onChange={(ids) => onChange(ids[0] === "true")}
           onAnswerActivate={onAnswerActivate}
+          repeatSelectedSpeech={repeatSelectedChoiceSpeech}
           renderText={render}
         />
       );
@@ -1752,9 +1818,18 @@ export function QuestionRenderer({
             evaluated={evaluated}
             renderText={render}
             typeaheadResetMs={typeaheadResetMs}
-            renderOption={(option, interactive) => {
+            layout="vertical"
+            renderOption={(option, interactive, location) => {
               const turn = question.turns.find((candidate) => candidate.id === option.id);
               if (!turn) return render(option.label, interactive);
+              if (location === "bank") {
+                return (
+                  <span className="dialogue-bank-turn">
+                    <small>{turn.speaker}</small>
+                    <span>{render(turn.label, interactive)}</span>
+                  </span>
+                );
+              }
               return (
                 <span className={`dialogue-turn ${turn.speaker === firstSpeaker ? "is-left" : "is-right"}`}>
                   <small>{turn.speaker}</small>
