@@ -64,6 +64,7 @@ const payload: SendOperationPayload = {
 
 const integrationStatus: IntegrationStatus = {
   installed: true,
+  extensionVersion: "8.0.1",
   pausedForQuota: false,
   queueLength: 0,
 };
@@ -195,6 +196,72 @@ describe("ExtensionBridge compatibility detection", () => {
       state: "outdated",
       version: 6,
       integration: integrationStatus,
+    });
+  });
+
+  it("locks protocol v8 when the extension patch is old or not reported", async () => {
+    vi.useFakeTimers();
+    const postMessage = vi.spyOn(window, "postMessage").mockImplementation((message: unknown) => {
+      const request = message as {
+        command?: string;
+        nonce?: string;
+        requestId?: string;
+        version?: number;
+      };
+      if (request.command !== "GET_INTEGRATION_STATUS" || request.version !== 8) return;
+      queueMicrotask(() => {
+        window.dispatchEvent(new MessageEvent("message", {
+          data: {
+            source: "meoi-extension",
+            version: 8,
+            nonce: request.nonce,
+            requestId: request.requestId,
+            ok: true,
+            data: { ...integrationStatus, extensionVersion: "8.0.0" },
+          },
+          origin: window.location.origin,
+          source: window,
+        }));
+      });
+    });
+    const oldPatch = new ExtensionBridge().detectCompatibility("unit-1");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await expect(oldPatch).resolves.toMatchObject({
+      state: "outdated",
+      version: 8,
+      integration: { extensionVersion: "8.0.0" },
+    });
+
+    postMessage.mockRestore();
+    const { extensionVersion: _extensionVersion, ...statusWithoutPatch } = integrationStatus;
+    vi.spyOn(window, "postMessage").mockImplementation((message: unknown) => {
+      const request = message as {
+        command?: string;
+        nonce?: string;
+        requestId?: string;
+        version?: number;
+      };
+      if (request.command !== "GET_INTEGRATION_STATUS" || request.version !== 8) return;
+      queueMicrotask(() => {
+        window.dispatchEvent(new MessageEvent("message", {
+          data: {
+            source: "meoi-extension",
+            version: 8,
+            nonce: request.nonce,
+            requestId: request.requestId,
+            ok: true,
+            data: statusWithoutPatch,
+          },
+          origin: window.location.origin,
+          source: window,
+        }));
+      });
+    });
+    const missingPatch = new ExtensionBridge().detectCompatibility("unit-1");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await expect(missingPatch).resolves.toMatchObject({
+      state: "outdated",
+      version: 8,
     });
   });
 

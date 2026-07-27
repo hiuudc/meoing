@@ -1,6 +1,7 @@
 import type { Evaluation, LearningProfile, Lesson, LessonQuestionFormat } from "../learning/types";
 
 export const MEOI_EXTENSION_PROTOCOL_VERSION = 8;
+export const MEOI_EXTENSION_MIN_VERSION = "8.0.1";
 export const MEOI_PAGE_SOURCE = "meoi-page";
 export const MEOI_EXTENSION_SOURCE = "meoi-extension";
 export const MEOI_CHAT_RESULT_TYPE = "meoi.operation.result";
@@ -96,6 +97,7 @@ export interface ExtensionResponse<T = unknown> {
 
 export interface IntegrationStatus {
   installed: boolean;
+  extensionVersion?: string;
   pausedForQuota: boolean;
   unitChatUrl?: string;
   queueLength: number;

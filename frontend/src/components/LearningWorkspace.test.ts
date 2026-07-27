@@ -156,11 +156,27 @@ describe("LearningWorkspace bridge v8 gate", () => {
     expect(document.body.textContent).not.toContain("Learning profile");
   });
 
+  it("locks Learn when protocol v8 comes from extension 8.0.0", async () => {
+    await renderWithCompatibility({
+      state: "outdated",
+      version: 8,
+      integration: {
+        installed: true,
+        extensionVersion: "8.0.0",
+        pausedForQuota: false,
+        queueLength: 0,
+      },
+    });
+    expect(document.querySelector(".learning-bridge-gate")?.textContent).toContain("Version 8.0.0 was detected");
+    expect(document.body.textContent).toContain("Update Meoi Bridge to 8.0.1");
+    expect(document.body.textContent).not.toContain("Player demo");
+  });
+
   it("mounts the normal Learn workspace only for bridge v8", async () => {
     await renderWithCompatibility({
       state: "ready",
       version: 8,
-      integration: { installed: true, pausedForQuota: false, queueLength: 0 },
+      integration: { installed: true, extensionVersion: "8.0.1", pausedForQuota: false, queueLength: 0 },
     });
     expect(document.querySelector(".learning-bridge-gate")).toBeNull();
     expect(document.body.textContent).toContain("Player demo");
@@ -173,7 +189,7 @@ describe("LearningWorkspace pending lesson recovery", () => {
   const ready: ExtensionCompatibility = {
     state: "ready",
     version: 8,
-    integration: { installed: true, pausedForQuota: false, queueLength: 0 },
+    integration: { installed: true, extensionVersion: "8.0.1", pausedForQuota: false, queueLength: 0 },
   };
 
   it("recovers a completed lesson after remount and saves before ACK", async () => {

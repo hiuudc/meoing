@@ -1,4 +1,5 @@
 import {
+  MEOI_EXTENSION_MIN_VERSION,
   MEOI_EXTENSION_PROTOCOL_VERSION,
   MEOI_EXTENSION_SOURCE,
   MEOI_PAGE_SOURCE,
@@ -21,7 +22,7 @@ const SUPPORTED_STATUS_PROTOCOLS = [MEOI_EXTENSION_PROTOCOL_VERSION, 7, 6, 5, 4]
 
 export type ExtensionCompatibility =
   | { state: "ready"; version: typeof MEOI_EXTENSION_PROTOCOL_VERSION; integration: IntegrationStatus }
-  | { state: "outdated"; version: 4 | 5 | 6 | 7; integration: IntegrationStatus }
+  | { state: "outdated"; version: 4 | 5 | 6 | 7 | 8; integration: IntegrationStatus }
   | { state: "unavailable" };
 
 export interface WaitForOperationOptions {
@@ -55,6 +56,27 @@ function isExtensionResponse(
     && response.nonce === nonce
     && typeof response.requestId === "string"
     && typeof response.ok === "boolean";
+}
+
+function versionParts(value: string): number[] | null {
+  if (!/^\d+(?:\.\d+){0,3}$/.test(value)) return null;
+  return value.split(".").map(Number);
+}
+
+export function extensionVersionAtLeast(
+  value: string | undefined,
+  minimum = MEOI_EXTENSION_MIN_VERSION,
+): boolean {
+  if (!value) return false;
+  const current = versionParts(value);
+  const required = versionParts(minimum);
+  if (!current || !required) return false;
+  const length = Math.max(current.length, required.length);
+  for (let index = 0; index < length; index += 1) {
+    const difference = (current[index] ?? 0) - (required[index] ?? 0);
+    if (difference !== 0) return difference > 0;
+  }
+  return true;
 }
 
 function abortReason(signal?: AbortSignal): unknown {
@@ -185,7 +207,10 @@ export class ExtensionBridge {
     const detected = probes.find((probe) => probe?.version === MEOI_EXTENSION_PROTOCOL_VERSION)
       ?? probes.find((probe) => probe !== null);
     if (!detected) return { state: "unavailable" };
-    if (detected.version === MEOI_EXTENSION_PROTOCOL_VERSION) {
+    if (
+      detected.version === MEOI_EXTENSION_PROTOCOL_VERSION
+      && extensionVersionAtLeast(detected.integration.extensionVersion)
+    ) {
       return {
         state: "ready",
         version: MEOI_EXTENSION_PROTOCOL_VERSION,
@@ -194,7 +219,7 @@ export class ExtensionBridge {
     }
     return {
       state: "outdated",
-      version: detected.version as 4 | 5 | 6 | 7,
+      version: detected.version as 4 | 5 | 6 | 7 | 8,
       integration: detected.integration,
     };
   }

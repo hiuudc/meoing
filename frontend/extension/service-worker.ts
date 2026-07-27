@@ -485,6 +485,7 @@ async function integrationStatus(unitId?: string): Promise<IntegrationStatus> {
   const operationStates = Object.values(states);
   return {
     installed: true,
+    extensionVersion: chrome.runtime.getManifest().version,
     pausedForQuota: paused,
     unitChatUrl: unitId ? chats[unitId] : undefined,
     queueLength: Object.values(queues).reduce((total, queue) => total + queue.length, 0),

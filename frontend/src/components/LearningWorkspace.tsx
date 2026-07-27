@@ -68,6 +68,7 @@ import {
 } from "../integration/pendingLearningOperations";
 import {
   buildOperationPrompt,
+  MEOI_EXTENSION_MIN_VERSION,
   MEOI_EXTENSION_PROTOCOL_VERSION,
   MEOI_TEXT_FIELD_MAX_BYTES,
   MEOI_TRANSCRIPT_MAX_BYTES,
@@ -606,6 +607,7 @@ export function LearningWorkspace({
         version: MEOI_EXTENSION_PROTOCOL_VERSION,
         integration: {
           installed: true,
+          extensionVersion: MEOI_EXTENSION_MIN_VERSION,
           pausedForQuota: false,
           queueLength: 0,
         },
@@ -807,9 +809,11 @@ export function LearningWorkspace({
   }
 
   const bridgeLabel = bridgeGate.state === "ready"
-    ? "Bridge v8 ready"
+    ? `Bridge ${bridgeGate.integration.extensionVersion ?? MEOI_EXTENSION_MIN_VERSION} ready`
     : bridgeGate.state === "outdated"
-      ? `Bridge v${bridgeGate.version} outdated`
+      ? bridgeGate.version === MEOI_EXTENSION_PROTOCOL_VERSION
+        ? `Bridge ${bridgeGate.integration.extensionVersion ?? "v8 build"} outdated`
+        : `Bridge v${bridgeGate.version} outdated`
       : bridgeGate.state === "checking"
         ? "Checking Bridge"
         : "Bridge unavailable";
@@ -838,14 +842,20 @@ export function LearningWorkspace({
                 {bridgeGate.state === "checking"
                   ? "Checking the browser extension..."
                   : bridgeGate.state === "outdated"
-                    ? `Update Meoi Bridge v${bridgeGate.version}`
+                    ? bridgeGate.version === MEOI_EXTENSION_PROTOCOL_VERSION
+                      ? `Update Meoi Bridge to ${MEOI_EXTENSION_MIN_VERSION}`
+                      : `Update Meoi Bridge v${bridgeGate.version}`
                     : "Meoi Bridge is not available"}
               </h1>
               <p>
                 {bridgeGate.state === "outdated"
-                  ? `Learn is locked because protocol v${bridgeGate.version} was detected. Install Meoi Bridge 8.0.1, reload the extension, then reload this page.`
+                  ? bridgeGate.version === MEOI_EXTENSION_PROTOCOL_VERSION
+                    ? `Learn requires Meoi Bridge ${MEOI_EXTENSION_MIN_VERSION} or newer. ${bridgeGate.integration.extensionVersion
+                      ? `Version ${bridgeGate.integration.extensionVersion} was detected.`
+                      : "An older v8 build without patch-version reporting was detected."} Reload the updated extension, then reload this page.`
+                    : `Learn is locked because protocol v${bridgeGate.version} was detected. Install Meoi Bridge ${MEOI_EXTENSION_MIN_VERSION}, reload the extension, then reload this page.`
                   : bridgeGate.state === "unavailable"
-                    ? "Install or enable Meoi Bridge 8.0.1, reload the extension, then reload this page. Library and Letters remain available."
+                    ? `Install or enable Meoi Bridge ${MEOI_EXTENSION_MIN_VERSION}, reload the extension, then reload this page. Library and Letters remain available.`
                     : "Meoi is checking protocol v8 and older v4-v7 status channels. Older versions are detected only for upgrade guidance and cannot run operations."}
               </p>
               {bridgeGate.state !== "checking" ? (
@@ -994,8 +1004,8 @@ export function LearningWorkspace({
           <div className="overview-title-row"><h2>ChatGPT Web</h2><ShieldCheck size={17} /></div>
           <p className="control-copy">
             {bridgeGate.state === "ready"
-              ? "Meoi Bridge v8 is ready. Sign in at chatgpt.com to create lessons and use coaching."
-              : "Install Meoi Bridge 8.0.1, reload the extension, then reload this page. Learn remains locked until protocol v8 responds."}
+              ? `Meoi Bridge ${bridgeGate.integration.extensionVersion ?? MEOI_EXTENSION_MIN_VERSION} is ready. Sign in at chatgpt.com to create lessons and use coaching.`
+              : `Install Meoi Bridge ${MEOI_EXTENSION_MIN_VERSION}, reload the extension, then reload this page. Learn remains locked until the required v8 build responds.`}
           </p>
           <button className="primary-button wide-button" type="button" onClick={() => void refreshConnection()} disabled={busy}>
             {busy ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />} Check again
