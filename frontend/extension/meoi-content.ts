@@ -55,22 +55,53 @@ function validRequest(value: unknown): value is ExtensionRequest<Record<string, 
   return true;
 }
 
-window.addEventListener("message", (event) => {
+function errorMessage(error: unknown): string {
+  return error instanceof Error && error.message
+    ? error.message
+    : "Meoi extension context is no longer available.";
+}
+
+function postResponse(
+  request: ExtensionRequest<Record<string, unknown>>,
+  result?: ExtensionResponse["data"] & { ok?: boolean; error?: ExtensionResponse["error"] },
+  runtimeError?: { message?: string },
+): void {
+  const response: ExtensionResponse = {
+    source: MEOI_EXTENSION_SOURCE,
+    version: MEOI_EXTENSION_PROTOCOL_VERSION,
+    nonce: request.nonce,
+    requestId: request.requestId,
+    ok: !runtimeError && result?.ok !== false,
+    data: result && "data" in result ? result.data : result,
+    error: runtimeError
+      ? { code: "EXTENSION_NOT_READY", message: runtimeError.message || "Meoi extension is not ready." }
+      : result?.error,
+  };
+  window.postMessage(response, window.location.origin);
+}
+
+function invalidateContentBridge(
+  request: ExtensionRequest<Record<string, unknown>>,
+  error: unknown,
+): void {
+  postResponse(request, undefined, { message: errorMessage(error) });
+  window.removeEventListener("message", handlePageMessage);
+}
+
+function handlePageMessage(event: MessageEvent): void {
   if (event.source !== window || event.origin !== window.location.origin || !isAllowedMeoiOrigin(event.origin) || !validRequest(event.data)) return;
   const request = event.data;
-  chrome.runtime.sendMessage({ kind: "MEOI_PAGE_REQUEST", request }, (result: ExtensionResponse["data"] & { ok?: boolean; error?: ExtensionResponse["error"] }) => {
-    const runtimeError = chrome.runtime.lastError;
-    const response: ExtensionResponse = {
-      source: MEOI_EXTENSION_SOURCE,
-      version: MEOI_EXTENSION_PROTOCOL_VERSION,
-      nonce: request.nonce,
-      requestId: request.requestId,
-      ok: !runtimeError && result?.ok !== false,
-      data: result && "data" in result ? result.data : result,
-      error: runtimeError
-        ? { code: "EXTENSION_NOT_READY", message: runtimeError.message || "Meoi extension is not ready." }
-        : result?.error,
-    };
-    window.postMessage(response, window.location.origin);
-  });
-});
+  try {
+    chrome.runtime.sendMessage({ kind: "MEOI_PAGE_REQUEST", request }, (result: ExtensionResponse["data"] & { ok?: boolean; error?: ExtensionResponse["error"] }) => {
+      try {
+        postResponse(request, result, chrome.runtime.lastError);
+      } catch (error) {
+        invalidateContentBridge(request, error);
+      }
+    });
+  } catch (error) {
+    invalidateContentBridge(request, error);
+  }
+}
+
+window.addEventListener("message", handlePageMessage);

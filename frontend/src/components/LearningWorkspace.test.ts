@@ -19,6 +19,7 @@ import {
 } from "../integration/pendingLearningOperations";
 import {
   MEOI_CHAT_RESULT_TYPE,
+  MEOI_EXTENSION_MIN_VERSION,
   MEOI_EXTENSION_PROTOCOL_VERSION,
   type ChatOperationResult,
   type ChatOperationState,
@@ -156,19 +157,19 @@ describe("LearningWorkspace bridge v8 gate", () => {
     expect(document.body.textContent).not.toContain("Learning profile");
   });
 
-  it("locks Learn when protocol v8 comes from extension 8.0.0", async () => {
+  it("locks Learn when protocol v8 comes from extension 8.0.1", async () => {
     await renderWithCompatibility({
       state: "outdated",
       version: 8,
       integration: {
         installed: true,
-        extensionVersion: "8.0.0",
+        extensionVersion: "8.0.1",
         pausedForQuota: false,
         queueLength: 0,
       },
     });
-    expect(document.querySelector(".learning-bridge-gate")?.textContent).toContain("Version 8.0.0 was detected");
-    expect(document.body.textContent).toContain("Update Meoi Bridge to 8.0.1");
+    expect(document.querySelector(".learning-bridge-gate")?.textContent).toContain("Version 8.0.1 was detected");
+    expect(document.body.textContent).toContain(`Update Meoi Bridge to ${MEOI_EXTENSION_MIN_VERSION}`);
     expect(document.body.textContent).not.toContain("Player demo");
   });
 
@@ -176,7 +177,7 @@ describe("LearningWorkspace bridge v8 gate", () => {
     await renderWithCompatibility({
       state: "ready",
       version: 8,
-      integration: { installed: true, extensionVersion: "8.0.1", pausedForQuota: false, queueLength: 0 },
+      integration: { installed: true, extensionVersion: MEOI_EXTENSION_MIN_VERSION, pausedForQuota: false, queueLength: 0 },
     });
     expect(document.querySelector(".learning-bridge-gate")).toBeNull();
     expect(document.body.textContent).toContain("Player demo");
@@ -189,7 +190,7 @@ describe("LearningWorkspace pending lesson recovery", () => {
   const ready: ExtensionCompatibility = {
     state: "ready",
     version: 8,
-    integration: { installed: true, extensionVersion: "8.0.1", pausedForQuota: false, queueLength: 0 },
+    integration: { installed: true, extensionVersion: MEOI_EXTENSION_MIN_VERSION, pausedForQuota: false, queueLength: 0 },
   };
 
   it("recovers a completed lesson after remount and saves before ACK", async () => {

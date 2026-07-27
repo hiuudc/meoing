@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ExtensionBridge } from "./extensionBridge";
-import type {
-  ChatOperationState,
-  ExtensionCommand,
-  IntegrationStatus,
-  SendOperationPayload,
+import {
+  MEOI_EXTENSION_MIN_VERSION,
+  type ChatOperationState,
+  type ExtensionCommand,
+  type IntegrationStatus,
+  type SendOperationPayload,
 } from "./protocol";
 import { LESSON_QUESTION_FORMATS } from "../learning/types";
 
@@ -64,7 +65,7 @@ const payload: SendOperationPayload = {
 
 const integrationStatus: IntegrationStatus = {
   installed: true,
-  extensionVersion: "8.0.1",
+  extensionVersion: MEOI_EXTENSION_MIN_VERSION,
   pausedForQuota: false,
   queueLength: 0,
 };
@@ -217,7 +218,7 @@ describe("ExtensionBridge compatibility detection", () => {
             nonce: request.nonce,
             requestId: request.requestId,
             ok: true,
-            data: { ...integrationStatus, extensionVersion: "8.0.0" },
+            data: { ...integrationStatus, extensionVersion: "8.0.1" },
           },
           origin: window.location.origin,
           source: window,
@@ -229,7 +230,7 @@ describe("ExtensionBridge compatibility detection", () => {
     await expect(oldPatch).resolves.toMatchObject({
       state: "outdated",
       version: 8,
-      integration: { extensionVersion: "8.0.0" },
+      integration: { extensionVersion: "8.0.1" },
     });
 
     postMessage.mockRestore();
