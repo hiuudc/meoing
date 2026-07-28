@@ -46,6 +46,7 @@ import {
   loadSpeechPreference,
   resolveSpeechVoice,
   saveSpeechPreference,
+  speechTextForLanguage,
   type BrowserSpeechPreference,
   voicePreviewSample,
 } from "./speech";
@@ -679,7 +680,7 @@ export function LessonPlayer({
     const voice = resolveSpeechVoice(voices, preference, lesson.targetLanguage);
     if (!voice) return false;
     window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
+    const utterance = new SpeechSynthesisUtterance(speechTextForLanguage(text, lesson.targetLanguage));
     utterance.rate = preference.rate;
     utterance.voice = voice;
     utterance.lang = voice.lang || languageTagForSpeech(lesson.targetLanguage);

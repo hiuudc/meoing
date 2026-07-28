@@ -42,6 +42,7 @@ import {
   filterSpeechVoices,
   normalizeSpeechPreference,
   resolveSpeechVoice,
+  speechTextForLanguage,
   voicePreviewSample,
 } from "./speech";
 import {
@@ -527,6 +528,12 @@ describe("glossary and speech preferences", () => {
     expect(resolveSpeechVoice(voices, { version: 1, voiceURI: "voice-en", rate: 1 }, "Japanese")?.voiceURI).toBe("voice-ja");
     expect(filterSpeechVoices(voices, "Unknown language")).toEqual([]);
     expect(voicePreviewSample("Japanese")).toBe("\u3053\u3093\u306b\u3061\u306f");
+  });
+
+  it("uses a pronunciation-equivalent fallback for Japanese hiragana vu", () => {
+    expect(speechTextForLanguage("\u3094", "Japanese")).toBe("\u30f4");
+    expect(speechTextForLanguage("\u3046\u3099", "ja-JP")).toBe("\u30f4");
+    expect(speechTextForLanguage("\u3094", "English")).toBe("\u3094");
   });
 
   it("speaks only target-language spans identified by lesson metadata", () => {

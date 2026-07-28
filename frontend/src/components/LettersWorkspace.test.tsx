@@ -183,6 +183,29 @@ describe("Letters lesson intro", () => {
     expect(spoken).toHaveLength(1);
     expect(spoken[0]).toMatchObject({ text: practiceCharacters[0], lang: "ja-JP", rate: 0.82 });
   });
+
+  it("speaks hiragana vu through its supported Japanese pronunciation equivalent", async () => {
+    await act(async () => root!.render(createElement(LettersLessonIntro, {
+      open: true,
+      language: "Japanese",
+      scriptLabel: "Hiragana",
+      characters: ["\u3094"],
+      metadata: new Map(),
+      characterCount: 1,
+      exerciseCount: 5,
+      maxCharacterCount: 1,
+      onCharacterCountChange: vi.fn(),
+      onClose: vi.fn(),
+      onExited: vi.fn(),
+      onStart: vi.fn(),
+    })));
+
+    const speaker = document.querySelector<HTMLButtonElement>(".letters-lesson-character-list button")!;
+    await act(async () => speaker.click());
+    expect(spoken).toHaveLength(1);
+    expect(spoken[0]).toMatchObject({ text: "\u30f4", lang: "ja-JP", rate: 0.82 });
+    expect(document.querySelector(".letters-lesson-character-list strong")?.textContent).toBe("\u3094");
+  });
 });
 
 describe("Standalone Letters trace", () => {

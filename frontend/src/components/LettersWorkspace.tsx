@@ -53,7 +53,7 @@ import {
   type LettersPracticeSession,
 } from "../learning/lettersPractice";
 import { normalizeLearningProfile } from "../learning/profile";
-import { languageTagForSpeech } from "../learning/speech";
+import { languageTagForSpeech, speechTextForLanguage } from "../learning/speech";
 import { loadStrokeCatalog } from "../learning/strokeData";
 import type {
   AttemptRecord,
@@ -254,7 +254,7 @@ function VirtualCharacterGrid({
 function speakCharacter(language: string, character: string) {
   if (!("speechSynthesis" in window) || typeof SpeechSynthesisUtterance === "undefined") return;
   window.speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(character);
+  const utterance = new SpeechSynthesisUtterance(speechTextForLanguage(character, language));
   utterance.lang = languageTagForSpeech(language);
   utterance.rate = .82;
   window.speechSynthesis.speak(utterance);

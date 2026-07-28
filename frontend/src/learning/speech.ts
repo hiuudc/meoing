@@ -67,6 +67,12 @@ export function languageTagForSpeech(language: string): string {
   return languageLocale(language) ?? LANGUAGE_TAGS[normalized] ?? "en-US";
 }
 
+export function speechTextForLanguage(text: string, language: string): string {
+  if (!languageTagForSpeech(language).toLocaleLowerCase().startsWith("ja")) return text;
+  // Some Japanese voices skip isolated hiragana vu; katakana has the same reading.
+  return text.normalize("NFC").replace(/\u3094/g, "\u30f4");
+}
+
 function configuredLanguageTag(language: string): string | undefined {
   const normalized = language.trim().toLocaleLowerCase();
   if (/^[a-z]{2,3}(?:[-_][a-z0-9]{2,8})+$/i.test(normalized)) {
