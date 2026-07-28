@@ -5,6 +5,7 @@ import {
   LoaderCircle,
   Menu,
   Play,
+  RefreshCw,
   RotateCcw,
   Search,
   Settings2,
@@ -81,6 +82,9 @@ interface VirtualCharacterGridProps {
   metadata: ReadonlyMap<string, LettersCharacterMetadata>;
   progress: Readonly<Record<string, LetterProgressStatus>>;
   onSelect: (character: string) => void;
+  selectedCharacters?: ReadonlySet<string>;
+  selectionLimit?: number;
+  variant?: "catalog" | "picker";
 }
 
 interface LettersPracticeProps {
@@ -110,7 +114,16 @@ interface LettersLessonIntroProps {
   characterCount: number;
   exerciseCount: number;
   maxCharacterCount: number;
+  availableCharacters: string[];
+  progress: Readonly<Record<string, LetterProgressStatus>>;
+  selectionMode: LettersPracticeSelectionMode;
+  customQuery: string;
+  canRefresh: boolean;
   onCharacterCountChange: (count: number) => void;
+  onCustomQueryChange: (query: string) => void;
+  onRefresh: () => void;
+  onSelectionModeChange: (mode: LettersPracticeSelectionMode) => void;
+  onToggleCustomCharacter: (character: string) => void;
   onClose: () => void;
   onExited: () => void;
   onStart: () => void;
@@ -158,6 +171,17 @@ function collectionCharacterMetadata(
   return metadata;
 }
 
+type LettersPracticeSelectionMode = "auto" | "custom";
+
+interface LettersPracticeDraft {
+  mode: LettersPracticeSelectionMode;
+  characterCount: number;
+  autoCharacters: string[];
+  usedCharacters: string[];
+  customCharacters: string[];
+  customQuery: string;
+}
+
 function characterDisplayLabel(
   character: string,
   metadata?: LettersCharacterMetadata,
@@ -170,6 +194,9 @@ function VirtualCharacterGrid({
   metadata,
   progress,
   onSelect,
+  selectedCharacters,
+  selectionLimit = MAX_LETTERS_PRACTICE_CHARACTERS,
+  variant = "catalog",
 }: VirtualCharacterGridProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const scrollFrameRef = useRef<number | null>(null);
@@ -193,6 +220,11 @@ function VirtualCharacterGrid({
     if (scrollFrameRef.current !== null) window.cancelAnimationFrame(scrollFrameRef.current);
   }, []);
 
+  useEffect(() => {
+    if (viewportRef.current) viewportRef.current.scrollTop = 0;
+    setViewport((current) => ({ ...current, scrollTop: 0 }));
+  }, [characters]);
+
   function onScroll(event: UIEvent<HTMLDivElement>) {
     const scrollTop = event.currentTarget.scrollTop;
     if (scrollFrameRef.current !== null) window.cancelAnimationFrame(scrollFrameRef.current);
@@ -213,7 +245,7 @@ function VirtualCharacterGrid({
   const visibleCharacters = characters.slice(characterWindow.startIndex, characterWindow.endIndex);
 
   return (
-    <div className="letters-grid-viewport" ref={viewportRef} onScroll={onScroll}>
+    <div className={`letters-grid-viewport is-${variant}`} ref={viewportRef} onScroll={onScroll}>
       <div className="letters-grid-spacer" style={{ height: characterWindow.rowCount * GRID_ROW_HEIGHT }}>
         <div
           className="letters-grid-window"
@@ -228,20 +260,33 @@ function VirtualCharacterGrid({
           {visibleCharacters.map((character, index) => {
             const characterMetadata = metadata.get(character);
             const status = progress[character];
+            const selected = selectedCharacters?.has(character) ?? false;
+            const selectionLimitReached = Boolean(
+              selectedCharacters
+              && !selected
+              && selectedCharacters.size >= selectionLimit,
+            );
             return (
               <button
                 type="button"
-                className={`letters-character-tile${status ? ` is-${status}` : ""}`}
+                className={`letters-character-tile${status ? ` is-${status}` : ""}${selected ? " is-selected" : ""}`}
                 key={character}
                 role="gridcell"
                 aria-rowindex={characterWindow.startRow + Math.floor(index / columns) + 1}
                 aria-colindex={(index % columns) + 1}
-                aria-label={`${character}, ${characterDisplayLabel(character, characterMetadata)}, ${status ?? "not started"}`}
+                aria-selected={selectedCharacters ? selected : undefined}
+                aria-label={`${character}, ${characterDisplayLabel(character, characterMetadata)}, ${status ?? "not started"}${selected ? ", selected" : ""}`}
                 onClick={() => onSelect(character)}
+                disabled={selectionLimitReached}
               >
                 <strong>{character}</strong>
                 <span>{characterDisplayLabel(character, characterMetadata)}</span>
                 <i aria-hidden="true"><b /></i>
+                {selectedCharacters ? (
+                  <small className="letters-character-selection-mark" aria-hidden="true">
+                    <Check size={13} />
+                  </small>
+                ) : null}
               </button>
             );
           })}
@@ -273,11 +318,33 @@ export function LettersLessonIntro({
   characterCount,
   exerciseCount,
   maxCharacterCount,
+  availableCharacters,
+  progress,
+  selectionMode,
+  customQuery,
+  canRefresh,
   onCharacterCountChange,
+  onCustomQueryChange,
+  onRefresh,
+  onSelectionModeChange,
+  onToggleCustomCharacter,
   onClose,
   onExited,
   onStart,
 }: LettersLessonIntroProps) {
+  const selectedCharacters = useMemo(() => new Set(characters), [characters]);
+  const customCharacters = useMemo(
+    () => availableCharacters.filter((character) => {
+      const characterMetadata = metadata.get(character);
+      return matchesCharacterQuery(
+        character,
+        customQuery,
+        `${characterMetadata?.displayLabel ?? ""} ${characterMetadata?.reading ?? ""} ${characterMetadata?.meaning ?? ""}`,
+      );
+    }),
+    [availableCharacters, customQuery, metadata],
+  );
+
   return createPortal(
     <AnimatedModal
       open={open}
@@ -303,46 +370,117 @@ export function LettersLessonIntro({
             There are no hearts. A missed exercise returns later in the session until you answer it correctly.
           </p>
         </div>
+        <div className="letters-practice-selection-toolbar">
+          <div role="group" aria-label="Practice character selection">
+            <button
+              type="button"
+              aria-pressed={selectionMode === "auto"}
+              className={selectionMode === "auto" ? "is-active" : ""}
+              onClick={() => onSelectionModeChange("auto")}
+            >
+              Auto
+            </button>
+            <button
+              type="button"
+              aria-pressed={selectionMode === "custom"}
+              className={selectionMode === "custom" ? "is-active" : ""}
+              onClick={() => onSelectionModeChange("custom")}
+            >
+              Custom
+            </button>
+          </div>
+          {selectionMode === "auto" ? (
+            <button
+              className="secondary-button letters-practice-refresh"
+              type="button"
+              onClick={onRefresh}
+              disabled={!canRefresh}
+            >
+              <RefreshCw size={15} /> Refresh characters
+            </button>
+          ) : null}
+        </div>
         <div className="letters-practice-setup">
-          <label htmlFor="letters-practice-character-count">
-            <span>
-              <strong>Characters per practice</strong>
-              <small>Saved for this Collection and language when you start.</small>
-            </span>
-            <input
-              id="letters-practice-character-count"
-              type="number"
-              min={MIN_LETTERS_PRACTICE_CHARACTERS}
-              max={maxCharacterCount}
-              step={1}
-              value={characterCount}
-              onChange={(event) => {
-                if (!Number.isFinite(event.currentTarget.valueAsNumber)) return;
-                onCharacterCountChange(Math.min(
-                  maxCharacterCount,
-                  normalizeLettersPracticeCharacterCount(event.currentTarget.valueAsNumber),
-                ));
-              }}
-            />
-          </label>
+          {selectionMode === "auto" ? (
+            <label htmlFor="letters-practice-character-count">
+              <span>
+                <strong>Characters per practice</strong>
+                <small>Saved for this Collection and language when you start.</small>
+              </span>
+              <input
+                id="letters-practice-character-count"
+                type="number"
+                min={MIN_LETTERS_PRACTICE_CHARACTERS}
+                max={maxCharacterCount}
+                step={1}
+                value={characterCount}
+                onChange={(event) => {
+                  if (!Number.isFinite(event.currentTarget.valueAsNumber)) return;
+                  onCharacterCountChange(Math.min(
+                    maxCharacterCount,
+                    normalizeLettersPracticeCharacterCount(event.currentTarget.valueAsNumber),
+                  ));
+                }}
+              />
+            </label>
+          ) : (
+            <div className="letters-practice-custom-summary">
+              <strong>Custom characters</strong>
+              <small>Select between 1 and {maxCharacterCount} characters for this lesson.</small>
+            </div>
+          )}
           <output aria-live="polite">
             <strong>{characters.length} characters</strong>
             <small>{exerciseCount} exercises before retries</small>
           </output>
         </div>
+        {selectionMode === "custom" ? (
+          <section className="letters-practice-custom-picker" aria-labelledby="letters-practice-custom-title">
+            <div className="letters-practice-custom-heading">
+              <div>
+                <strong id="letters-practice-custom-title">Choose characters</strong>
+                <small>{characters.length}/{maxCharacterCount} selected</small>
+              </div>
+              <label className="letters-search">
+                <Search size={16} />
+                <span className="sr-only">Search practice characters</span>
+                <input
+                  value={customQuery}
+                  onChange={(event) => onCustomQueryChange(event.target.value)}
+                  placeholder="Search character, reading, meaning, or U+ code"
+                />
+              </label>
+            </div>
+            {customCharacters.length ? (
+              <VirtualCharacterGrid
+                characters={customCharacters}
+                metadata={metadata}
+                progress={progress}
+                selectedCharacters={selectedCharacters}
+                selectionLimit={maxCharacterCount}
+                variant="picker"
+                onSelect={onToggleCustomCharacter}
+              />
+            ) : (
+              <p className="letters-catalog-status">No character matches this filter.</p>
+            )}
+          </section>
+        ) : null}
         <div className="letters-lesson-character-list" aria-label="Characters in this practice">
           {characters.map((character) => {
             const characterMetadata = metadata.get(character);
+            const canSpeak = Boolean(characterMetadata?.reading) && supportsCharacterSpeech();
             return (
               <article key={character}>
-                <button
-                  type="button"
-                  aria-label={`Play ${character}`}
-                  onClick={() => speakCharacter(language, character)}
-                  disabled={!supportsCharacterSpeech()}
-                >
-                  <Volume2 size={17} />
-                </button>
+                {canSpeak ? (
+                  <button
+                    type="button"
+                    aria-label={`Play ${character}`}
+                    onClick={() => speakCharacter(language, character)}
+                  >
+                    <Volume2 size={17} />
+                  </button>
+                ) : <span className="letters-practice-speaker-placeholder" aria-hidden="true" />}
                 <strong lang={languageTagForSpeech(language)}>{character}</strong>
                 <div>
                   <b>{characterDisplayLabel(character, characterMetadata)}</b>
@@ -471,7 +609,7 @@ export function LettersPractice({
     explanation: "This practice is checked locally from the bundled stroke data.",
     character,
     meaning: metadata?.meaning,
-    reading: metadata?.displayLabel ?? metadata?.reading,
+    reading: metadata?.displayLabel ?? metadata?.reading ?? unicodeLabel(character),
     requireStrokeOrder,
   };
   const completed = answer === "passed";
@@ -565,9 +703,14 @@ export function LettersWorkspace({
   const [query, setQuery] = useState("");
   const [selectedCharacter, setSelectedCharacter] = useState("");
   const [practiceIntroOpen, setPracticeIntroOpen] = useState(false);
-  const [practiceCharacterCountDraft, setPracticeCharacterCountDraft] = useState(
-    DEFAULT_LETTERS_PRACTICE_CHARACTERS,
-  );
+  const [practiceDraft, setPracticeDraft] = useState<LettersPracticeDraft>({
+    mode: "auto",
+    characterCount: DEFAULT_LETTERS_PRACTICE_CHARACTERS,
+    autoCharacters: [],
+    usedCharacters: [],
+    customCharacters: [],
+    customQuery: "",
+  });
   const [pendingPracticeSession, setPendingPracticeSession] = useState<LettersPracticeSession | null>(null);
   const [practiceSession, setPracticeSession] = useState<LettersPracticeSession | null>(null);
   const [letterSettingsOpen, setLetterSettingsOpen] = useState(false);
@@ -604,6 +747,14 @@ export function LettersWorkspace({
     setQuery("");
     setSelectedCharacter("");
     setPracticeIntroOpen(false);
+    setPracticeDraft((current) => ({
+      ...current,
+      mode: "auto",
+      autoCharacters: [],
+      usedCharacters: [],
+      customCharacters: [],
+      customQuery: "",
+    }));
     setPendingPracticeSession(null);
     setPracticeSession(null);
   }, [language]);
@@ -676,19 +827,11 @@ export function LettersWorkspace({
     MIN_LETTERS_PRACTICE_CHARACTERS,
     Math.min(MAX_LETTERS_PRACTICE_CHARACTERS, scriptCharacters.length),
   );
-  const practiceCharacters = useMemo(
-    () => selectLettersPracticeCharacters(
-      scriptCharacters,
-      languageProgress.characters,
-      practiceCharacterCountDraft,
-    ),
-    [
-      languageProgress.characters,
-      practiceCharacterCountDraft,
-      scriptCharacters,
-    ],
-  );
-  const practiceExerciseCount = lettersPracticeExerciseCount(practiceCharacters.length);
+  const practiceCharacters = practiceDraft.mode === "auto"
+    ? practiceDraft.autoCharacters
+    : practiceDraft.customCharacters;
+  const practiceExerciseCount = lettersPracticeExerciseCount(practiceCharacters, metadata);
+  const canRefreshPracticeCharacters = scriptCharacters.length > practiceDraft.autoCharacters.length;
 
   function updateProgress(
     update: (progress: ReturnType<typeof getLettersLanguageProgress>) => ReturnType<typeof getLettersLanguageProgress>,
@@ -735,18 +878,103 @@ export function LettersWorkspace({
   }
 
   function openPracticeIntro() {
-    setPracticeCharacterCountDraft(Math.min(
+    const characterCount = Math.min(
       maxPracticeCharacterCount,
       normalizeLettersPracticeCharacterCount(languageProgress.practiceCharacterCount),
-    ));
+    );
+    const autoCharacters = selectLettersPracticeCharacters(
+      scriptCharacters,
+      languageProgress.characters,
+      characterCount,
+    );
+    setPracticeDraft({
+      mode: "auto",
+      characterCount,
+      autoCharacters,
+      usedCharacters: [...autoCharacters],
+      customCharacters: [...autoCharacters],
+      customQuery: "",
+    });
     setPracticeIntroOpen(true);
   }
 
-  function preparePracticeSession() {
-    const characterCount = Math.min(
+  function changePracticeCharacterCount(characterCount: number) {
+    const normalizedCount = Math.min(
       maxPracticeCharacterCount,
-      normalizeLettersPracticeCharacterCount(practiceCharacterCountDraft),
+      normalizeLettersPracticeCharacterCount(characterCount),
     );
+    const autoCharacters = selectLettersPracticeCharacters(
+      scriptCharacters,
+      languageProgress.characters,
+      normalizedCount,
+    );
+    setPracticeDraft((current) => ({
+      ...current,
+      characterCount: normalizedCount,
+      autoCharacters,
+      usedCharacters: [...autoCharacters],
+    }));
+  }
+
+  function refreshPracticeCharacters() {
+    setPracticeDraft((current) => {
+      const usedCharacters = new Set(current.usedCharacters);
+      let nextCharacters = selectLettersPracticeCharacters(
+        scriptCharacters,
+        languageProgress.characters,
+        current.characterCount,
+        { excludedCharacters: usedCharacters },
+      );
+      const includesUnusedCharacter = nextCharacters.some((character) => !usedCharacters.has(character));
+      if (!includesUnusedCharacter) {
+        nextCharacters = selectLettersPracticeCharacters(
+          scriptCharacters,
+          languageProgress.characters,
+          current.characterCount,
+        );
+        return {
+          ...current,
+          autoCharacters: nextCharacters,
+          usedCharacters: [...nextCharacters],
+        };
+      }
+      return {
+        ...current,
+        autoCharacters: nextCharacters,
+        usedCharacters: [...new Set([...current.usedCharacters, ...nextCharacters])],
+      };
+    });
+  }
+
+  function changePracticeSelectionMode(mode: LettersPracticeSelectionMode) {
+    setPracticeDraft((current) => ({
+      ...current,
+      mode,
+      customCharacters: mode === "custom" ? [...current.autoCharacters] : current.customCharacters,
+      customQuery: mode === "custom" ? "" : current.customQuery,
+    }));
+  }
+
+  function toggleCustomPracticeCharacter(character: string) {
+    setPracticeDraft((current) => {
+      if (current.customCharacters.includes(character)) {
+        return {
+          ...current,
+          customCharacters: current.customCharacters.filter((candidate) => candidate !== character),
+        };
+      }
+      if (current.customCharacters.length >= maxPracticeCharacterCount) return current;
+      return {
+        ...current,
+        customCharacters: [...current.customCharacters, character],
+      };
+    });
+  }
+
+  function preparePracticeSession() {
+    const targetCharacters = [...practiceCharacters];
+    const characterCount = targetCharacters.length;
+    if (!characterCount) return;
     const next = buildLettersPracticeSession({
       collectionId: collection.id,
       language,
@@ -755,10 +983,9 @@ export function LettersWorkspace({
       script: activeScript,
       scriptLabel: activeScriptLabel,
       characters: scriptCharacters,
+      targetCharacters,
       metadata,
-      progress: languageProgress.characters,
       requireStrokeOrder: languageProgress.requireStrokeOrder,
-      characterCount,
     });
     updateProgress((current) => ({
       ...current,
@@ -952,7 +1179,7 @@ export function LettersWorkspace({
           onSelect={setSelectedCharacter}
           onStart={(character) => markCharacter(character, "practicing")}
           onMastered={(character) => markCharacter(character, "mastered")}
-          onSpeak={speechAvailable ? speakCurrentCharacter : undefined}
+          onSpeak={speechAvailable && selectedMetadata?.reading ? speakCurrentCharacter : undefined}
           onOpenSettings={openLetterSettings}
           settingsActive={letterSettingsActive}
           settingsRevision={traceSettingsRevision}
@@ -965,13 +1192,19 @@ export function LettersWorkspace({
         scriptLabel={activeScriptLabel}
         characters={practiceCharacters}
         metadata={metadata}
-        characterCount={practiceCharacterCountDraft}
+        characterCount={practiceDraft.characterCount}
         exerciseCount={practiceExerciseCount}
         maxCharacterCount={maxPracticeCharacterCount}
-        onCharacterCountChange={(count) => setPracticeCharacterCountDraft(Math.min(
-          maxPracticeCharacterCount,
-          normalizeLettersPracticeCharacterCount(count),
-        ))}
+        availableCharacters={scriptCharacters}
+        progress={languageProgress.characters}
+        selectionMode={practiceDraft.mode}
+        customQuery={practiceDraft.customQuery}
+        canRefresh={canRefreshPracticeCharacters}
+        onCharacterCountChange={changePracticeCharacterCount}
+        onCustomQueryChange={(customQuery) => setPracticeDraft((current) => ({ ...current, customQuery }))}
+        onRefresh={refreshPracticeCharacters}
+        onSelectionModeChange={changePracticeSelectionMode}
+        onToggleCustomCharacter={toggleCustomPracticeCharacter}
         onClose={() => setPracticeIntroOpen(false)}
         onExited={() => {
           if (!pendingPracticeSession) return;

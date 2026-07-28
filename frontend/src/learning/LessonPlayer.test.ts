@@ -1232,6 +1232,42 @@ describe("fullscreen lesson player", () => {
       .toEqual(["\u3042", "\u3042"]));
   });
 
+  it("keeps Unicode-only tracing silent and omits its pronunciation control", async () => {
+    speechVoices = [speechVoice("Japanese", "ja-JP", "voice-ja", true)];
+    const tracingQuestion: CharacterTracingQuestion = {
+      id: "trace-kanji-unicode",
+      type: "characterTracing",
+      prompt: "Trace the character.",
+      explanation: "Follow the stroke order.",
+      evaluationMode: "local",
+      character: "\u6c34",
+      reading: "U+6C34",
+      requireStrokeOrder: true,
+      presentation: { readQuestion: true, readAnswers: false, wordTooltips: false },
+    };
+
+    await renderPlayer({
+      lesson: {
+        ...lesson,
+        id: "trace-unicode-test",
+        targetLanguage: "Japanese",
+        questions: [tracingQuestion],
+        questionAlternates: [],
+      },
+      variant: "lettersPractice",
+      tracingOptions: {
+        requireStrokeOrder: true,
+        strokeTolerance: 1,
+        showStrokeGuide: true,
+      },
+    });
+
+    await vi.waitFor(() => expect(tracingMocks.writer.quiz).toHaveBeenCalled());
+    expect(spokenUtterances).toHaveLength(0);
+    expect(document.querySelector(".character-tracing-glyph span")?.textContent).toBe("U+6C34");
+    expect(document.querySelector('[aria-label="Play \u6c34 pronunciation"]')).toBeNull();
+  });
+
   it("reads the current target text once when Read question is enabled mid-question", async () => {
     speechVoices = [speechVoice("Japanese", "ja-JP", "voice-ja", true)];
     const question = {

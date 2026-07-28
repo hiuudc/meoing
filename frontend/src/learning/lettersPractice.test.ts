@@ -22,6 +22,7 @@ const progress: Record<string, LetterProgressStatus> = {
 };
 
 function build(characterCount?: number) {
+  const targetCharacters = selectLettersPracticeCharacters(characters, progress, characterCount);
   return buildLettersPracticeSession({
     collectionId: "collection-a",
     language: "Japanese",
@@ -30,10 +31,9 @@ function build(characterCount?: number) {
     script: "hiragana",
     scriptLabel: "Hiragana",
     characters,
+    targetCharacters,
     metadata,
-    progress,
     requireStrokeOrder: true,
-    characterCount,
     sessionId: "letters-session",
     createdAt: "2026-07-26T00:00:00.000Z",
   });
@@ -51,7 +51,9 @@ describe("Letters practice sessions", () => {
 
     const session = build();
     expect(session.targetCharacters).toHaveLength(5);
-    expect(session.lesson.questions).toHaveLength(lettersPracticeExerciseCount(5));
+    expect(session.lesson.questions).toHaveLength(
+      lettersPracticeExerciseCount(session.targetCharacters, metadata),
+    );
     expect(session.lesson.questions).toHaveLength(21);
     expect(session.lesson.summary).toContain("21 local exercises for 5 characters");
     expect(session.lesson.questions.every((question) => question.evaluationMode === "local")).toBe(true);
@@ -81,10 +83,10 @@ describe("Letters practice sessions", () => {
 
     expect(visual).toMatchObject({
       type: "singleChoice",
-      prompt: "Select the correct name or reading.",
+      prompt: "Select the correct reading.",
       targetPrompt: "\u3044",
       glossaryTargets: ["\u3044"],
-      correctOptionId: "character-3044",
+      correctOptionId: "descriptor-3044",
     });
     if (visual?.type !== "singleChoice") throw new Error("Visual reading question not found.");
     expect(visual.options.map((option) => option.label)).not.toContain("\u3044");
@@ -105,8 +107,29 @@ describe("Letters practice sessions", () => {
     );
   });
 
-  it("clamps the custom character count and splits matching into groups of five", () => {
+  it("rotates through unused characters before wrapping while preserving progress priority", () => {
+    const rotationCharacters = ["a", "b", "c", "d", "e", "f", "g"];
+    const rotationProgress: Record<string, LetterProgressStatus> = {
+      a: "mastered",
+      b: "practicing",
+    };
+    const first = selectLettersPracticeCharacters(rotationCharacters, rotationProgress, 3);
+    const second = selectLettersPracticeCharacters(rotationCharacters, rotationProgress, 3, {
+      excludedCharacters: new Set(first),
+    });
+    const third = selectLettersPracticeCharacters(rotationCharacters, rotationProgress, 3, {
+      excludedCharacters: new Set([...first, ...second]),
+    });
+
+    expect(first).toEqual(["b", "c", "d"]);
+    expect(second).toEqual(["e", "f", "g"]);
+    expect(third[0]).toBe("a");
+    expect(new Set([...first, ...second, ...third])).toEqual(new Set(rotationCharacters));
+  });
+
+  it("clamps exact custom targets and splits Unicode matching into groups of five", () => {
     const manyCharacters = Array.from({ length: 12 }, (_, index) => String.fromCodePoint(0x4e00 + index));
+    const targetCharacters = manyCharacters;
     const session = buildLettersPracticeSession({
       collectionId: "collection-a",
       language: "Japanese",
@@ -115,21 +138,58 @@ describe("Letters practice sessions", () => {
       script: "kanji",
       scriptLabel: "Kanji",
       characters: manyCharacters,
+      targetCharacters,
       metadata: new Map(),
-      progress: {},
       requireStrokeOrder: true,
-      characterCount: 99,
       sessionId: "long-letters-session",
       createdAt: "2026-07-26T00:00:00.000Z",
     });
 
     expect(session.targetCharacters).toHaveLength(10);
-    expect(session.lesson.questions).toHaveLength(42);
-    expect(session.lesson.questions.filter((question) => question.type === "audioMatching")).toHaveLength(2);
-    expect(session.questionIdsByCharacter[manyCharacters[0]]).toHaveLength(5);
-    expect(session.questionIdsByCharacter[manyCharacters[9]]).toHaveLength(5);
-    expect(lettersPracticeExerciseCount(1)).toBe(5);
-    expect(lettersPracticeExerciseCount(10)).toBe(42);
+    expect(session.lesson.questions).toHaveLength(32);
+    expect(session.lesson.questions.filter((question) => question.type === "audioMatching")).toHaveLength(0);
+    expect(session.lesson.questions.filter((question) => question.type === "matching")).toHaveLength(2);
+    expect(session.questionIdsByCharacter[manyCharacters[0]]).toHaveLength(4);
+    expect(session.questionIdsByCharacter[manyCharacters[9]]).toHaveLength(4);
+    expect(lettersPracticeExerciseCount(session.targetCharacters, new Map())).toBe(32);
+  });
+
+  it("uses exact custom targets and replaces missing pronunciation exercises with Unicode recognition", () => {
+    const ideographs = ["\u6c34", "\u706b", "\u6728", "\u91d1"];
+    const targetCharacters = ["\u91d1", "\u6c34"];
+    const session = buildLettersPracticeSession({
+      collectionId: "collection-a",
+      language: "Japanese",
+      sourceLanguage: "English",
+      level: "beginner",
+      script: "kanji",
+      scriptLabel: "Kanji",
+      characters: ideographs,
+      targetCharacters,
+      metadata: new Map(),
+      requireStrokeOrder: true,
+      sessionId: "unicode-session",
+      createdAt: "2026-07-26T00:00:00.000Z",
+    });
+
+    expect(session.targetCharacters).toEqual(targetCharacters);
+    expect(session.lesson.questions).toHaveLength(7);
+    expect(session.lesson.questions.some((question) => (
+      question.type === "listenSelect" || question.type === "audioMatching"
+    ))).toBe(false);
+    expect(session.lesson.questions.filter((question) => question.type === "characterTracing"))
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ character: "\u91d1", reading: "U+91D1" }),
+        expect.objectContaining({ character: "\u6c34", reading: "U+6C34" }),
+      ]));
+    const singleChoiceLabels = session.lesson.questions.flatMap((question) => (
+      question.type === "singleChoice" ? question.options.map((option) => option.label) : []
+    ));
+    expect(singleChoiceLabels).toEqual(expect.arrayContaining(["U+91D1", "U+6C34"]));
+    expect(session.lesson.questions).toContainEqual(expect.objectContaining({
+      type: "matching",
+      prompt: "Match each Unicode code to its character.",
+    }));
   });
 
   it("keeps small and regular kana families out of the same session when alternatives exist", () => {
@@ -145,13 +205,12 @@ describe("Letters practice sessions", () => {
       script: "hiragana",
       scriptLabel: "Hiragana",
       characters: kana,
+      targetCharacters: selected,
       metadata: new Map([
         ["\u3043", { displayLabel: "small i", reading: "i" }],
         ["\u3044", { reading: "i" }],
       ]),
-      progress: {},
       requireStrokeOrder: true,
-      characterCount: 5,
       sessionId: "family-session",
       createdAt: "2026-07-26T00:00:00.000Z",
     });
@@ -190,6 +249,7 @@ describe("Letters practice sessions", () => {
           String.fromCodePoint(character.codePointAt(0)! + offset)
         ));
         const sessionCharacters = [small, regular, ...alternatives];
+        const targetCharacters = selectLettersPracticeCharacters(sessionCharacters, {}, 5);
         const session = buildLettersPracticeSession({
           collectionId: "collection-a",
           language: "Japanese",
@@ -198,10 +258,9 @@ describe("Letters practice sessions", () => {
           script: offset ? "katakana" : "hiragana",
           scriptLabel: offset ? "Katakana" : "Hiragana",
           characters: sessionCharacters,
+          targetCharacters,
           metadata: new Map(),
-          progress: {},
           requireStrokeOrder: true,
-          characterCount: 5,
           sessionId: `family-${smallCodePoint}-${offset}`,
           createdAt: "2026-07-26T00:00:00.000Z",
         });
@@ -242,10 +301,9 @@ describe("Letters practice sessions", () => {
       script: "hiragana",
       scriptLabel: "Hiragana",
       characters: kana,
+      targetCharacters: kana,
       metadata: kanaMetadata,
-      progress: {},
       requireStrokeOrder: true,
-      characterCount: 2,
       sessionId: "small-kana-session",
       createdAt: "2026-07-26T00:00:00.000Z",
     });
@@ -255,6 +313,16 @@ describe("Letters practice sessions", () => {
       character: "\u3041",
       reading: "small a",
     });
+    const practiceChoices = session.lesson.questions.filter((question) => question.type === "singleChoice");
+    expect(practiceChoices).toHaveLength(2);
+    expect(practiceChoices.every((question) => question.targetPrompt)).toBe(true);
+    expect(practiceChoices.flatMap((question) => question.options.map((option) => option.label)))
+      .not.toContain("small a");
+    expect(practiceChoices.flatMap((question) => question.options.map((option) => option.label)))
+      .toContain("a");
+    expect(session.lesson.questions.some((question) => (
+      question.type === "listenSelect" || question.type === "audioMatching"
+    ))).toBe(false);
     expect(session.lesson.examples.map((example) => example.translation)).toEqual(["small a", "a"]);
     expect(session.lesson.glossary.map((entry) => entry.pronunciation?.romanized)).toEqual(["a", "a"]);
   });

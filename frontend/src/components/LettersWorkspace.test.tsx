@@ -15,6 +15,9 @@ const practiceCharacters = Array.from(
   { length: 10 },
   (_, index) => String.fromCodePoint(0x3042 + index * 2),
 );
+const practiceMetadata = new Map(
+  practiceCharacters.map((character, index) => [character, { reading: `reading-${index + 1}` }]),
+);
 
 let root: Root | null = null;
 let spoken: TestSpeechUtterance[] = [];
@@ -42,7 +45,15 @@ function IntroHarness() {
   const [open, setOpen] = useState(false);
   const [savedCount, setSavedCount] = useState(5);
   const [draftCount, setDraftCount] = useState(5);
-  const selected = practiceCharacters.slice(0, draftCount);
+  const [mode, setMode] = useState<"auto" | "custom">("auto");
+  const [autoStart, setAutoStart] = useState(0);
+  const [customCharacters, setCustomCharacters] = useState<string[]>([]);
+  const [customQuery, setCustomQuery] = useState("");
+  const autoCharacters = Array.from(
+    { length: draftCount },
+    (_, index) => practiceCharacters[(autoStart + index) % practiceCharacters.length],
+  );
+  const selected = mode === "auto" ? autoCharacters : customCharacters;
 
   return (
     <>
@@ -50,6 +61,10 @@ function IntroHarness() {
         type="button"
         onClick={() => {
           setDraftCount(savedCount);
+          setAutoStart(0);
+          setMode("auto");
+          setCustomCharacters([]);
+          setCustomQuery("");
           setOpen(true);
         }}
       >
@@ -61,15 +76,37 @@ function IntroHarness() {
         language="Japanese"
         scriptLabel="Hiragana"
         characters={selected}
-        metadata={new Map()}
+        metadata={practiceMetadata}
         characterCount={draftCount}
-        exerciseCount={lettersPracticeExerciseCount(selected.length)}
+        exerciseCount={lettersPracticeExerciseCount(selected, practiceMetadata)}
         maxCharacterCount={10}
-        onCharacterCountChange={setDraftCount}
+        availableCharacters={practiceCharacters}
+        progress={{}}
+        selectionMode={mode}
+        customQuery={customQuery}
+        canRefresh={draftCount < practiceCharacters.length}
+        onCharacterCountChange={(count) => {
+          setDraftCount(count);
+          setAutoStart(0);
+        }}
+        onCustomQueryChange={setCustomQuery}
+        onRefresh={() => setAutoStart((current) => (current + draftCount) % practiceCharacters.length)}
+        onSelectionModeChange={(nextMode) => {
+          setMode(nextMode);
+          if (nextMode === "custom") {
+            setCustomCharacters(autoCharacters);
+            setCustomQuery("");
+          }
+        }}
+        onToggleCustomCharacter={(character) => setCustomCharacters((current) => (
+          current.includes(character)
+            ? current.filter((candidate) => candidate !== character)
+            : [...current, character].slice(0, 10)
+        ))}
         onClose={() => setOpen(false)}
         onExited={() => undefined}
         onStart={() => {
-          setSavedCount(draftCount);
+          setSavedCount(selected.length);
           setOpen(false);
         }}
       />
@@ -80,6 +117,13 @@ function IntroHarness() {
 async function setNumberInput(input: HTMLInputElement, value: number) {
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, String(value));
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+async function setTextInput(input: HTMLInputElement, value: string) {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, value);
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
 }
@@ -113,6 +157,13 @@ beforeEach(() => {
   Object.defineProperty(window, "cancelAnimationFrame", {
     configurable: true,
     value: (handle: number) => window.clearTimeout(handle),
+  });
+  Object.defineProperty(globalThis, "ResizeObserver", {
+    configurable: true,
+    value: class {
+      observe() {}
+      disconnect() {}
+    },
   });
 });
 
@@ -184,17 +235,53 @@ describe("Letters lesson intro", () => {
     expect(spoken[0]).toMatchObject({ text: practiceCharacters[0], lang: "ja-JP", rate: 0.82 });
   });
 
+  it("refreshes auto targets and supports a transient searchable custom selection", async () => {
+    await act(async () => root!.render(createElement(IntroHarness)));
+    await act(async () => button("Open Learn").click());
+
+    expect(document.querySelector(".letters-lesson-character-list strong")?.textContent)
+      .toBe(practiceCharacters[0]);
+    await act(async () => button("Refresh characters").click());
+    expect(document.querySelector(".letters-lesson-character-list strong")?.textContent)
+      .toBe(practiceCharacters[5]);
+
+    await act(async () => button("Custom").click());
+    expect(button("Custom").getAttribute("aria-pressed")).toBe("true");
+    const search = document.querySelector<HTMLInputElement>(
+      '.letters-practice-custom-picker input[placeholder*="Search character"]',
+    )!;
+    await setTextInput(search, "U+3042");
+    const customTile = document.querySelector<HTMLButtonElement>(".letters-grid-viewport.is-picker button")!;
+    expect(customTile.textContent).toContain(practiceCharacters[0]);
+    expect(customTile.getAttribute("aria-selected")).toBe("false");
+    await act(async () => customTile.click());
+    expect(document.querySelectorAll(".letters-lesson-character-list article")).toHaveLength(6);
+    expect(document.body.textContent).toContain("26 exercises before retries");
+
+    await act(async () => button("Start lesson").click());
+    expect(document.querySelector("#saved-practice-count")?.textContent).toBe("6");
+  });
+
   it("speaks hiragana vu through its supported Japanese pronunciation equivalent", async () => {
     await act(async () => root!.render(createElement(LettersLessonIntro, {
       open: true,
       language: "Japanese",
       scriptLabel: "Hiragana",
       characters: ["\u3094"],
-      metadata: new Map(),
+      metadata: new Map([["\u3094", { reading: "vu" }]]),
       characterCount: 1,
       exerciseCount: 5,
       maxCharacterCount: 1,
+      availableCharacters: ["\u3094"],
+      progress: {},
+      selectionMode: "auto",
+      customQuery: "",
+      canRefresh: false,
       onCharacterCountChange: vi.fn(),
+      onCustomQueryChange: vi.fn(),
+      onRefresh: vi.fn(),
+      onSelectionModeChange: vi.fn(),
+      onToggleCustomCharacter: vi.fn(),
       onClose: vi.fn(),
       onExited: vi.fn(),
       onStart: vi.fn(),
@@ -205,6 +292,36 @@ describe("Letters lesson intro", () => {
     expect(spoken).toHaveLength(1);
     expect(spoken[0]).toMatchObject({ text: "\u30f4", lang: "ja-JP", rate: 0.82 });
     expect(document.querySelector(".letters-lesson-character-list strong")?.textContent).toBe("\u3094");
+  });
+
+  it("shows a Unicode label without a speaker when pronunciation metadata is missing", async () => {
+    await act(async () => root!.render(createElement(LettersLessonIntro, {
+      open: true,
+      language: "Japanese",
+      scriptLabel: "Kanji",
+      characters: ["\u6c34"],
+      metadata: new Map(),
+      characterCount: 1,
+      exerciseCount: 4,
+      maxCharacterCount: 1,
+      availableCharacters: ["\u6c34"],
+      progress: {},
+      selectionMode: "auto",
+      customQuery: "",
+      canRefresh: false,
+      onCharacterCountChange: vi.fn(),
+      onCustomQueryChange: vi.fn(),
+      onRefresh: vi.fn(),
+      onSelectionModeChange: vi.fn(),
+      onToggleCustomCharacter: vi.fn(),
+      onClose: vi.fn(),
+      onExited: vi.fn(),
+      onStart: vi.fn(),
+    })));
+
+    const row = document.querySelector(".letters-lesson-character-list article")!;
+    expect(row.querySelector("button")).toBeNull();
+    expect(row.textContent).toContain("U+6C34");
   });
 });
 

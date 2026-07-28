@@ -181,6 +181,12 @@ function separatedQuestionPrompts(question: PlayableQuestion): { source: string;
   return source && source !== question.prompt ? { source, target } : { source: question.prompt, target: "" };
 }
 
+function traceHasPronunciation(question: PlayableQuestion | null | undefined): boolean {
+  if (question?.type !== "characterTracing") return true;
+  const reading = question.reading?.trim() ?? "";
+  return Boolean(reading) && !/^U\+[0-9A-F]{4,6}$/i.test(reading);
+}
+
 export function LessonPlayer({
   lesson,
   coachingAvailable,
@@ -846,6 +852,7 @@ export function LessonPlayer({
     ? speechPreference.voiceURI
     : "";
   const targetVoiceAvailable = speechSupported && targetVoices.length > 0;
+  const currentTraceHasPronunciation = traceHasPronunciation(currentQuestion);
   const showTargetPromptSpeaker = !(
     lettersPractice
     && currentQuestion?.type === "singleChoice"
@@ -918,7 +925,7 @@ export function LessonPlayer({
       autoSpokenTraceRef.current = null;
       return;
     }
-    if (!targetVoiceAvailable) return;
+    if (!targetVoiceAvailable || !currentTraceHasPronunciation) return;
     const skipCount = retryState.skipsByQuestion[currentQuestion.id] ?? 0;
     const speechKey = `${currentQuestion.id}\u0000${displayedAttempt}\u0000${skipCount}`;
     if (autoSpokenTraceRef.current === speechKey) return;
@@ -927,6 +934,7 @@ export function LessonPlayer({
     currentQuestion?.id,
     currentQuestion?.type,
     displayedAttempt,
+    currentTraceHasPronunciation,
     retryState.skipsByQuestion,
     targetVoiceAvailable,
   ]);
@@ -1097,7 +1105,7 @@ export function LessonPlayer({
                 answerInputMode={answerInputMode}
                 onAnswerActivate={speakActivatedAnswer}
                 repeatSelectedChoiceSpeech={lettersPractice}
-                onSpeakTarget={targetVoiceAvailable ? speak : undefined}
+                onSpeakTarget={targetVoiceAvailable && currentTraceHasPronunciation ? speak : undefined}
                 onSpeakingChange={setSpeaking}
                 onRequireAlternate={() => useCurrentAlternate("This exercise is not supported on this device.")}
                 onComplete={completeInteractiveQuestion}
