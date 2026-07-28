@@ -498,6 +498,14 @@
   opacity: .32;
   filter: saturate(.25);
 }
+.pair-grid-row > button.is-match-correct {
+  color: #237a4c;
+  background: rgba(47, 158, 96, .18);
+  border-color: #2f9e60;
+  opacity: 1;
+  filter: none;
+  animation: matching-success .35s ease-out;
+}
 .categorize-matching { display: grid; gap: 15px; outline: none; }
 .categorize-matching:focus-visible { outline: 2px solid var(--accent-readable, var(--accent, #6e5de7)); outline-offset: 4px; border-radius: 11px; }
 .categorize-items { display: grid; gap: 8px; }
@@ -554,6 +562,10 @@
 @keyframes matching-error {
   0%, 100% { transform: translateX(0); }
   50% { transform: translateX(4px); }
+}
+@keyframes matching-success {
+  0%, 100% { transform: scale(1); }
+  45% { transform: scale(1.025); }
 }
 
 .open-response,
@@ -776,6 +788,7 @@
 .tracing-status-row { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 12px; }
 
 @media (prefers-reduced-motion: reduce) {
+  .pair-grid-row > button.is-match-correct { animation: none; }
   .stroke-guide-handle { animation: none; }
 }
 
@@ -1504,14 +1517,25 @@
 .lesson-speed-ticks > span:last-child { transform: translateX(-100%); }
 
 .glossary-term {
+  position: relative;
+  display: inline-block;
   padding-bottom: .16em;
   cursor: help;
-  background-image: radial-gradient(circle, currentColor 1px, transparent 1.25px);
-  background-position: 0 100%;
-  background-repeat: repeat-x;
-  background-size: 6px 2px;
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
+}
+.glossary-term::after {
+  position: absolute;
+  right: .14em;
+  bottom: .03em;
+  left: .14em;
+  height: 2px;
+  background-image: radial-gradient(circle, currentColor 1px, transparent 1.25px);
+  background-position: left center;
+  background-repeat: repeat-x;
+  background-size: 6px 2px;
+  content: "";
+  pointer-events: none;
 }
 
 .glossary-term ruby,

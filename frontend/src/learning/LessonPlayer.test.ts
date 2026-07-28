@@ -322,6 +322,11 @@ describe("fullscreen lesson player", () => {
       button("mizu").click();
       await Promise.resolve();
     });
+    expect(document.querySelectorAll(".pair-grid-row > button.is-match-correct")).toHaveLength(2);
+    expect(document.querySelector(".lesson-feedback-tray")).toBeNull();
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 360));
+    });
 
     const continueButton = button("Continue");
     expect(document.querySelector(".lesson-feedback-tray.is-correct")).not.toBeNull();
@@ -375,6 +380,11 @@ describe("fullscreen lesson player", () => {
     await pressMatchingItem("tea");
     await pressMatchingItem("ocha");
     expect(document.querySelectorAll(".pair-grid-row > button.is-locked")).toHaveLength(4);
+    expect(document.querySelectorAll(".pair-grid-row > button.is-match-correct")).toHaveLength(4);
+    expect(document.querySelector(".lesson-feedback-tray")).toBeNull();
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 360));
+    });
     expect(document.querySelector(".lesson-feedback-tray.is-correct")).not.toBeNull();
   });
 

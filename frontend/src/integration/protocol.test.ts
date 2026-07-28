@@ -51,8 +51,8 @@ describe("extension protocol v8 prompts", () => {
     expect(prompt).toContain("schemaVersion:7");
     expect(prompt).toContain("exactly one entry in questionAlternates");
     expect(prompt).toContain('answerBank:{tokens[{id,label}],separator:"space"|"none",defaultMode:"keyboard"|"bank"}');
-    expect(prompt).toContain("one atomic word, particle, or short lexical unit");
-    expect(prompt).toContain("referenceAnswer must be reconstructable exactly");
+    expect(prompt).toContain("short grammatical chunk containing no more than two lexical units");
+    expect(prompt).toContain("sentenceTransformation, and sentence-sized dictation answers must be reconstructable exactly");
     expect(prompt).toContain("otherMeanings?,forms?,aliases?,pronunciation?:{native?,romanized?}");
     expect(prompt).toContain("Glossary must cover every letter/number-bearing part");
     expect(prompt).toContain("glossaryTargets must list every exact visible target-language string");

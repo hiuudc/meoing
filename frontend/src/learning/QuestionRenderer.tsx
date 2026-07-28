@@ -1266,6 +1266,8 @@ interface PairItem {
   rightText: string;
 }
 
+const MATCHING_SUCCESS_MS = 350;
+
 function stableShuffle<T extends { rightId: string }>(items: T[], seed: string): T[] {
   const hash = (value: string) => [...value].reduce((total, character) => ((total * 31) + character.charCodeAt(0)) | 0, 7);
   return [...items].sort((left, right) => hash(`${seed}:${left.rightId}`) - hash(`${seed}:${right.rightId}`));
@@ -1299,7 +1301,10 @@ export function PairMatchingResponse({
   const [selectedLeft, setSelectedLeft] = useState("");
   const [selectedRight, setSelectedRight] = useState("");
   const [wrong, setWrong] = useState<string[]>([]);
+  const [correct, setCorrect] = useState<string[]>([]);
+  const [announcement, setAnnouncement] = useState("");
   const timeoutRef = useRef<number | null>(null);
+  const successTimeoutsRef = useRef(new Map<string, number>());
   const numberTimerRef = useRef<number | null>(null);
   const numberBufferRef = useRef("");
   const groupRef = useRef<HTMLDivElement>(null);
@@ -1308,6 +1313,8 @@ export function PairMatchingResponse({
 
   useEffect(() => () => {
     if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
+    successTimeoutsRef.current.forEach((timeout) => window.clearTimeout(timeout));
+    successTimeoutsRef.current.clear();
     if (numberTimerRef.current !== null) window.clearTimeout(numberTimerRef.current);
   }, []);
 
@@ -1318,15 +1325,27 @@ export function PairMatchingResponse({
       onChange(next);
       setSelectedLeft("");
       setSelectedRight("");
-      window.requestAnimationFrame(() => {
-        groupRef.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus({ preventScroll: true });
-      });
-      if (pairs.every((candidate) => next[candidate.leftId] === candidate.rightId)) {
-        window.queueMicrotask(() => onComplete?.(next));
-      }
+      setCorrect((current) => [...new Set([...current, leftId, rightId])]);
+      setAnnouncement(`Correct match: ${pair.leftText} and ${pair.rightText}.`);
+      const complete = pairs.every((candidate) => next[candidate.leftId] === candidate.rightId);
+      const previousTimeout = successTimeoutsRef.current.get(leftId);
+      if (previousTimeout !== undefined) window.clearTimeout(previousTimeout);
+      const successTimeout = window.setTimeout(() => {
+        successTimeoutsRef.current.delete(leftId);
+        setCorrect((current) => current.filter((id) => id !== leftId && id !== rightId));
+        if (complete) {
+          onComplete?.(next);
+          return;
+        }
+        window.requestAnimationFrame(() => {
+          groupRef.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus({ preventScroll: true });
+        });
+      }, MATCHING_SUCCESS_MS);
+      successTimeoutsRef.current.set(leftId, successTimeout);
       return;
     }
     setWrong([leftId, rightId]);
+    setAnnouncement("Those items do not match. Try again.");
     if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
     timeoutRef.current = window.setTimeout(() => {
       setWrong([]);
@@ -1405,7 +1424,7 @@ export function PairMatchingResponse({
             <div className="pair-grid-row" key={`${pair.leftId}-${rightPair.rightId}`}>
               <button
                 type="button"
-                className={`${selectedLeft === pair.leftId ? "is-selected " : ""}${wrong.includes(pair.leftId) ? "is-wrong " : ""}${locked ? "is-locked" : ""}`}
+                className={`${selectedLeft === pair.leftId ? "is-selected " : ""}${wrong.includes(pair.leftId) ? "is-wrong " : ""}${correct.includes(pair.leftId) ? "is-match-correct " : ""}${locked ? "is-locked" : ""}`}
                 aria-pressed={selectedLeft === pair.leftId}
                 onClick={() => chooseLeft(pair)}
                 disabled={disabled || locked}
@@ -1422,7 +1441,7 @@ export function PairMatchingResponse({
               </button>
               <button
                 type="button"
-                className={`${selectedRight === rightPair.rightId ? "is-selected " : ""}${wrong.includes(rightPair.rightId) ? "is-wrong " : ""}${rightLocked ? "is-locked" : ""}`}
+                className={`${selectedRight === rightPair.rightId ? "is-selected " : ""}${wrong.includes(rightPair.rightId) ? "is-wrong " : ""}${correct.includes(rightPair.rightId) ? "is-match-correct " : ""}${rightLocked ? "is-locked" : ""}`}
                 aria-pressed={selectedRight === rightPair.rightId}
                 onClick={() => chooseRight(rightPair)}
                 disabled={disabled || rightLocked}
@@ -1435,7 +1454,7 @@ export function PairMatchingResponse({
           );
         })}
       </div>
-      <p className="sr-only" aria-live="polite">{wrong.length ? "Those items do not match. Try again." : ""}</p>
+      <p className="sr-only" aria-live="polite">{announcement}</p>
     </div>
   );
 }

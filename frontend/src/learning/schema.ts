@@ -104,6 +104,55 @@ function hasWholeReferenceToken(
   return tokens.some((token) => normalizeBankComposition(token.label) === reference);
 }
 
+function whitespaceLexicalUnitCount(value: string): number {
+  return value.trim().split(/\s+/u).filter(Boolean).length;
+}
+
+function needsSentenceBankComposition(value: string, lexicalUnitCount = whitespaceLexicalUnitCount(value)): boolean {
+  return sentenceEndingPunctuation.test(value.trim()) || lexicalUnitCount > 2;
+}
+
+function expectedSentenceBankAnswers(question: {
+  type: string;
+  referenceAnswer?: string;
+  acceptedAnswers?: string[];
+}): string[] {
+  if (question.type === "translation" || question.type === "shortAnswer") {
+    return question.referenceAnswer ? [question.referenceAnswer] : [];
+  }
+  if (
+    question.type === "errorCorrection"
+    || question.type === "sentenceTransformation"
+    || question.type === "dictation"
+  ) {
+    return question.acceptedAnswers ?? [];
+  }
+  return [];
+}
+
+function isDeclaredBlankAnswerToken(
+  question: {
+    type: string;
+    acceptedAnswers?: string[];
+    blanks?: Array<{ acceptedAnswers: string[] }>;
+  },
+  label: string,
+): boolean {
+  const normalizedLabel = normalizeBankComposition(label);
+  if (!normalizedLabel) return false;
+  if (question.type === "fillBlank") {
+    return question.acceptedAnswers?.some(
+      (answer) => normalizeBankComposition(answer) === normalizedLabel,
+    ) ?? false;
+  }
+  if (question.type === "multiCloze") {
+    return question.blanks?.some((blank) => blank.acceptedAnswers.some(
+      (answer) => normalizeBankComposition(answer) === normalizedLabel,
+    )) ?? false;
+  }
+  return false;
+}
+
 const baseFields = {
   id,
   prompt: plainText,
@@ -223,29 +272,35 @@ export const lessonQuestionSchema = z.discriminatedUnion("type", [
           message: "Answer-bank tokens must not include sentence-ending punctuation.",
         });
       }
+      if (
+        whitespaceLexicalUnitCount(token.label) > 2
+        && !isDeclaredBlankAnswerToken(question, token.label)
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["answerBank", "tokens", index, "label"],
+          message: "Answer-bank tokens must contain at most two lexical units.",
+        });
+      }
     });
-    if (question.type === "translation" || question.type === "shortAnswer") {
-      const referenceWordCount = question.referenceAnswer.trim().split(/\s+/u).filter(Boolean).length;
-      const needsMultipleTokens = referenceWordCount > 1
-        || sentenceEndingPunctuation.test(question.referenceAnswer.trim());
-      if (needsMultipleTokens && hasWholeReferenceToken(question.referenceAnswer, question.answerBank.tokens)) {
-        context.addIssue({
-          code: "custom",
-          path: ["answerBank", "tokens"],
-          message: `${question.type} answer banks cannot contain the complete multi-word reference answer in one token.`,
-        });
-      }
-      if (!answerBankCanCompose(
-        question.referenceAnswer,
-        question.answerBank.tokens,
-        needsMultipleTokens ? 2 : 1,
-      )) {
-        context.addIssue({
-          code: "custom",
-          path: ["answerBank", "tokens"],
-          message: `${question.type} answer-bank tokens must compose the referenceAnswer exactly in the same order.`,
-        });
-      }
+    const sentenceAnswers = expectedSentenceBankAnswers(question)
+      .filter((answer) => needsSentenceBankComposition(answer));
+    if (sentenceAnswers.some((answer) => hasWholeReferenceToken(answer, question.answerBank!.tokens))) {
+      context.addIssue({
+        code: "custom",
+        path: ["answerBank", "tokens"],
+        message: `${question.type} answer banks cannot contain a complete sentence answer in one token.`,
+      });
+    }
+    if (
+      sentenceAnswers.length
+      && !sentenceAnswers.some((answer) => answerBankCanCompose(answer, question.answerBank!.tokens, 2))
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["answerBank", "tokens"],
+        message: `${question.type} answer-bank tokens must compose at least one complete answer exactly in the same order.`,
+      });
     }
   }
   if (question.type === "selectBlank") {
@@ -288,6 +343,17 @@ function targetHasGlossaryCoverage(target: string, glossary: Lesson["glossary"])
   ));
 }
 
+function cjkLexicalUnitCount(value: string, glossary: Lesson["glossary"]): number | undefined {
+  const segments = segmentGlossaryText(value, glossary, { mode: "lexical-cjk" });
+  if (segments.some((segment) => !segment.entry && /[\p{L}\p{N}\p{M}]/u.test(segment.text))) {
+    return undefined;
+  }
+  const count = segments.filter((segment) => (
+    segment.entry && /[\p{L}\p{N}\p{M}]/u.test(segment.text)
+  )).length;
+  return count || undefined;
+}
+
 function validateSchemaSevenQuestion(
   question: Lesson["questions"][number],
   lesson: Pick<Lesson, "targetLanguage" | "glossary">,
@@ -298,6 +364,33 @@ function validateSchemaSevenQuestion(
   }
   if (!["Japanese", "Chinese", "Korean"].includes(lesson.targetLanguage)) return errors;
   const missingPronunciation = new Set<string>();
+  question.answerBank?.tokens.forEach((token) => {
+    const lexicalUnits = cjkLexicalUnitCount(token.label, lesson.glossary);
+    if (
+      lexicalUnits !== undefined
+      && lexicalUnits > 2
+      && !isDeclaredBlankAnswerToken(question, token.label)
+    ) {
+      errors.push(`Answer-bank token ${token.label} must contain at most two CJK lexical units.`);
+    }
+  });
+  const sentenceAnswers = expectedSentenceBankAnswers(question).filter((answer) => {
+    const lexicalUnits = cjkLexicalUnitCount(answer, lesson.glossary);
+    return needsSentenceBankComposition(answer, lexicalUnits);
+  });
+  if (
+    question.answerBank
+    && sentenceAnswers.some((answer) => hasWholeReferenceToken(answer, question.answerBank!.tokens))
+  ) {
+    errors.push(`Question ${question.id} answer bank cannot contain a complete sentence answer in one token.`);
+  }
+  if (
+    question.answerBank
+    && sentenceAnswers.length
+    && !sentenceAnswers.some((answer) => answerBankCanCompose(answer, question.answerBank!.tokens, 2))
+  ) {
+    errors.push(`Question ${question.id} answer bank must compose at least one complete answer exactly in the same order.`);
+  }
   (question.glossaryTargets ?? []).forEach((target) => {
     const visibleTarget = stripBlankMarkers(target);
     const lexicalSegments = segmentGlossaryText(visibleTarget, lesson.glossary, { mode: "lexical-cjk" });
@@ -317,22 +410,6 @@ function validateSchemaSevenQuestion(
       }
     });
   });
-  if (question.type === "translation" && question.answerBank) {
-    const lexicalSegments = segmentGlossaryText(
-      question.referenceAnswer,
-      lesson.glossary,
-      { mode: "lexical-cjk" },
-    );
-    const lexicalCount = lexicalSegments.filter((segment) => segment.entry).length;
-    if (lexicalCount >= 2) {
-      if (hasWholeReferenceToken(question.referenceAnswer, question.answerBank.tokens)) {
-        errors.push(`Translation question ${question.id} cannot put the complete CJK reference answer in one bank token.`);
-      }
-      if (!answerBankCanCompose(question.referenceAnswer, question.answerBank.tokens, 2)) {
-        errors.push(`Translation question ${question.id} answer-bank tokens must compose the CJK reference answer from lexical tokens.`);
-      }
-    }
-  }
   missingPronunciation.forEach((term) => {
     errors.push(`Target-language glossary term ${term} needs pronunciation metadata.`);
   });

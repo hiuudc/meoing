@@ -1,4 +1,5 @@
 import { getSupportedLanguage, type SupportedLanguage } from "./languages";
+import { segmentGlossaryText } from "./glossary";
 import { decorateLessonPresentation } from "./questionSettings";
 import type {
   GlossaryEntry,
@@ -513,6 +514,36 @@ function replaceFirst(text: string, value: string, replacement: string): string 
   return index < 0 ? text : `${text.slice(0, index)}${replacement}${text.slice(index + value.length)}`;
 }
 
+function sentenceBankUnits(
+  text: string,
+  target: DemoLanguageContent,
+  glossary: GlossaryEntry[],
+): string[] {
+  const withoutTerminalPunctuation = text.replace(/[.!?。！？…]+$/u, "").trim();
+  if (target.separator === "none") {
+    const segments = segmentGlossaryText(withoutTerminalPunctuation, glossary, { mode: "lexical-cjk" });
+    const units = segments
+      .filter((segment) => segment.entry && /[\p{L}\p{N}\p{M}]/u.test(segment.text))
+      .map((segment) => segment.text.trim())
+      .filter(Boolean);
+    const uncovered = segments.some((segment) => (
+      !segment.entry && /[\p{L}\p{N}\p{M}]/u.test(segment.text)
+    ));
+    if (units.length && !uncovered) return units;
+  }
+  return withoutTerminalPunctuation.match(
+    /[\p{L}\p{N}\p{M}]+(?:['’-][\p{L}\p{N}\p{M}]+)*/gu,
+  ) ?? [];
+}
+
+function coveredGlossaryTargets(values: string[], glossary: GlossaryEntry[]): string[] {
+  return [...new Set(values)].filter((value) => (
+    segmentGlossaryText(value, glossary).every((segment) => (
+      Boolean(segment.entry) || !/[\p{L}\p{N}\p{M}]/u.test(segment.text)
+    ))
+  ));
+}
+
 export function createLocalPreviewLesson(unitId: string, unitName: string, profile: LearningProfile): Lesson {
   const prefix = `${unitId}-preview`;
   const target = contentFor(profile.targetLanguage);
@@ -522,14 +553,33 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
   const hint = copy.hint;
   const blankWater = replaceFirst(target.drinkWater, target.water, "{{blank}}");
   const selectWater = replaceFirst(target.drinkWater, target.water, "{{blank}}");
-  const clozeBlanks = target.tokens.slice(1).map((token, index) => ({
-    id: `blank-${target.tokenConcepts[index + 1]}`,
-    acceptedAnswers: [token],
-  }));
+  const clozeConcepts = new Set<DemoTokenConcept>(["water", "drink"]);
+  const clozeBlanks = target.tokens.flatMap((token, index) => {
+    const concept = target.tokenConcepts[index];
+    return clozeConcepts.has(concept) ? [{
+      id: `blank-${concept}`,
+      acceptedAnswers: [token],
+    }] : [];
+  });
   const clozeSentence = target.tokens.map((token, index) => (
-    index === 0 ? token : `{{blank:${clozeBlanks[index - 1].id}}}`
+    clozeConcepts.has(target.tokenConcepts[index])
+      ? `{{blank:blank-${target.tokenConcepts[index]}}}`
+      : token
   )).join(target.separator === "none" ? "" : " ");
   const glossary = uniqueGlossary(target, source);
+  const drinkTeaUnits = sentenceBankUnits(target.drinkTea, target, glossary);
+  const askWaterUnits = sentenceBankUnits(target.askWater, target, glossary);
+  const morningUnits = sentenceBankUnits(target.morning, target, glossary);
+  const writingUnits = [...new Set([
+    ...sentenceBankUnits(target.hello, target, glossary),
+    ...morningUnits,
+    ...sentenceBankUnits(target.thanks, target, glossary),
+    target.water,
+    target.tea,
+    target.student,
+    target.teacher,
+    ...target.tokens,
+  ])];
   const answerBank = (
     values: string[],
     idPrefix: string,
@@ -710,7 +760,7 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
       incorrectText: target.drinkTea,
       acceptedAnswers: [target.drinkTea],
       match: { ignorePunctuation: true },
-      answerBank: answerBank([target.drinkTea, ...target.tokens, target.water, target.tea], "correction"),
+      answerBank: answerBank([...drinkTeaUnits, target.water, target.student], "correction"),
       glossaryTargets: [target.drinkTea, ...target.tokens, target.water, target.tea],
     }, 14),
     question({
@@ -722,10 +772,10 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
       constraint: copy.prompts.sentenceTransformation,
       acceptedAnswers: [target.askWater],
       match: { ignorePunctuation: true },
-      answerBank: answerBank([target.askWater, target.drinkWater, target.water, target.tea], "transform"),
+      answerBank: answerBank([...askWaterUnits, target.tea, target.teacher], "transform"),
       glossaryTargets: [
         target.drinkWater,
-        target.askWater.trim().replace(/[.!?。！？…]+$/u, ""),
+        ...coveredGlossaryTargets(askWaterUnits, glossary),
         target.water,
         target.tea,
       ],
@@ -737,7 +787,7 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
       transcript: target.morning,
       acceptedAnswers: [target.morning],
       match: { ignorePunctuation: true },
-      answerBank: answerBank([target.morning, target.hello, target.thanks, target.water], "dictation"),
+      answerBank: answerBank([...morningUnits, target.hello, target.thanks, target.water], "dictation"),
       glossaryTargets: [target.morning, target.hello, target.thanks, target.water],
     }, 16),
     question({
@@ -747,19 +797,10 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
       minWords: 2,
       maxWords: 30,
       rubric: [copy.objective],
-      supportBank: [
-        target.hello, target.morning, target.thanks, target.water,
-        target.tea, target.student, target.teacher, target.drinkWater,
-      ].map((label, index) => ({ id: `support-${index}`, label })),
+      supportBank: writingUnits.map((label, index) => ({ id: `support-${index}`, label })),
       supportBankSeparator: target.separator,
-      answerBank: answerBank([
-        target.hello, target.morning, target.thanks, target.water,
-        target.tea, target.student, target.teacher, target.drinkWater,
-      ], "writing", "keyboard"),
-      glossaryTargets: [
-        target.hello, target.morning, target.thanks, target.water,
-        target.tea, target.student, target.teacher, target.drinkWater,
-      ],
+      answerBank: answerBank(writingUnits, "writing", "keyboard"),
+      glossaryTargets: coveredGlossaryTargets(writingUnits, glossary),
     }, 17),
     question({
       type: "speakingRepeat",

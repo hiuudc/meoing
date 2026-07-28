@@ -164,18 +164,18 @@ describe("LearningWorkspace bridge v8 gate", () => {
     expect(document.body.textContent).not.toContain("Learning profile");
   });
 
-  it("locks Learn when protocol v8 comes from extension 8.0.2", async () => {
+  it("locks Learn when protocol v8 comes from extension 8.0.3", async () => {
     await renderWithCompatibility({
       state: "outdated",
       version: 8,
       integration: {
         installed: true,
-        extensionVersion: "8.0.2",
+        extensionVersion: "8.0.3",
         pausedForQuota: false,
         queueLength: 0,
       },
     });
-    expect(document.querySelector(".learning-bridge-gate")?.textContent).toContain("Version 8.0.2 was detected");
+    expect(document.querySelector(".learning-bridge-gate")?.textContent).toContain("Version 8.0.3 was detected");
     expect(document.body.textContent).toContain(`Update Meoi Bridge to ${MEOI_EXTENSION_MIN_VERSION}`);
     expect(document.body.textContent).not.toContain("Player demo");
   });

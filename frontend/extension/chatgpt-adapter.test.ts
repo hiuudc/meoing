@@ -366,8 +366,47 @@ describe("strict ChatGPT result parsing", () => {
     expect(parsed).toMatchObject({ ok: false, code: "INVALID_RESULT_SCHEMA" });
     if (!parsed.ok) {
       const reason = resultParseFailureReason(parsed);
-      expect(reason).toContain("complete multi-word reference answer");
+      expect(reason).toContain("complete sentence answer");
       expect(reason).toContain("sentence-ending punctuation");
+    }
+  });
+
+  it("rejects an Error Correction bank that puts the complete sentence in one token", () => {
+    const lesson = generatedPreviewLesson();
+    const breakErrorCorrection = (question: LessonQuestion): LessonQuestion => {
+      if (question.type !== "errorCorrection") return question;
+      return {
+        ...question,
+        answerBank: {
+          tokens: [
+            { id: "whole-answer", label: question.acceptedAnswers[0].replace(/[.!?。！？…]+$/u, "") },
+            { id: "distractor", label: "tea" },
+          ],
+          separator: "space" as const,
+          defaultMode: "bank" as const,
+        },
+      };
+    };
+    const brokenLesson = {
+      ...lesson,
+      questions: lesson.questions.map(breakErrorCorrection),
+      questionAlternates: lesson.questionAlternates.map((alternate) => ({
+        ...alternate,
+        question: breakErrorCorrection(alternate.question),
+      })),
+    };
+    const parsed = parse(JSON.stringify({
+      type: "meoi.operation.result",
+      protocolVersion: 8,
+      operationId: "op-1",
+      kind: "create_lesson",
+      outcome: "completed",
+      result: { lesson: brokenLesson },
+    }), "op-1", "create_lesson");
+
+    expect(parsed).toMatchObject({ ok: false, code: "INVALID_RESULT_SCHEMA" });
+    if (!parsed.ok) {
+      expect(resultParseFailureReason(parsed)).toContain("complete sentence answer");
     }
   });
 

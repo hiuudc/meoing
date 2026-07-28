@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createLocalPreviewLesson } from "./demoLesson";
-import { detectBrowserLanguage } from "./languages";
+import { detectBrowserLanguage, SUPPORTED_LANGUAGE_NAMES } from "./languages";
 import { gradeAnswer, normalizeAnswer } from "./grader";
 import { segmentGlossaryText } from "./glossary";
 import { parseMultiClozeTemplate, validateMultiClozeMarkers } from "./multiCloze";
@@ -266,6 +266,42 @@ describe("lesson schema", () => {
     expect(parseMultiClozeTemplate("__ drinks __.", ["subject", "object"])).toBeNull();
   });
 
+  it("builds exactly two semantic preview blanks for every target language", () => {
+    SUPPORTED_LANGUAGE_NAMES.forEach((targetLanguage) => {
+      const preview = createLocalPreviewLesson(`unit-${targetLanguage}`, targetLanguage, {
+        ...DEFAULT_LEARNING_PROFILE,
+        sourceLanguage: "English",
+        targetLanguage,
+        speakingEnabled: false,
+        lessonQuestionCount: 15,
+      });
+      const cloze = preview.questions.find(
+        (question): question is Extract<LessonQuestion, { type: "multiCloze" }> => question.type === "multiCloze",
+      )!;
+
+      expect(new Set(cloze.blanks.map((blank) => blank.id)))
+        .toEqual(new Set(["blank-water", "blank-drink"]));
+      expect(cloze.template.match(/\{\{blank:[^{}]+\}\}/g)).toHaveLength(2);
+      expect(validateMultiClozeMarkers(cloze.template, cloze.blanks.map((blank) => blank.id))).toEqual([]);
+    });
+
+    const japanese = createLocalPreviewLesson("unit-ja-two-blanks", "Japanese", {
+      ...DEFAULT_LEARNING_PROFILE,
+      sourceLanguage: "English",
+      targetLanguage: "Japanese",
+      speakingEnabled: false,
+      lessonQuestionCount: 15,
+    });
+    const japaneseCloze = japanese.questions.find(
+      (question): question is Extract<LessonQuestion, { type: "multiCloze" }> => question.type === "multiCloze",
+    )!;
+    expect(japaneseCloze.template).toBe(
+      "\u79c1\u306f{{blank:blank-water}}\u3092{{blank:blank-drink}}",
+    );
+    expect(japaneseCloze.blanks.map((blank) => blank.acceptedAnswers[0]))
+      .toEqual(["\u6c34", "\u98f2\u307f\u307e\u3059"]);
+  });
+
   it("rejects sentence-sized, punctuated, or incomplete Translation banks", () => {
     const translation = lesson.questions.find(
       (question): question is Extract<LessonQuestion, { type: "translation" }> => question.type === "translation",
@@ -281,7 +317,7 @@ describe("lesson schema", () => {
           { id: "distractor", label: "tea" },
         ],
       },
-    })).toThrow(/complete multi-word reference answer/);
+    })).toThrow(/complete sentence answer/);
 
     expect(() => lessonQuestionSchema.parse({
       ...translation,
@@ -299,7 +335,119 @@ describe("lesson schema", () => {
         ...bank,
         tokens: bank.tokens.filter((token) => token.label.toLocaleLowerCase() !== "water"),
       },
-    })).toThrow(/compose the referenceAnswer exactly/);
+    })).toThrow(/compose at least one complete answer exactly/);
+
+    expect(() => lessonQuestionSchema.parse({
+      ...translation,
+      answerBank: {
+        ...bank,
+        tokens: [
+          { id: "subject-verb", label: "I drink" },
+          { id: "object", label: "water" },
+        ],
+      },
+    })).not.toThrow();
+  });
+
+  it("allows a longer token only when it exactly fills one declared blank", () => {
+    const fillBlank = questions.find(
+      (question): question is Extract<LessonQuestion, { type: "fillBlank" }> => question.type === "fillBlank",
+    )!;
+
+    expect(() => lessonQuestionSchema.parse({
+      ...fillBlank,
+      template: "Stand {{blank}} me.",
+      acceptedAnswers: ["in front of"],
+      answerBank: {
+        tokens: [
+          { id: "correct", label: "in front of" },
+          { id: "distractor", label: "behind" },
+        ],
+        separator: "space",
+        defaultMode: "bank",
+      },
+    })).not.toThrow();
+
+    expect(() => lessonQuestionSchema.parse({
+      ...fillBlank,
+      acceptedAnswers: ["water"],
+      answerBank: {
+        tokens: [
+          { id: "sentence", label: "I drink water" },
+          { id: "distractor", label: "tea" },
+        ],
+        separator: "space",
+        defaultMode: "bank",
+      },
+    })).toThrow(/at most two lexical units/);
+  });
+
+  it("rejects complete sentence tokens across deterministic written-answer banks", () => {
+    const deterministic = [
+      {
+        ...questions.find((question) => question.type === "errorCorrection")!,
+        answerBank: {
+          tokens: [
+            { id: "whole", label: "He goes home" },
+            { id: "distractor", label: "away" },
+          ],
+          separator: "space" as const,
+          defaultMode: "bank" as const,
+        },
+      },
+      {
+        ...questions.find((question) => question.type === "sentenceTransformation")!,
+        answerBank: {
+          tokens: [
+            { id: "whole", label: "Work starts at nine" },
+            { id: "distractor", label: "ten" },
+          ],
+          separator: "space" as const,
+          defaultMode: "bank" as const,
+        },
+      },
+      {
+        ...questions.find((question) => question.type === "dictation")!,
+        transcript: "I drink water.",
+        acceptedAnswers: ["I drink water."],
+        answerBank: {
+          tokens: [
+            { id: "whole", label: "I drink water" },
+            { id: "distractor", label: "tea" },
+          ],
+          separator: "space" as const,
+          defaultMode: "bank" as const,
+        },
+      },
+    ];
+
+    deterministic.forEach((question) => {
+      expect(() => lessonQuestionSchema.parse(question)).toThrow(/complete sentence answer/);
+    });
+  });
+
+  it("keeps preview sentence banks composable without whole-answer tokens", () => {
+    const japanese = createLocalPreviewLesson("unit-ja-banks", "Japanese", {
+      ...DEFAULT_LEARNING_PROFILE,
+      sourceLanguage: "English",
+      targetLanguage: "Japanese",
+      speakingEnabled: false,
+      lessonQuestionCount: 15,
+    });
+    const normalize = (value: string) => value.normalize("NFKC").replace(/[\p{P}\p{S}\s]+/gu, "");
+
+    japanese.questions.forEach((question) => {
+      if (!["translation", "errorCorrection", "sentenceTransformation", "freeWriting"].includes(question.type)) return;
+      const bankLabels = question.answerBank?.tokens.map((token) => normalize(token.label)) ?? [];
+      const completeAnswers = question.type === "translation"
+        ? [question.referenceAnswer]
+        : question.type === "errorCorrection" || question.type === "sentenceTransformation"
+          ? question.acceptedAnswers
+          : ["\u79c1\u306f\u6c34\u3092\u98f2\u307f\u307e\u3059\u3002"];
+      completeAnswers.forEach((answer) => {
+        expect(bankLabels).not.toContain(normalize(answer));
+      });
+    });
   });
 
   it("rejects CJK sentence coverage that only has a whole-sentence glossary entry", () => {

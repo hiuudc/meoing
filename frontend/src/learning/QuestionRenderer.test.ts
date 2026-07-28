@@ -98,9 +98,18 @@ describe("QuestionRenderer interactions", () => {
     await act(async () => button("nước").click());
     expect(document.querySelector("#answer-value")?.textContent).toContain('"water":"nuoc"');
     expect(document.querySelectorAll(".pair-grid-row > button.is-locked")).toHaveLength(2);
+    expect(document.querySelectorAll(".pair-grid-row > button.is-match-correct")).toHaveLength(2);
+    expect(document.querySelector('[aria-live="polite"]')?.textContent).toContain("Correct match");
+
+    await act(async () => vi.advanceTimersByTime(349));
+    expect(document.querySelectorAll(".pair-grid-row > button.is-match-correct")).toHaveLength(2);
+    await act(async () => vi.advanceTimersByTime(1));
+    expect(document.querySelectorAll(".pair-grid-row > button.is-match-correct")).toHaveLength(0);
+    expect(document.querySelectorAll(".pair-grid-row > button.is-locked")).toHaveLength(2);
   });
 
   it("selects matching badges from number and numpad keys and completes after the final pair", async () => {
+    vi.useFakeTimers();
     const onComplete = vi.fn();
     const question: LessonQuestion = {
       id: "number-matching",
@@ -133,12 +142,11 @@ describe("QuestionRenderer interactions", () => {
       }));
       await Promise.resolve();
     });
-    await act(async () => new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve())));
     expect(document.querySelectorAll(".pair-grid-row > button.is-locked")).toHaveLength(2);
+    expect(document.querySelectorAll(".pair-grid-row > button.is-match-correct")).toHaveLength(2);
     expect(onComplete).not.toHaveBeenCalled();
-    expect(document.activeElement).toBeInstanceOf(HTMLButtonElement);
-    expect((document.activeElement as HTMLButtonElement).disabled).toBe(false);
-    expect(group.contains(document.activeElement)).toBe(true);
+    await act(async () => vi.advanceTimersByTime(350));
+    expect(document.querySelectorAll(".pair-grid-row > button.is-match-correct")).toHaveLength(0);
 
     await act(async () => group.dispatchEvent(
       new KeyboardEvent("keydown", { bubbles: true, code: "Digit2", key: "2" }),
@@ -154,6 +162,9 @@ describe("QuestionRenderer interactions", () => {
     });
     expect(document.querySelectorAll(".pair-grid-row")).toHaveLength(2);
     expect(document.querySelectorAll(".pair-grid-row > button.is-locked")).toHaveLength(4);
+    expect(document.querySelectorAll(".pair-grid-row > button.is-match-correct")).toHaveLength(2);
+    expect(onComplete).not.toHaveBeenCalled();
+    await act(async () => vi.advanceTimersByTime(350));
     expect(onComplete).toHaveBeenCalledTimes(1);
     expect(onComplete).toHaveBeenCalledWith({ one: "uno", two: "dos" });
   });
@@ -911,5 +922,39 @@ describe("QuestionRenderer interactions", () => {
     await act(async () => document.querySelector<HTMLElement>(".glossary-term")!.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
     expect(document.querySelector(".glossary-tooltip")?.textContent).toContain("nước");
     expect(onTermActivate).toHaveBeenCalledWith("water");
+  });
+
+  it("marks only interactive lexical segments as independently underlined glossary terms", async () => {
+    const text = "\u79c1\u306f\u6c34\u3092\u98f2\u307f\u307e\u3059\u3002";
+    const glossary = [
+      { term: "\u79c1", meaning: "I" },
+      { term: "\u306f", meaning: "topic marker" },
+      { term: "\u6c34", meaning: "water" },
+      { term: "\u3092", meaning: "object marker" },
+      { term: "\u98f2\u307f\u307e\u3059", meaning: "drink" },
+    ];
+    await render(createElement(GlossaryText, {
+      text,
+      glossary,
+      tooltipsEnabled: true,
+      interactive: true,
+      segmentationMode: "lexical-cjk",
+    }));
+
+    expect(Array.from(document.querySelectorAll(".glossary-term")).map((term) => term.textContent))
+      .toEqual(["\u79c1", "\u306f", "\u6c34", "\u3092", "\u98f2\u307f\u307e\u3059"]);
+    const punctuation = Array.from(document.querySelectorAll<HTMLElement>("#mount > span"))
+      .find((segment) => segment.textContent === "\u3002");
+    expect(punctuation?.className).toBe("");
+
+    await act(async () => root!.render(createElement(GlossaryText, {
+      text,
+      glossary,
+      tooltipsEnabled: true,
+      interactive: false,
+      segmentationMode: "lexical-cjk",
+    })));
+    expect(document.querySelectorAll(".glossary-term")).toHaveLength(0);
+    expect(document.querySelectorAll(".glossary-pronunciation")).toHaveLength(5);
   });
 });

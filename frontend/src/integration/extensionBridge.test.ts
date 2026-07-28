@@ -200,7 +200,7 @@ describe("ExtensionBridge compatibility detection", () => {
     });
   });
 
-  it("locks protocol v8 when extension 8.0.2 is installed or the patch is not reported", async () => {
+  it("locks protocol v8 when extension 8.0.3 is installed or the patch is not reported", async () => {
     vi.useFakeTimers();
     const postMessage = vi.spyOn(window, "postMessage").mockImplementation((message: unknown) => {
       const request = message as {
@@ -218,7 +218,7 @@ describe("ExtensionBridge compatibility detection", () => {
             nonce: request.nonce,
             requestId: request.requestId,
             ok: true,
-            data: { ...integrationStatus, extensionVersion: "8.0.2" },
+            data: { ...integrationStatus, extensionVersion: "8.0.3" },
           },
           origin: window.location.origin,
           source: window,
@@ -230,7 +230,7 @@ describe("ExtensionBridge compatibility detection", () => {
     await expect(oldPatch).resolves.toMatchObject({
       state: "outdated",
       version: 8,
-      integration: { extensionVersion: "8.0.2" },
+      integration: { extensionVersion: "8.0.3" },
     });
 
     postMessage.mockRestore();
