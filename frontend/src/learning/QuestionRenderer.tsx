@@ -1481,11 +1481,16 @@ function CategorizeResponse({
   const [selectedItemId, setSelectedItemId] = useState("");
   const [selectedCategoryId, setSelectedCategoryId] = useState("");
   const [wrong, setWrong] = useState<string[]>([]);
+  const [correct, setCorrect] = useState<string[]>([]);
+  const [announcement, setAnnouncement] = useState("");
   const timeoutRef = useRef<number | null>(null);
+  const successTimeoutsRef = useRef(new Map<string, number>());
   const groupRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => () => {
     if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
+    successTimeoutsRef.current.forEach((timeout) => window.clearTimeout(timeout));
+    successTimeoutsRef.current.clear();
   }, []);
 
   function restoreGroupFocus() {
@@ -1499,13 +1504,28 @@ function CategorizeResponse({
       onChange(next);
       setSelectedItemId("");
       setSelectedCategoryId("");
-      if (question.items.every((candidate) => next[candidate.id] === candidate.categoryId)) {
-        window.queueMicrotask(() => onComplete?.(next));
-      }
+      const itemKey = `item:${itemId}`;
+      const categoryKey = `category:${categoryId}`;
+      setCorrect((current) => [...new Set([...current, itemKey, categoryKey])]);
+      setAnnouncement(`Correct category: ${item.label}.`);
+      const complete = question.items.every((candidate) => next[candidate.id] === candidate.categoryId);
+      const previousTimeout = successTimeoutsRef.current.get(itemId);
+      if (previousTimeout !== undefined) window.clearTimeout(previousTimeout);
+      const successTimeout = window.setTimeout(() => {
+        successTimeoutsRef.current.delete(itemId);
+        setCorrect((current) => current.filter((key) => key !== itemKey && key !== categoryKey));
+        if (complete) {
+          onComplete?.(next);
+          return;
+        }
+        restoreGroupFocus();
+      }, MATCHING_SUCCESS_MS);
+      successTimeoutsRef.current.set(itemId, successTimeout);
       restoreGroupFocus();
       return;
     }
     setWrong([itemId, categoryId]);
+    setAnnouncement("That item does not belong in this category. Try again.");
     restoreGroupFocus();
     if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
     timeoutRef.current = window.setTimeout(() => {
@@ -1551,7 +1571,7 @@ function CategorizeResponse({
             <button
               type="button"
               key={item.id}
-              className={`${selectedItemId === item.id ? "is-selected " : ""}${wrong.includes(item.id) ? "is-wrong " : ""}${locked ? "is-locked" : ""}`}
+              className={`${selectedItemId === item.id ? "is-selected " : ""}${wrong.includes(item.id) ? "is-wrong " : ""}${correct.includes(`item:${item.id}`) ? "is-match-correct " : ""}${locked ? "is-locked" : ""}`}
               aria-pressed={selectedItemId === item.id}
               onClick={() => chooseItem(item)}
               disabled={disabled || locked}
@@ -1568,10 +1588,10 @@ function CategorizeResponse({
           <button
             type="button"
             key={category.id}
-            className={`${selectedCategoryId === category.id ? "is-selected " : ""}${wrong.includes(category.id) ? "is-wrong" : ""}`}
+            className={`${selectedCategoryId === category.id ? "is-selected " : ""}${wrong.includes(category.id) ? "is-wrong " : ""}${correct.includes(`category:${category.id}`) ? "is-match-correct" : ""}`}
             aria-pressed={selectedCategoryId === category.id}
             onClick={() => chooseCategory(category)}
-            disabled={disabled}
+            disabled={disabled || correct.includes(`category:${category.id}`)}
             data-lesson-hotkey-index={question.items.length + index + 1}
           >
             <span className="pair-index" aria-hidden="true">{question.items.length + index + 1}</span>
@@ -1579,7 +1599,7 @@ function CategorizeResponse({
           </button>
         ))}
       </div>
-      <p className="sr-only" aria-live="polite">{wrong.length ? "That item does not belong in this category. Try again." : ""}</p>
+      <p className="sr-only" aria-live="polite">{announcement}</p>
     </div>
   );
 }

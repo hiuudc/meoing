@@ -424,12 +424,22 @@ describe("fullscreen lesson player", () => {
     await pressNumber("1");
     await pressNumber("3");
     expect(document.querySelectorAll(".categorize-items button.is-locked")).toHaveLength(1);
+    expect(document.querySelectorAll(".categorize-matching button.is-match-correct")).toHaveLength(2);
     expect(document.activeElement).toBe(stage);
+    expect(document.querySelector<HTMLButtonElement>('[data-lesson-hotkey-index="3"]')?.disabled).toBe(true);
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 360));
+    });
     expect(document.querySelector<HTMLButtonElement>('[data-lesson-hotkey-index="3"]')?.disabled).toBe(false);
 
     await pressNumber("2", true);
     await pressNumber("4", true);
     expect(document.querySelectorAll(".categorize-items button.is-locked")).toHaveLength(2);
+    expect(document.querySelectorAll(".categorize-matching button.is-match-correct")).toHaveLength(2);
+    expect(document.querySelector(".lesson-feedback-tray")).toBeNull();
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 360));
+    });
     expect(document.querySelector(".lesson-feedback-tray.is-correct")).not.toBeNull();
   });
 
@@ -1144,6 +1154,79 @@ describe("fullscreen lesson player", () => {
 
     expect(spokenUtterances.map((utterance) => utterance.text)).toEqual(["\u6c34", "\u6c34", "\u304a\u8336"]);
     expect(window.speechSynthesis.cancel).toHaveBeenCalledTimes(4);
+  });
+
+  it("does not auto-read Audio Matching but speaks a selected audio tile", async () => {
+    speechVoices = [speechVoice("Japanese", "ja-JP", "voice-ja", true)];
+    const question: LessonQuestion = {
+      id: "audio-matching-no-autoplay",
+      type: "audioMatching",
+      prompt: "Match each sound to its meaning.",
+      explanation: "Match both pairs.",
+      evaluationMode: "local",
+      pairs: [
+        { audioId: "water-audio", audioText: "\u6c34", matchId: "water-meaning", label: "water" },
+        { audioId: "tea-audio", audioText: "\u304a\u8336", matchId: "tea-meaning", label: "tea" },
+      ],
+      glossaryTargets: ["\u6c34", "\u304a\u8336"],
+      presentation: { readQuestion: true, readAnswers: true, wordTooltips: false },
+    };
+    await renderPlayer({
+      lesson: {
+        ...lessonWithQuestions("audio-matching-no-autoplay-test", [question], undefined, [
+          { term: "\u6c34", meaning: "water", pronunciation: { native: "\u307f\u305a", romanized: "mizu" } },
+          { term: "\u304a\u8336", meaning: "tea", pronunciation: { native: "\u304a\u3061\u3083", romanized: "ocha" } },
+        ]),
+        targetLanguage: "Japanese",
+      },
+    });
+
+    expect(spokenUtterances).toHaveLength(0);
+    const cancelCount = vi.mocked(window.speechSynthesis.cancel).mock.calls.length;
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('[data-lesson-hotkey-index="1"]')!.click();
+    });
+
+    expect(spokenUtterances.map((utterance) => utterance.text)).toEqual(["\u6c34"]);
+    expect(window.speechSynthesis.cancel).toHaveBeenCalledTimes(cancelCount + 1);
+  });
+
+  it("renders glossary pronunciation in an incorrect answer correction", async () => {
+    const question: LessonQuestion = {
+      id: "correction-pronunciation",
+      type: "errorCorrection",
+      prompt: "Correct the sentence.",
+      incorrectText: "\u79c1\u306f\u304a\u8336\u3092\u98f2\u307f\u307e\u3059\u3002",
+      acceptedAnswers: ["\u79c1\u306f\u6c34\u3092\u98f2\u307f\u307e\u3059\u3002"],
+      explanation: "Use the requested object.",
+      evaluationMode: "local",
+      glossaryTargets: [
+        "\u79c1", "\u306f", "\u304a\u8336", "\u6c34", "\u3092", "\u98f2\u307f\u307e\u3059",
+      ],
+      presentation: { readQuestion: false, readAnswers: false, wordTooltips: true },
+    };
+    await renderPlayer({
+      lesson: {
+        ...lessonWithQuestions("correction-pronunciation-test", [question], undefined, [
+          { term: "\u79c1", meaning: "I", pronunciation: { native: "\u308f\u305f\u3057", romanized: "watashi" } },
+          { term: "\u306f", meaning: "topic marker", pronunciation: { native: "\u306f", romanized: "wa" } },
+          { term: "\u304a\u8336", meaning: "tea", pronunciation: { native: "\u304a\u3061\u3083", romanized: "ocha" } },
+          { term: "\u6c34", meaning: "water", pronunciation: { native: "\u307f\u305a", romanized: "mizu" } },
+          { term: "\u3092", meaning: "object marker", pronunciation: { native: "\u3092", romanized: "o" } },
+          { term: "\u98f2\u307f\u307e\u3059", meaning: "drink", pronunciation: { native: "\u306e\u307f\u307e\u3059", romanized: "nomimasu" } },
+        ]),
+        targetLanguage: "Japanese",
+      },
+    });
+    const input = document.querySelector<HTMLInputElement>('input[data-question-answer-input]')!;
+    await setTextValue(input, "\u79c1\u306f\u304a\u8336\u3092\u98f2\u307f\u307e\u3059\u3002");
+    await act(async () => button("Check answer").click());
+
+    const correction = Array.from(document.querySelectorAll<HTMLParagraphElement>(".lesson-feedback-copy p"))
+      .find((paragraph) => paragraph.textContent?.includes("Correction:"));
+    expect(correction).toBeDefined();
+    expect(Array.from(correction!.querySelectorAll("rt")).map((reading) => reading.textContent))
+      .toEqual(["watashi", "wa", "mizu", "o", "nomimasu"]);
   });
 
   it("hides readings but speaks every activated glyph in Letters practice", async () => {

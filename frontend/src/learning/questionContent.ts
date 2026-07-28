@@ -128,6 +128,7 @@ export function questionVisibleTexts(question: PlayableQuestion): string[] {
 }
 
 export function questionSpeechText(question: PlayableQuestion): string {
+  if (question.type === "audioMatching") return "";
   if (question.targetPrompt?.trim()) return stripBlankMarkers(question.targetPrompt);
   const targetParts = targetPartsIn(question, questionTextCandidates(question));
   if (targetParts.length) return targetParts.join(". ");

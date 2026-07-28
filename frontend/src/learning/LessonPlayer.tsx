@@ -1182,7 +1182,9 @@ export function LessonPlayer({
               <div className="lesson-feedback-copy">
                 <strong>{statusLabel(evaluation.status)} · {Math.round(evaluation.score * 100)}%</strong>
                 <p>{evaluation.explanation}</p>
-                {evaluation.status !== "correct" && evaluation.correction ? <p><b>Correction:</b> {evaluation.correction}</p> : null}
+                {evaluation.status !== "correct" && evaluation.correction ? (
+                  <p><b>Correction:</b> {renderLessonText(evaluation.correction)}</p>
+                ) : null}
                 <p className="next-hint"><Lightbulb size={14} /> {evaluation.nextHint}</p>
                 {displayedAttempt >= 3 && currentQuestion.supplementalHint && evaluation.status !== "correct" ? (
                   <p className="supplemental-hint"><CircleHelp size={14} /> {currentQuestion.supplementalHint}</p>

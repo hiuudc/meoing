@@ -784,6 +784,7 @@ describe("QuestionRenderer interactions", () => {
   });
 
   it("keeps categories reusable and completes after every item is locked", async () => {
+    vi.useFakeTimers();
     const onComplete = vi.fn();
     const question: LessonQuestion = {
       id: "categorize",
@@ -811,18 +812,29 @@ describe("QuestionRenderer interactions", () => {
 
     await act(async () => button("red").click());
     await act(async () => button("Warm colors").click());
+    expect(document.querySelectorAll(".categorize-matching button.is-match-correct")).toHaveLength(2);
+    expect(button("Warm colors").disabled).toBe(true);
+    await act(async () => vi.advanceTimersByTime(349));
+    expect(document.querySelectorAll(".categorize-matching button.is-match-correct")).toHaveLength(2);
+    await act(async () => vi.advanceTimersByTime(1));
+    expect(document.querySelectorAll(".categorize-matching button.is-match-correct")).toHaveLength(0);
     expect(button("Warm colors").disabled).toBe(false);
+
     await act(async () => button("orange").click());
     await act(async () => button("Warm colors").click());
+    expect(document.querySelectorAll(".categorize-matching button.is-match-correct")).toHaveLength(2);
+    await act(async () => vi.advanceTimersByTime(350));
     expect(button("Warm colors").disabled).toBe(false);
     expect(onComplete).not.toHaveBeenCalled();
+
     await act(async () => button("blue").click());
-    await act(async () => {
-      button("Cool colors").click();
-      await Promise.resolve();
-    });
+    await act(async () => button("Cool colors").click());
 
     expect(document.querySelectorAll(".categorize-items button.is-locked")).toHaveLength(3);
+    expect(document.querySelectorAll(".categorize-matching button.is-match-correct")).toHaveLength(2);
+    expect(onComplete).not.toHaveBeenCalled();
+    await act(async () => vi.advanceTimersByTime(350));
+    expect(document.querySelectorAll(".categorize-matching button.is-match-correct")).toHaveLength(0);
     expect(onComplete).toHaveBeenCalledTimes(1);
     expect(onComplete).toHaveBeenCalledWith({ red: "warm", orange: "warm", blue: "cool" });
   });

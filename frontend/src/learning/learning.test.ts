@@ -703,6 +703,22 @@ describe("glossary and speech preferences", () => {
     expect(answerSpeechText(question)).not.toContain("Correction");
   });
 
+  it("does not build automatic question speech for Audio Matching", () => {
+    const question: LessonQuestion = {
+      ...common,
+      id: "audio-matching-speech",
+      type: "audioMatching",
+      prompt: "Match each sound.",
+      pairs: [
+        { audioId: "water-audio", audioText: "\u6c34", matchId: "water-meaning", label: "water" },
+        { audioId: "tea-audio", audioText: "\u304a\u8336", matchId: "tea-meaning", label: "tea" },
+      ],
+      glossaryTargets: ["\u6c34", "\u304a\u8336"],
+    };
+
+    expect(questionSpeechText(question)).toBe("");
+  });
+
   it("matches inflected aliases and retains multiple meanings and pronunciation", () => {
     const entry = {
       term: "drink",
