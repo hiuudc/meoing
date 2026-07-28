@@ -1163,6 +1163,7 @@ describe("fullscreen lesson player", () => {
     });
 
     expect(document.querySelector("ruby")).toBeNull();
+    expect(document.querySelector(".lesson-target-prompt-row button")).toBeNull();
     const distractor = document.querySelector<HTMLInputElement>('input[value="vu"]')!;
     const target = document.querySelector<HTMLInputElement>('input[value="small-i"]')!;
     await act(async () => distractor.click());

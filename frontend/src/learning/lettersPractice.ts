@@ -140,17 +140,22 @@ function baseQuestion(id: string, type: PlayableQuestion["type"], prompt: string
   };
 }
 
-function visualChoiceQuestion(
+function readingChoiceQuestion(
   id: string,
   target: string,
   characters: string[],
+  metadata: ReadonlyMap<string, LettersCharacterMetadata>,
 ): SingleChoiceQuestion {
-  const options = choiceOptions(target, characters);
+  const usedDescriptors = new Set<string>();
+  const options = choiceOptions(target, characters).map((option) => ({
+    ...option,
+    label: matchingDescriptor(option.label, metadata, usedDescriptors),
+  }));
   return {
-    ...baseQuestion(id, "singleChoice", "Select the matching character."),
+    ...baseQuestion(id, "singleChoice", "Select the correct name or reading."),
     type: "singleChoice",
     targetPrompt: target,
-    glossaryTargets: options.map((option) => option.label),
+    glossaryTargets: [target],
     options,
     correctOptionId: `character-${characterKey(target)}`,
   };
@@ -166,7 +171,7 @@ function descriptorChoiceQuestion(
   const descriptor = characterMetadata?.displayLabel
     ?? characterMetadata?.reading
     ?? characterMetadata?.meaning;
-  if (!descriptor) return visualChoiceQuestion(id, target, characters);
+  if (!descriptor) return readingChoiceQuestion(id, target, characters, metadata);
   const options = choiceOptions(target, characters);
   return {
     ...baseQuestion(
@@ -324,11 +329,11 @@ export function buildLettersPracticeSession({
     register(listening, [target]);
     questionAlternates.push({
       questionId: listening.id,
-      question: visualChoiceQuestion(`${listeningId}-alternate`, target, choicePool),
+      question: readingChoiceQuestion(`${listeningId}-alternate`, target, choicePool, metadata),
     });
 
     const visualId = `${sessionId}-q${++questionNumber}-${targetKey}-visual`;
-    register(visualChoiceQuestion(visualId, target, choicePool), [target]);
+    register(readingChoiceQuestion(visualId, target, choicePool, metadata), [target]);
 
     const descriptorId = `${sessionId}-q${++questionNumber}-${targetKey}-descriptor`;
     register(descriptorChoiceQuestion(descriptorId, target, choicePool, metadata), [target]);

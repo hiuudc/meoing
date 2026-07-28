@@ -846,6 +846,11 @@ export function LessonPlayer({
     ? speechPreference.voiceURI
     : "";
   const targetVoiceAvailable = speechSupported && targetVoices.length > 0;
+  const showTargetPromptSpeaker = !(
+    lettersPractice
+    && currentQuestion?.type === "singleChoice"
+    && currentQuestion.targetPrompt?.trim()
+  );
   const questionSpeech = currentQuestion ? questionSpeechText(currentQuestion) : "";
   const separatedPrompts = currentQuestion
     ? separatedQuestionPrompts(currentQuestion)
@@ -1068,14 +1073,16 @@ export function LessonPlayer({
               </div>
               {separatedPrompts.target && !rendererOwnsTargetPrompt ? (
                 <div className="lesson-target-prompt-row">
-                  <button
-                    type="button"
-                    aria-label={`Play ${lesson.targetLanguage} prompt`}
-                    onClick={() => speak(questionSpeech || separatedPrompts.target)}
-                    disabled={!targetVoiceAvailable}
-                  >
-                    <Volume2 size={20} />
-                  </button>
+                  {showTargetPromptSpeaker ? (
+                    <button
+                      type="button"
+                      aria-label={`Play ${lesson.targetLanguage} prompt`}
+                      onClick={() => speak(questionSpeech || separatedPrompts.target)}
+                      disabled={!targetVoiceAvailable}
+                    >
+                      <Volume2 size={20} />
+                    </button>
+                  ) : null}
                   <p>{renderLessonText(separatedPrompts.target)}</p>
                 </div>
               ) : null}

@@ -69,15 +69,31 @@ describe("Letters practice sessions", () => {
     });
   });
 
-  it("marks every glyph choice as target-language speech content", () => {
+  it("asks for a reading without repeating the target glyph as its own answer", () => {
     const session = build(1);
-    const choiceQuestions = session.lesson.questions.filter((question) => (
-      question.type === "singleChoice" || question.type === "listenSelect"
+    const visual = session.lesson.questions.find((question) => (
+      question.type === "singleChoice" && Boolean(question.targetPrompt)
     ));
+    const descriptor = session.lesson.questions.find((question) => (
+      question.type === "singleChoice" && !question.targetPrompt
+    ));
+    const listening = session.lesson.questions.find((question) => question.type === "listenSelect");
 
-    choiceQuestions.forEach((question) => {
-      expect(question.glossaryTargets).toEqual(question.options.map((option) => option.label));
+    expect(visual).toMatchObject({
+      type: "singleChoice",
+      prompt: "Select the correct name or reading.",
+      targetPrompt: "\u3044",
+      glossaryTargets: ["\u3044"],
+      correctOptionId: "character-3044",
     });
+    if (visual?.type !== "singleChoice") throw new Error("Visual reading question not found.");
+    expect(visual.options.map((option) => option.label)).not.toContain("\u3044");
+    expect(visual.options.find((option) => option.id === visual.correctOptionId)?.label).toBe("i");
+
+    if (descriptor?.type !== "singleChoice") throw new Error("Descriptor question not found.");
+    expect(descriptor.glossaryTargets).toEqual(descriptor.options.map((option) => option.label));
+    if (listening?.type !== "listenSelect") throw new Error("Listening question not found.");
+    expect(listening.glossaryTargets).toEqual(listening.options.map((option) => option.label));
 
     const matchingAlternate = session.lesson.questionAlternates
       .map((alternate) => alternate.question)
