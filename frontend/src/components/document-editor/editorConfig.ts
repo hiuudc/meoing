@@ -91,6 +91,7 @@ export const documentEditorTheme: EditorThemeClasses = {
   tableCellActionButton: "document-editor-table-action",
   tableCellActionButtonContainer: "document-editor-table-action-container",
   tableCellHeader: "document-editor-table-cell-header",
+  tableCellSelected: "document-editor-table-cell-selected",
   tableCellResizer: "document-editor-table-resizer",
   tableScrollableWrapper: "document-editor-table-scroll",
   tableSelected: "document-editor-table-selected",

@@ -19,6 +19,9 @@ import {
 } from "./editorUtils";
 
 interface FileMenuProps {
+  onClose: () => void;
+  onToggle: (trigger: HTMLButtonElement) => void;
+  open: boolean;
   readOnly: boolean;
   tocVisible: boolean;
   onClear: () => void;
@@ -37,6 +40,9 @@ const formatDetails: Record<DocumentTransferFormat, {
 };
 
 export function FileMenu({
+  onClose,
+  onToggle,
+  open,
   readOnly,
   tocVisible,
   onClear,
@@ -44,7 +50,6 @@ export function FileMenu({
   onToggleToc,
 }: FileMenuProps) {
   const [editor] = useLexicalComposerContext();
-  const [open, setOpen] = useState(false);
   const [status, setStatus] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const importFormatRef = useRef<DocumentTransferFormat>("json");
@@ -57,11 +62,12 @@ export function FileMenu({
       details.mime,
     );
     setStatus(`Exported ${details.name}`);
-    setOpen(false);
+    onClose();
   }
 
   function chooseImport(format: DocumentTransferFormat) {
     importFormatRef.current = format;
+    onClose();
     inputRef.current?.click();
   }
 
@@ -72,7 +78,7 @@ export function FileMenu({
       const source = await file.text();
       importEditorContent(editor, format, source);
       setStatus(`Imported ${formatDetails[format].name}`);
-      setOpen(false);
+      onClose();
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "The document could not be imported.");
     } finally {
@@ -90,7 +96,7 @@ export function FileMenu({
         aria-haspopup="menu"
         aria-expanded={open}
         onMouseDown={(event) => event.preventDefault()}
-        onClick={() => setOpen((current) => !current)}
+        onClick={(event) => onToggle(event.currentTarget)}
       >
         <FileDown size={17} />
       </button>
@@ -117,10 +123,26 @@ export function FileMenu({
             <Download size={16} /> Markdown
           </button>
           <span className="document-menu-divider" />
-          <button type="button" role="menuitemcheckbox" aria-checked={tocVisible} onClick={onToggleToc}>
-            <BookOpenText size={16} /> Table of contents
+          <button
+            type="button"
+            role="menuitemcheckbox"
+            aria-checked={tocVisible}
+            onClick={() => {
+              onToggleToc();
+              onClose();
+            }}
+          >
+            <BookOpenText size={16} /> Document outline (H1-H3)
           </button>
-          <button type="button" role="menuitemcheckbox" aria-checked={readOnly} onClick={onToggleReadOnly}>
+          <button
+            type="button"
+            role="menuitemcheckbox"
+            aria-checked={readOnly}
+            onClick={() => {
+              onToggleReadOnly();
+              onClose();
+            }}
+          >
             {readOnly ? <EyeOff size={16} /> : <Eye size={16} />}
             {readOnly ? "Resume editing" : "Read-only mode"}
           </button>
@@ -130,7 +152,7 @@ export function FileMenu({
             role="menuitem"
             onClick={() => {
               onClear();
-              setOpen(false);
+              onClose();
             }}
           >
             <Trash2 size={16} /> Clear document

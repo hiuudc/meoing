@@ -14,8 +14,11 @@ import {
   type InsertCommand,
 } from "./inserts";
 
-interface InsertMenuProps {
+interface InsertMenuButtonProps {
   language: string;
+  onClose: () => void;
+  onToggle: (trigger: HTMLButtonElement) => void;
+  open: boolean;
 }
 
 class InsertMenuOption extends MenuOption {
@@ -67,9 +70,13 @@ function CommandList({
   );
 }
 
-export function InsertMenu({ language }: InsertMenuProps) {
+export function InsertMenu({
+  language,
+  onClose,
+  onToggle,
+  open,
+}: InsertMenuButtonProps) {
   const [editor] = useLexicalComposerContext();
-  const [open, setOpen] = useState(false);
 
   return (
     <div className="document-insert-menu">
@@ -79,7 +86,7 @@ export function InsertMenu({ language }: InsertMenuProps) {
         aria-expanded={open}
         aria-haspopup="menu"
         onMouseDown={(event) => event.preventDefault()}
-        onClick={() => setOpen((current) => !current)}
+        onClick={(event) => onToggle(event.currentTarget)}
       >
         <Plus size={17} />
         <span>Insert</span>
@@ -90,7 +97,7 @@ export function InsertMenu({ language }: InsertMenuProps) {
             commands={INSERT_COMMANDS}
             onSelect={(command) => {
               executeInsertCommand(editor, command.id, language);
-              setOpen(false);
+              onClose();
             }}
           />
         </div>
@@ -99,7 +106,7 @@ export function InsertMenu({ language }: InsertMenuProps) {
   );
 }
 
-export function SlashMenuPlugin({ language }: InsertMenuProps) {
+export function SlashMenuPlugin({ language }: { language: string }) {
   const [editor] = useLexicalComposerContext();
   const [query, setQuery] = useState<string | null>(null);
   const triggerFn = useBasicTypeaheadTriggerMatch("/", {

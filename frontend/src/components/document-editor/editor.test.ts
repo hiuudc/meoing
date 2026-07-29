@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
 import {
   $createParagraphNode,
+  $createRangeSelection,
   $createTextNode,
   $getRoot,
   $isElementNode,
+  $setSelection,
+  IS_APPLE,
   createEditor,
   type Klass,
   type LexicalNode,
@@ -12,12 +15,21 @@ import { CodeHighlightNode, CodeNode } from "@lexical/code-core";
 import { LinkNode } from "@lexical/link";
 import { ListItemNode, ListNode } from "@lexical/list";
 import { HeadingNode, QuoteNode } from "@lexical/rich-text";
+import {
+  $createTableNodeWithDimensions,
+  $createTableSelectionFrom,
+  TableCellNode,
+  TableNode,
+  TableRowNode,
+} from "@lexical/table";
 import { describe, expect, it } from "vitest";
 import {
   $createBilingualBlockNode,
   BilingualBlockNode,
 } from "../BilingualBlockNode";
+import { $getCurrentTableCellKey } from "./EditorPlugins";
 import { findTextOffsets } from "./FindReplace";
+import { documentEditorTheme } from "./editorConfig";
 import {
   deriveDocumentPlainText,
   detectEmbedProvider,
@@ -59,6 +71,12 @@ import {
   $isRubyNode,
   RubyNode,
 } from "./nodes/RubyNode";
+import {
+  SHORTCUT_ENTRIES,
+  matchDocumentShortcut,
+  type DocumentShortcutAction,
+} from "./shortcuts";
+import { toggleToolbarMenu } from "./toolbarState";
 
 const customNodes: Array<Klass<LexicalNode>> = [
   BilingualBlockNode,
@@ -242,5 +260,91 @@ describe("editor commands", () => {
     ]);
     expect(findTextOffsets("Meoi meoi", "Meoi", true)).toEqual([{ start: 0, end: 4 }]);
     expect(findTextOffsets("No match", "", false)).toEqual([]);
+  });
+});
+
+describe("document toolbar menus", () => {
+  it("keeps only one custom toolbar menu active", () => {
+    expect(toggleToolbarMenu(null, "insert")).toBe("insert");
+    expect(toggleToolbarMenu("insert", "file")).toBe("file");
+    expect(toggleToolbarMenu("file", "file")).toBeNull();
+    expect(toggleToolbarMenu("formatting", "shortcuts")).toBe("shortcuts");
+  });
+});
+
+describe("document keyboard shortcuts", () => {
+  const commandModifier = IS_APPLE ? { metaKey: true } : { ctrlKey: true };
+  const cases: Array<[DocumentShortcutAction, KeyboardEventInit]> = [
+    ["paragraph", { key: "0", ...commandModifier, altKey: true }],
+    ["h1", { key: "1", ...commandModifier, altKey: true }],
+    ["h2", { key: "2", ...commandModifier, altKey: true }],
+    ["h3", { key: "3", ...commandModifier, altKey: true }],
+    ["number", { key: "7", ...commandModifier, shiftKey: true }],
+    ["bullet", { key: "8", ...commandModifier, shiftKey: true }],
+    ["check", { key: "9", ...commandModifier, shiftKey: true }],
+    ["code-block", { key: "c", ...commandModifier, altKey: true }],
+    ["quote", { key: "q", ctrlKey: true, shiftKey: true }],
+    ["font-increase", { key: ">", ...commandModifier, shiftKey: true }],
+    ["font-decrease", { key: "<", ...commandModifier, shiftKey: true }],
+    ["inline-code", { key: "c", ...commandModifier, shiftKey: true }],
+    ["strikethrough", { key: "x", ...commandModifier, shiftKey: true }],
+    ["lowercase", { key: "1", ctrlKey: true, shiftKey: true }],
+    ["uppercase", { key: "2", ctrlKey: true, shiftKey: true }],
+    ["capitalize", { key: "3", ctrlKey: true, shiftKey: true }],
+    ["center", { key: "e", ...commandModifier, shiftKey: true }],
+    ["justify", { key: "j", ...commandModifier, shiftKey: true }],
+    ["left", { key: "l", ...commandModifier, shiftKey: true }],
+    ["right", { key: "r", ...commandModifier, shiftKey: true }],
+    ["subscript", { key: ",", ...commandModifier }],
+    ["superscript", { key: ".", ...commandModifier }],
+    ["indent", { key: "]", ...commandModifier }],
+    ["outdent", { key: "[", ...commandModifier }],
+    ["clear-formatting", { key: "\\", ...commandModifier }],
+    ["link", { key: "k", ...commandModifier }],
+  ];
+
+  it.each(cases)("matches %s using the Playground key combination", (action, init) => {
+    expect(matchDocumentShortcut(new KeyboardEvent("keydown", init))).toBe(action);
+  });
+
+  it("rejects partial modifiers and omits Comments from the help list", () => {
+    expect(matchDocumentShortcut(new KeyboardEvent("keydown", { key: "1" }))).toBeNull();
+    expect(SHORTCUT_ENTRIES.some((entry) => entry.label.includes("Comment"))).toBe(false);
+    expect(SHORTCUT_ENTRIES.find((entry) => entry.action === "bold")?.keys).toContain("B");
+  });
+});
+
+describe("document table selection", () => {
+  it("maps both range and table selections to the active cell", () => {
+    const editor = createTestEditor([TableNode, TableRowNode, TableCellNode]);
+    let firstCellKey = "";
+    let secondCellKey = "";
+
+    editor.update(() => {
+      const table = $createTableNodeWithDimensions(2, 2, true);
+      $getRoot().append(table);
+      const firstRow = table.getFirstChildOrThrow() as TableRowNode;
+      const secondRow = table.getLastChildOrThrow() as TableRowNode;
+      const firstCell = firstRow.getFirstChildOrThrow() as TableCellNode;
+      const secondCell = secondRow.getLastChildOrThrow() as TableCellNode;
+      firstCellKey = firstCell.getKey();
+      secondCellKey = secondCell.getKey();
+
+      const rangeSelection = $createRangeSelection();
+      const firstText = firstCell.getFirstDescendant();
+      if (!firstText) throw new Error("Expected a text node in the table cell.");
+      rangeSelection.anchor.set(firstText.getKey(), 0, "text");
+      rangeSelection.focus.set(firstText.getKey(), 0, "text");
+      $setSelection(rangeSelection);
+      expect($getCurrentTableCellKey()).toBe(firstCellKey);
+
+      $setSelection($createTableSelectionFrom(table, secondCell, firstCell));
+      expect($getCurrentTableCellKey()).toBe(secondCellKey);
+    }, { discrete: true });
+
+    expect(firstCellKey).not.toBe("");
+    expect(secondCellKey).not.toBe("");
+    expect(documentEditorTheme.tableCellSelected).toBe("document-editor-table-cell-selected");
+    expect(documentEditorTheme.tableSelection).toBe("document-editor-table-selection");
   });
 });

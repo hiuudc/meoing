@@ -387,6 +387,18 @@ describe("theme drafts", () => {
     expect(vivid["--bg-main"]).toContain("linear-gradient");
   });
 
+  it("exposes solid editor surfaces and a strong border token for themed controls", () => {
+    const styled = themeStyle(DEFAULT_THEME);
+
+    expect(styled["--surface-main"]).toMatch(/^#[0-9A-F]{6}$/i);
+    expect(styled["--surface-panel"]).toMatch(/^#[0-9A-F]{6}$/i);
+    expect(styled["--surface-elevated"]).toMatch(/^#[0-9A-F]{6}$/i);
+    expect(styled["--surface-main"]).not.toContain("gradient");
+    expect(styled["--surface-main"]).not.toBe(styled["--bg-main"]);
+    expect(styled["--border-strong"]).toContain("color-mix");
+    expect(styled["--border-strong"]).not.toContain("linear-gradient");
+  });
+
   it("renders selected base themes as untinted surfaces with a standard accent", () => {
     const neutral = themeStyle(selectBaseTheme(DEFAULT_THEME, "midnight"));
     const collectionAccent = themeStyle(

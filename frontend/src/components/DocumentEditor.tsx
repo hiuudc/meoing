@@ -25,6 +25,7 @@ export function DocumentEditor({
 }: DocumentEditorProps) {
   const [extension] = useState(() => createDocumentEditorExtension(content, plainText));
   const [anchorElement, setAnchorElement] = useState<HTMLDivElement | null>(null);
+  const [contextBarElement, setContextBarElement] = useState<HTMLDivElement | null>(null);
   const [readOnly, setReadOnly] = useState(false);
   const [tocVisible, setTocVisible] = useState(false);
 
@@ -38,6 +39,7 @@ export function DocumentEditor({
           onToggleReadOnly={() => setReadOnly((current) => !current)}
           onToggleToc={() => setTocVisible((current) => !current)}
         />
+        <div className="document-editor-context-bar" ref={setContextBarElement} />
         <div className="document-editor-body">
           <div className="document-editor-surface" ref={setAnchorElement}>
             <ContentEditable
@@ -54,8 +56,10 @@ export function DocumentEditor({
         </div>
         <EditorPlugins
           anchorElement={anchorElement}
+          contextBarElement={contextBarElement}
           language={language}
           onChange={onChange}
+          onCloseToc={() => setTocVisible(false)}
           readOnly={readOnly}
           tocVisible={tocVisible}
         />

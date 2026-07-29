@@ -4,11 +4,13 @@ import {
   useState,
   type RefObject,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   Columns3,
   GripVertical,
   Rows3,
   Trash2,
+  X,
 } from "lucide-react";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { DraggableBlockPlugin_EXPERIMENTAL } from "@lexical/react/LexicalDraggableBlockPlugin";
@@ -28,8 +30,8 @@ import { DRAG_DROP_PASTE } from "@lexical/rich-text";
 import {
   $deleteTableColumnAtSelection,
   $deleteTableRowAtSelection,
-  $insertTableColumnAtSelection,
-  $insertTableRowAtSelection,
+  $insertTableColumnAtNode,
+  $insertTableRowAtNode,
   $isTableCellNode,
   $isTableSelection,
   TableCellNode,
@@ -43,16 +45,20 @@ import type { DocumentEditorValue } from "../DocumentEditor";
 
 interface EditorPluginsProps {
   anchorElement: HTMLElement | null;
+  contextBarElement: HTMLElement | null;
   language: string;
   onChange: (value: DocumentEditorValue) => void;
+  onCloseToc: () => void;
   readOnly: boolean;
   tocVisible: boolean;
 }
 
 export function EditorPlugins({
   anchorElement,
+  contextBarElement,
   language,
   onChange,
+  onCloseToc,
   readOnly,
   tocVisible,
 }: EditorPluginsProps) {
@@ -64,8 +70,8 @@ export function EditorPlugins({
       <SlashMenuPlugin language={language} />
       <CodeHighlightPlugin />
       <ImageDropPlugin />
-      <TableCellActionsPlugin readOnly={readOnly} />
-      <DocumentTableOfContents visible={tocVisible} />
+      <TableCellActionsPlugin contextBarElement={contextBarElement} readOnly={readOnly} />
+      <DocumentOutline onClose={onCloseToc} visible={tocVisible} />
       {anchorElement && !readOnly ? <DraggableBlocksPlugin anchorElement={anchorElement} /> : null}
     </>
   );
@@ -137,7 +143,7 @@ function ImageDropPlugin() {
   return null;
 }
 
-function currentTableCellKey(): NodeKey | null {
+export function $getCurrentTableCellKey(): NodeKey | null {
   const selection = $getSelection();
   if (!selection) return null;
   if ($isTableSelection(selection)) {
@@ -149,25 +155,42 @@ function currentTableCellKey(): NodeKey | null {
   return node ? $getNearestNodeOfType(node, TableCellNode)?.getKey() ?? null : null;
 }
 
-function TableCellActionsPlugin({ readOnly }: { readOnly: boolean }) {
+function TableCellActionsPlugin({
+  contextBarElement,
+  readOnly,
+}: {
+  contextBarElement: HTMLElement | null;
+  readOnly: boolean;
+}) {
   const [editor] = useLexicalComposerContext();
   const [cellKey, setCellKey] = useState<NodeKey | null>(null);
   const [cellWidth, setCellWidth] = useState(160);
 
   useEffect(() => editor.registerUpdateListener(({ editorState }) => {
     editorState.read(() => {
-      const key = currentTableCellKey();
+      const key = $getCurrentTableCellKey();
       setCellKey(key);
       const node = key ? $getNodeByKey(key) : null;
       if ($isTableCellNode(node)) setCellWidth(node.getWidth() ?? 160);
     });
   }), [editor]);
 
-  if (!cellKey || readOnly) return null;
+  if (!cellKey || !contextBarElement || readOnly) return null;
   const activeCellKey = cellKey;
 
-  function runTableUpdate(update: () => void) {
-    editor.update(update);
+  function runTableUpdate(update: (cell: TableCellNode) => void) {
+    editor.update(() => {
+      const cell = $getNodeByKey(activeCellKey);
+      if (!$isTableCellNode(cell)) return;
+      update(cell);
+    });
+  }
+
+  function runSelectionTableUpdate(update: () => void) {
+    runTableUpdate((cell) => {
+      cell.selectStart();
+      update();
+    });
   }
 
   function deleteTable() {
@@ -191,24 +214,32 @@ function TableCellActionsPlugin({ readOnly }: { readOnly: boolean }) {
     });
   }
 
-  return (
+  return createPortal((
     <div className="document-table-cell-actions" role="toolbar" aria-label="Table cell actions">
-      <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => runTableUpdate(() => $insertTableRowAtSelection(false))}>
+      <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => runTableUpdate((cell) => {
+        $insertTableRowAtNode(cell, false);
+      })}>
         <Rows3 size={15} /> Row above
       </button>
-      <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => runTableUpdate(() => $insertTableRowAtSelection(true))}>
+      <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => runTableUpdate((cell) => {
+        $insertTableRowAtNode(cell, true);
+      })}>
         <Rows3 size={15} /> Row below
       </button>
-      <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => runTableUpdate(() => $insertTableColumnAtSelection(false))}>
+      <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => runTableUpdate((cell) => {
+        $insertTableColumnAtNode(cell, false);
+      })}>
         <Columns3 size={15} /> Column left
       </button>
-      <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => runTableUpdate(() => $insertTableColumnAtSelection(true))}>
+      <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => runTableUpdate((cell) => {
+        $insertTableColumnAtNode(cell, true);
+      })}>
         <Columns3 size={15} /> Column right
       </button>
-      <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => runTableUpdate($deleteTableRowAtSelection)}>
+      <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => runSelectionTableUpdate($deleteTableRowAtSelection)}>
         Delete row
       </button>
-      <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => runTableUpdate($deleteTableColumnAtSelection)}>
+      <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => runSelectionTableUpdate($deleteTableColumnAtSelection)}>
         Delete column
       </button>
       <label>
@@ -225,15 +256,29 @@ function TableCellActionsPlugin({ readOnly }: { readOnly: boolean }) {
         <Trash2 size={15} /> Table
       </button>
     </div>
-  );
+  ), contextBarElement);
 }
 
-function DocumentTableOfContents({ visible }: { visible: boolean }) {
+function DocumentOutline({
+  onClose,
+  visible,
+}: {
+  onClose: () => void;
+  visible: boolean;
+}) {
   return (
     <TableOfContentsPlugin>
       {(entries, editor) => visible ? (
-        <aside className="document-table-of-contents" aria-label="Table of contents">
-          <header>Table of contents</header>
+        <aside className="document-table-of-contents" aria-label="Document outline">
+          <header>
+            <div>
+              <strong>Document outline</strong>
+              <span>{entries.length} {entries.length === 1 ? "heading" : "headings"}</span>
+            </div>
+            <button type="button" onClick={onClose} aria-label="Close document outline">
+              <X size={16} />
+            </button>
+          </header>
           {entries.length ? entries.map(([key, text, tag]) => (
             <button
               key={key}
@@ -246,7 +291,9 @@ function DocumentTableOfContents({ visible }: { visible: boolean }) {
             >
               {text || "Untitled heading"}
             </button>
-          )) : <p>Add headings to build an outline.</p>}
+          )) : (
+            <p>Add H1, H2, or H3 headings to navigate this document.</p>
+          )}
         </aside>
       ) : <></>}
     </TableOfContentsPlugin>

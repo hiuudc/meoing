@@ -350,6 +350,11 @@ export function themeStyle(theme: ThemeConfig, collectionAccent?: string): Theme
     theme.selection.kind === "base" ? base : tintedSurface(base, multiplier)
   );
   return {
+    "--surface-rail": surface.rail,
+    "--surface-sidebar": surface.sidebar,
+    "--surface-main": surface.main,
+    "--surface-panel": surface.panel,
+    "--surface-elevated": surface.elevated,
     "--bg-rail": themedSurface(surface.rail, 0.72),
     "--bg-sidebar": themedSurface(surface.sidebar, 0.82),
     "--bg-main": themedSurface(surface.main, 1),
@@ -361,6 +366,7 @@ export function themeStyle(theme: ThemeConfig, collectionAccent?: string): Theme
     "--text-secondary": surface.secondary,
     "--text-muted": surface.muted,
     "--border": surface.border,
+    "--border-strong": `color-mix(in srgb, ${surface.border} 78%, ${surface.text} 22%)`,
     ...accentStyle(theme, accent),
     "--highlight": "#E7AD67",
     "--theme-gradient": `linear-gradient(${theme.gradientDirection}deg, ${stops})`,
