@@ -21,8 +21,12 @@
   },
   "dependencies": {
     "@k1low/hanzi-writer-data-jp": "0.8.0",
+    "@lexical/list": "^0.48.0",
+    "@lexical/react": "^0.48.0",
+    "@lexical/rich-text": "^0.48.0",
     "hanzi-writer": "3.7.3",
     "hanzi-writer-data": "2.0.1",
+    "lexical": "^0.48.0",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

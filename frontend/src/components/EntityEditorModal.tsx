@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Pipette, X } from "lucide-react";
 import { isValidHex, normalizeHex } from "../theme";
@@ -12,6 +12,10 @@ import {
 } from "../learning/languages";
 import { normalizeLearningProfile } from "../learning/profile";
 
+const DocumentEditor = lazy(() => import("./DocumentEditor").then((module) => ({
+  default: module.DocumentEditor,
+})));
+
 export type EditorState =
   | { type: "collection"; value?: Collection }
   | { type: "unit"; value?: Unit; collectionId: string }
@@ -23,6 +27,7 @@ interface EntityEditorModalProps {
   onClose: () => void;
   onSubmit: (value: Record<string, string>) => void;
   onAccentPreview: (accent: string | null) => void;
+  targetLanguage: string;
 }
 
 const accentOptions = ["#8B7CF6", "#E7AD67", "#72BDA3", "#EB7198", "#69A9E8"];
@@ -30,7 +35,13 @@ const ACCENT_PICKER_WIDTH = 274;
 const ACCENT_PICKER_HEIGHT = 258;
 const ACCENT_PICKER_MARGIN = 8;
 
-export function EntityEditorModal({ editor, onClose, onSubmit, onAccentPreview }: EntityEditorModalProps) {
+export function EntityEditorModal({
+  editor,
+  onClose,
+  onSubmit,
+  onAccentPreview,
+  targetLanguage,
+}: EntityEditorModalProps) {
   const [retainedEditor, setRetainedEditor] = useState(editor);
   const [fields, setFields] = useState<Record<string, string>>({});
   const [accentInput, setAccentInput] = useState(accentOptions[0]);
@@ -39,6 +50,7 @@ export function EntityEditorModal({ editor, onClose, onSubmit, onAccentPreview }
   const [error, setError] = useState("");
   const accentPickerButtonRef = useRef<HTMLButtonElement>(null);
   const accentPickerRef = useRef<HTMLDivElement>(null);
+  const documentValueRef = useRef({ content: "", plainText: "" });
   const activeEditor = editor ?? retainedEditor;
 
   useEffect(() => {
@@ -72,7 +84,16 @@ export function EntityEditorModal({ editor, onClose, onSubmit, onAccentPreview }
       });
     } else if (activeEditor.type === "document") {
       onAccentPreview(null);
-      setFields({ title: activeEditor.value?.title ?? "", documentType: activeEditor.value?.type ?? "Notes", body: activeEditor.value?.body ?? "" });
+      documentValueRef.current = {
+        content: activeEditor.value?.content ?? "",
+        plainText: activeEditor.value?.body ?? "",
+      };
+      setFields({
+        title: activeEditor.value?.title ?? "",
+        documentType: activeEditor.value?.type ?? "Notes",
+        body: activeEditor.value?.body ?? "",
+        content: activeEditor.value?.content ?? "",
+      });
     } else {
       onAccentPreview(null);
       setFields({ text: activeEditor.value?.text ?? "", translation: activeEditor.value?.translation ?? "", notes: activeEditor.value?.notes ?? "" });
@@ -185,7 +206,13 @@ export function EntityEditorModal({ editor, onClose, onSubmit, onAccentPreview }
       return;
     }
     setAccentPickerOpen(false);
-    onSubmit(fields);
+    onSubmit(activeEditor.type === "document"
+      ? {
+        ...fields,
+        body: documentValueRef.current.plainText,
+        content: documentValueRef.current.content,
+      }
+      : fields);
   }
 
   if (!activeEditor) return null;
@@ -197,7 +224,7 @@ export function EntityEditorModal({ editor, onClose, onSubmit, onAccentPreview }
       onClose={onClose}
       labelledBy="entity-modal-title"
       backdropClassName="modal-backdrop"
-      panelClassName="entity-modal"
+      panelClassName={`entity-modal${activeEditor.type === "document" ? " entity-modal-document" : ""}`}
     >
         <header className="modal-header">
           <div>
@@ -277,9 +304,24 @@ export function EntityEditorModal({ editor, onClose, onSubmit, onAccentPreview }
           ) : null}
           {activeEditor.type === "document" ? (
             <>
-              <Field label="Document title" value={fields.title} onChange={(value) => updateField("title", value)} autoFocus />
-              <Field label="Document type" value={fields.documentType} onChange={(value) => updateField("documentType", value)} />
-              <TextArea label="Study notes" value={fields.body} onChange={(value) => updateField("body", value)} />
+              <div className="document-meta-fields">
+                <Field label="Document title" value={fields.title} onChange={(value) => updateField("title", value)} autoFocus />
+                <Field label="Document type" value={fields.documentType} onChange={(value) => updateField("documentType", value)} />
+              </div>
+              <div className="form-field document-content-field">
+                <span>Document content</span>
+                <Suspense fallback={<div className="document-editor-loading" role="status">Loading editor...</div>}>
+                  <DocumentEditor
+                    key={activeEditor.value?.id ?? "new-document"}
+                    content={fields.content}
+                    language={targetLanguage}
+                    plainText={fields.body}
+                    onChange={(value) => {
+                      documentValueRef.current = value;
+                    }}
+                  />
+                </Suspense>
+              </div>
             </>
           ) : null}
           {activeEditor.type === "studyItem" ? (

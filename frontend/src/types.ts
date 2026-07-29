@@ -44,6 +44,7 @@ export interface Document {
   title: string;
   type: string;
   body: string;
+  content?: string;
   updatedAt: string;
 }
 

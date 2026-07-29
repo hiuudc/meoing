@@ -135,12 +135,14 @@ export function App() {
       };
       dispatch({ type: editor.value ? "updateUnit" : "createUnit", unit });
     } else if (editor.type === "document") {
+      const content = fields.content.trim();
       const document: Document = {
         id: editor.value?.id ?? makeId("document"),
         unitId: editor.value?.unitId ?? editor.unitId,
         title: fields.title.trim(),
         type: fields.documentType.trim(),
         body: fields.body.trim(),
+        ...(content ? { content } : {}),
         updatedAt: "Just now",
       };
       dispatch({ type: editor.value ? "updateDocument" : "createDocument", document });
@@ -317,6 +319,7 @@ export function App() {
         onClose={closeEditor}
         onSubmit={submitEditor}
         onAccentPreview={setCollectionAccentPreview}
+        targetLanguage={activeLearningProfile.targetLanguage}
       />
       <CollectionQuestionSettingsModal
         collection={questionSettingsCollection}

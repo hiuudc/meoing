@@ -8,6 +8,7 @@ import type {
   WorkspaceAction,
   WorkspaceState,
 } from "./types";
+import { normalizeDocumentContent } from "./document";
 import { normalizeLearningProfile } from "./learning/profile";
 import { normalizeCollectionQuestionSettings } from "./learning/questionSettings";
 
@@ -443,10 +444,18 @@ export function loadWorkspace(storage?: Pick<Storage, "getItem">): WorkspaceStat
         })(),
       ]),
     );
+    const normalizedDocuments = Object.fromEntries(
+      Object.entries(parsed.documents ?? {}).map(([id, document]) => {
+        const { content: rawContent, ...rest } = document;
+        const content = normalizeDocumentContent(rawContent);
+        return [id, { ...rest, ...(content ? { content } : {}) }];
+      }),
+    );
     return {
       ...parsed,
       collections: normalizedCollections,
       units: normalizedUnits,
+      documents: normalizedDocuments,
       sidebarWidth: normalizeSidebarWidth(parsed.sidebarWidth),
       theme: normalizeThemeConfig(parsed.theme),
     };

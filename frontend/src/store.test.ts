@@ -168,6 +168,44 @@ describe("persistence", () => {
     expect(loadWorkspace(storage).sidebarWidth).toBe(336);
   });
 
+  it("keeps valid Lexical document content and drops malformed content", () => {
+    const state = createSeedState();
+    const validContent = JSON.stringify({
+      root: {
+        children: [{
+          children: [],
+          direction: null,
+          format: "",
+          indent: 0,
+          textFormat: 0,
+          textStyle: "",
+          type: "paragraph",
+          version: 1,
+        }],
+        direction: null,
+        format: "",
+        indent: 0,
+        type: "root",
+        version: 1,
+      },
+    });
+    state.documents["morning-notes"] = {
+      ...state.documents["morning-notes"],
+      content: validContent,
+    };
+    state.documents["at-cafe"] = {
+      ...state.documents["at-cafe"],
+      content: "{not-json",
+    };
+    const storage = { getItem: () => JSON.stringify(state) };
+
+    const loaded = loadWorkspace(storage);
+
+    expect(loaded.documents["morning-notes"].content).toBe(validContent);
+    expect(loaded.documents["at-cafe"].content).toBeUndefined();
+    expect(loaded.documents["at-cafe"].body).toBe(state.documents["at-cafe"].body);
+  });
+
   it("uses seed state for malformed persisted content", () => {
     const storage = { getItem: () => "{not-json" };
     expect(loadWorkspace(storage)).toEqual(createSeedState());
