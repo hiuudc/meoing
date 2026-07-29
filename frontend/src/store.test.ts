@@ -138,7 +138,7 @@ describe("persistence", () => {
       setItem: (key: string, value: string) => values.set(key, value),
     };
     const state = createSeedState();
-    saveWorkspace(state, storage);
+    expect(saveWorkspace(state, storage)).toEqual({ ok: true });
 
     expect(values.has(STORAGE_KEY)).toBe(true);
     expect(loadWorkspace(storage)).toEqual(state);
@@ -166,6 +166,34 @@ describe("persistence", () => {
     saveWorkspace(state, storage);
 
     expect(loadWorkspace(storage).sidebarWidth).toBe(336);
+  });
+
+  it("reports quota failures without throwing away the workspace state", () => {
+    const storage = {
+      setItem: () => {
+        throw new DOMException("Quota reached", "QuotaExceededError");
+      },
+    };
+
+    const result = saveWorkspace(createSeedState(), storage);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("quota");
+    expect(result.message).toContain("storage is full");
+  });
+
+  it("reports non-quota storage failures separately", () => {
+    const storage = {
+      setItem: () => {
+        throw new Error("Storage blocked");
+      },
+    };
+
+    expect(saveWorkspace(createSeedState(), storage)).toMatchObject({
+      ok: false,
+      reason: "storage",
+    });
   });
 
   it("keeps valid Lexical document content and drops malformed content", () => {

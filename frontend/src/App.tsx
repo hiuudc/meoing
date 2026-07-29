@@ -14,7 +14,14 @@ import { normalizeLearningProfile } from "./learning/profile";
 import { getSupportedLanguage } from "./learning/languages";
 import { loadWorkspace, makeId, saveWorkspace, workspaceReducer } from "./store";
 import { accentStyle, cloneTheme, reconcileThemeSelection, themeStyle } from "./theme";
-import type { Collection, Document, StudyItem, StudyKind, Unit } from "./types";
+import type {
+  Collection,
+  Document,
+  StudyItem,
+  StudyKind,
+  Unit,
+  WorkspaceAction,
+} from "./types";
 import { cleanUnitName } from "./unit";
 import type { WorkspaceMode } from "./components/WorkspaceModeSwitch";
 
@@ -108,8 +115,9 @@ export function App() {
     setEditor(null);
   }
 
-  function submitEditor(fields: Record<string, string>) {
-    if (!editor) return;
+  function submitEditor(fields: Record<string, string>): string | null {
+    if (!editor) return "The editor is no longer available.";
+    let action: WorkspaceAction;
     if (editor.type === "collection") {
       const currentProfile = normalizeLearningProfile(editor.value?.learningProfile);
       const collection: Collection = {
@@ -124,7 +132,7 @@ export function App() {
         }),
         questionSettings: editor.value?.questionSettings,
       };
-      dispatch({ type: editor.value ? "updateCollection" : "createCollection", collection });
+      action = { type: editor.value ? "updateCollection" : "createCollection", collection };
     } else if (editor.type === "unit") {
       const unit: Unit = {
         id: editor.value?.id ?? makeId("unit"),
@@ -133,7 +141,7 @@ export function App() {
         description: fields.description.trim(),
         instructionOverride: fields.instructionOverride.trim(),
       };
-      dispatch({ type: editor.value ? "updateUnit" : "createUnit", unit });
+      action = { type: editor.value ? "updateUnit" : "createUnit", unit };
     } else if (editor.type === "document") {
       const content = fields.content.trim();
       const document: Document = {
@@ -145,7 +153,7 @@ export function App() {
         ...(content ? { content } : {}),
         updatedAt: "Just now",
       };
-      dispatch({ type: editor.value ? "updateDocument" : "createDocument", document });
+      action = { type: editor.value ? "updateDocument" : "createDocument", document };
     } else {
       const item: StudyItem = {
         id: editor.value?.id ?? makeId(editor.kind),
@@ -156,9 +164,13 @@ export function App() {
         notes: fields.notes.trim(),
         updatedAt: "Just now",
       };
-      dispatch({ type: editor.value ? "updateStudyItem" : "createStudyItem", item });
+      action = { type: editor.value ? "updateStudyItem" : "createStudyItem", item };
     }
+    const saveResult = saveWorkspace(workspaceReducer(state, action), window.localStorage);
+    if (!saveResult.ok) return saveResult.message;
+    dispatch(action);
     closeEditor();
+    return null;
   }
 
   function closeMobileNavigation() {

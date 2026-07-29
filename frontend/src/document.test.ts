@@ -51,6 +51,11 @@ describe("document content", () => {
     }))).toBeUndefined();
   });
 
+  it("does not impose an application-level document size limit", () => {
+    const largeContent = validParagraphContent("x".repeat(2_100_000));
+    expect(normalizeDocumentContent(largeContent)).toBe(largeContent);
+  });
+
   it("round-trips bilingual audio node fields and plain text", () => {
     const editor = createEditor({
       namespace: "DocumentNodeTest",

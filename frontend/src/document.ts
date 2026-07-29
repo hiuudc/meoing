@@ -1,5 +1,3 @@
-const MAX_DOCUMENT_CONTENT_LENGTH = 2_000_000;
-
 interface SerializedDocumentRoot {
   type: "root";
   version: number;
@@ -31,7 +29,7 @@ function isSerializedDocumentState(value: unknown): value is SerializedDocumentS
 }
 
 export function normalizeDocumentContent(value: unknown): string | undefined {
-  if (typeof value !== "string" || !value || value.length > MAX_DOCUMENT_CONTENT_LENGTH) {
+  if (typeof value !== "string" || !value) {
     return undefined;
   }
   try {

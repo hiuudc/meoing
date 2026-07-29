@@ -464,8 +464,40 @@ export function loadWorkspace(storage?: Pick<Storage, "getItem">): WorkspaceStat
   }
 }
 
-export function saveWorkspace(state: WorkspaceState, storage?: Pick<Storage, "setItem">): void {
-  storage?.setItem(STORAGE_KEY, JSON.stringify(state));
+export type WorkspaceSaveResult =
+  | { ok: true }
+  | { ok: false; reason: "quota" | "storage"; message: string };
+
+function isQuotaExceededError(error: unknown): boolean {
+  return error instanceof DOMException
+    && (error.name === "QuotaExceededError"
+      || error.name === "NS_ERROR_DOM_QUOTA_REACHED"
+      || error.code === 22
+      || error.code === 1014);
+}
+
+export function saveWorkspace(
+  state: WorkspaceState,
+  storage?: Pick<Storage, "setItem">,
+): WorkspaceSaveResult {
+  if (!storage) return { ok: true };
+  try {
+    storage.setItem(STORAGE_KEY, JSON.stringify(state));
+    return { ok: true };
+  } catch (error) {
+    if (isQuotaExceededError(error)) {
+      return {
+        ok: false,
+        reason: "quota",
+        message: "Browser storage is full. Remove large images or export the document before saving.",
+      };
+    }
+    return {
+      ok: false,
+      reason: "storage",
+      message: "The workspace could not be saved in this browser. Your editor draft is still open.",
+    };
+  }
 }
 
 export function makeId(prefix: string): string {

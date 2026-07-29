@@ -25,7 +25,7 @@ export type EditorState =
 interface EntityEditorModalProps {
   editor: EditorState | null;
   onClose: () => void;
-  onSubmit: (value: Record<string, string>) => void;
+  onSubmit: (value: Record<string, string>) => string | null;
   onAccentPreview: (accent: string | null) => void;
   targetLanguage: string;
 }
@@ -206,13 +206,14 @@ export function EntityEditorModal({
       return;
     }
     setAccentPickerOpen(false);
-    onSubmit(activeEditor.type === "document"
+    const saveError = onSubmit(activeEditor.type === "document"
       ? {
         ...fields,
         body: documentValueRef.current.plainText,
         content: documentValueRef.current.content,
       }
       : fields);
+    if (saveError) setError(saveError);
   }
 
   if (!activeEditor) return null;
@@ -233,7 +234,10 @@ export function EntityEditorModal({
           </div>
           <button type="button" aria-label="Close editor" onClick={onClose}><X size={18} /></button>
         </header>
-        <form onSubmit={submit}>
+        <form
+          className={activeEditor.type === "document" ? "document-editor-form" : undefined}
+          onSubmit={submit}
+        >
           {activeEditor.type === "collection" ? (
             <>
               <Field label="Collection name" value={fields.name} onChange={(value) => updateField("name", value)} autoFocus />
