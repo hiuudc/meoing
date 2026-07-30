@@ -265,6 +265,10 @@ function baseQuestion(id: string, type: PlayableQuestion["type"], prompt: string
     evaluationMode: "local" as const,
     explanation: "This Letters exercise is checked locally and missed questions return until mastered.",
     hint: "Compare the character shape, sound, and reading before trying again.",
+    tracking: {
+      encountered: { words: [], phrases: [], sentences: [] },
+      assessed: { words: [], phrases: [], sentences: [] },
+    },
   };
 }
 
@@ -505,7 +509,7 @@ export function buildLettersPracticeSession({
     targetCharacters: targets,
     questionIdsByCharacter,
     lesson: {
-      schemaVersion: 7,
+      schemaVersion: 8,
       id: sessionId,
       unitId: `letters:${collectionId}:${script}`,
       title: `${scriptLabel} practice`,

@@ -32,9 +32,23 @@ interface SidebarHarnessProps {
   onSelectUnit?: (id: string) => void;
   onOpenLessons?: (id: string) => void;
   onOpenCollectionQuestions?: () => void;
+  onOpenCollectionAdmin?: () => void;
+  onOpenDeletedUnits?: () => void;
+  profileDisplayName?: string;
+  profileUsername?: string;
+  readOnly?: boolean;
 }
 
-function SidebarHarness({ onSelectUnit, onOpenLessons, onOpenCollectionQuestions }: SidebarHarnessProps) {
+function SidebarHarness({
+  onSelectUnit,
+  onOpenLessons,
+  onOpenCollectionQuestions,
+  onOpenCollectionAdmin,
+  onOpenDeletedUnits,
+  profileDisplayName,
+  profileUsername,
+  readOnly = false,
+}: SidebarHarnessProps) {
   const [activeUnitId, setActiveUnitId] = useState(units[0].id);
   const [activeKind, setActiveKind] = useState<ContentKind>("document");
   const [mode, setMode] = useState<WorkspaceMode>("library");
@@ -67,6 +81,14 @@ function SidebarHarness({ onSelectUnit, onOpenLessons, onOpenCollectionQuestions
     onDeleteUnit: vi.fn(),
     onMoveUnit: vi.fn(),
     onOpenAppearance: vi.fn(),
+    onOpenCollectionAdmin,
+    onOpenDeletedUnits,
+    profileDisplayName,
+    profileUsername,
+    canCreateUnit: !readOnly,
+    canEditUnit: !readOnly,
+    canDeleteUnit: !readOnly,
+    canManageCollection: !readOnly,
     onSidebarResize: vi.fn(),
     onSidebarResizeEnd: vi.fn(),
   });
@@ -106,6 +128,18 @@ afterEach(async () => {
 });
 
 describe("workspace unit navigation", () => {
+  it("renders the authenticated profile instead of demo identity", async () => {
+    await renderSidebar({
+      profileDisplayName: "Meoi Teacher",
+      profileUsername: "meoi.teacher",
+    });
+
+    const profile = document.querySelector(".profile-row");
+    expect(profile?.textContent).toContain("Meoi Teacher");
+    expect(profile?.textContent).toContain("@meoi.teacher");
+    expect(profile?.textContent).not.toContain("Mina");
+  });
+
   it("opens collection question settings from the collection heading only", async () => {
     const onOpenCollectionQuestions = vi.fn();
     await renderSidebar({ onOpenCollectionQuestions });
@@ -118,6 +152,36 @@ describe("workspace unit navigation", () => {
 
     await act(async () => settingsButton!.click());
     expect(onOpenCollectionQuestions).toHaveBeenCalledOnce();
+  });
+
+  it("opens collection settings for members without mutation permissions", async () => {
+    const onOpenCollectionAdmin = vi.fn();
+    await renderSidebar({ onOpenCollectionAdmin, readOnly: true });
+
+    const collectionSettings = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.trim() === "Collection settings");
+    expect(collectionSettings).toBeDefined();
+
+    await act(async () => collectionSettings!.click());
+    expect(onOpenCollectionAdmin).toHaveBeenCalledOnce();
+  });
+
+  it("opens deleted units only for members allowed to restore content", async () => {
+    const onOpenDeletedUnits = vi.fn();
+    await renderSidebar({ onOpenDeletedUnits });
+
+    const restoreUnits = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.trim() === "Recently deleted units");
+    expect(restoreUnits).toBeDefined();
+    await act(async () => restoreUnits!.click());
+    expect(onOpenDeletedUnits).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      root!.render(createElement(SidebarHarness, { onOpenDeletedUnits, readOnly: true }));
+    });
+    expect(Array.from(document.querySelectorAll("button")).some(
+      (button) => button.textContent?.trim() === "Recently deleted units",
+    )).toBe(false);
   });
 
   it("keeps the unit name and disclosure button in sync while toggling the active unit", async () => {
@@ -175,5 +239,17 @@ describe("workspace unit navigation", () => {
     await act(async () => words.click());
     expect(words.classList.contains("is-current")).toBe(true);
     expect(lessons.classList.contains("is-current")).toBe(false);
+  });
+
+  it("uses effective-permission flags to hide collection and unit mutations", async () => {
+    await renderSidebar({ readOnly: true });
+
+    expect(document.querySelector('[aria-label="Add unit"]')).toBeNull();
+    expect(document.querySelector('[aria-label="Open question settings for Test Collection"]')).toBeNull();
+    expect(document.querySelector('[aria-label="Open actions for Daily Rhythm"]')).toBeNull();
+    expect(Array.from(document.querySelectorAll("button")).some(
+      (button) => button.textContent?.trim() === "Appearance",
+    )).toBe(false);
+    expect(unitButton("Daily Rhythm")).not.toBeNull();
   });
 });

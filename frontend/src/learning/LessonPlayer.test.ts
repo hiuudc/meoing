@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LessonPlayer } from "./LessonPlayer";
 import { LESSON_PLAYER_PREFERENCE_KEY } from "./playerPreferences";
 import { SPEECH_PREFERENCE_KEY } from "./speech";
-import type { CharacterTracingQuestion, Lesson, LessonQuestion, PlayableLesson } from "./types";
+import type { AttemptRecord, CharacterTracingQuestion, Lesson, LessonQuestion, PlayableLesson } from "./types";
 
 const tracingMocks = vi.hoisted(() => {
   const writer = {
@@ -36,8 +36,13 @@ vi.mock("./strokeData", () => ({
   loadStrokeCharacterData: tracingMocks.loadStrokeCharacterData,
 }));
 
+const emptyTracking = {
+  encountered: { words: [], phrases: [], sentences: [] },
+  assessed: { words: [], phrases: [], sentences: [] },
+};
+
 const lesson: Lesson = {
-  schemaVersion: 7,
+  schemaVersion: 8,
   id: "player-test",
   unitId: "unit-test",
   title: "Player test",
@@ -58,6 +63,7 @@ const lesson: Lesson = {
       explanation: "A is the stored answer.",
       hint: "Choose A.",
       evaluationMode: "local",
+      tracking: emptyTracking,
       options: [{ id: "a", label: "A" }, { id: "b", label: "B" }],
       correctOptionId: "a",
       presentation: { readQuestion: false, readAnswers: false, wordTooltips: false },
@@ -68,6 +74,7 @@ const lesson: Lesson = {
       prompt: "Choose the second answer.",
       explanation: "C is the stored answer.",
       evaluationMode: "local",
+      tracking: emptyTracking,
       options: [{ id: "c", label: "C" }, { id: "d", label: "D" }],
       correctOptionId: "c",
       presentation: { readQuestion: false, readAnswers: false, wordTooltips: false },
@@ -150,7 +157,23 @@ function lessonWithQuestions(
   questionAlternates?: Lesson["questionAlternates"],
   glossary: Lesson["glossary"] = [],
 ): Lesson {
-  return { ...lesson, id, schemaVersion: 7, questions, questionAlternates: questionAlternates ?? [], glossary };
+  return {
+    ...lesson,
+    id,
+    schemaVersion: 8,
+    questions: questions.map((question) => ({
+      ...question,
+      tracking: question.tracking ?? emptyTracking,
+    })),
+    questionAlternates: (questionAlternates ?? []).map((alternate) => ({
+      ...alternate,
+      question: {
+        ...alternate.question,
+        tracking: alternate.question.tracking ?? emptyTracking,
+      },
+    })),
+    glossary,
+  };
 }
 
 beforeEach(() => {
@@ -828,7 +851,7 @@ describe("fullscreen lesson player", () => {
     expect(secondInput.selectionStart).toBe(secondInput.value.length);
   });
 
-  it("persists and resets the word-bank typeahead timeout from Lesson settings", async () => {
+  it("updates and resets the word-bank typeahead timeout without browser persistence", async () => {
     await renderPlayer();
     await act(async () => button("Lesson settings").click());
     const slider = document.querySelector<HTMLInputElement>("#lesson-typeahead-timeout")!;
@@ -839,16 +862,14 @@ describe("fullscreen lesson player", () => {
 
     await setTextValue(slider, "2.75");
     expect(document.querySelector<HTMLOutputElement>(".lesson-typeahead-control output")?.textContent).toBe("2.75s");
-    expect(JSON.parse(window.localStorage.getItem(LESSON_PLAYER_PREFERENCE_KEY) ?? "{}").typeaheadTimeoutMs)
-      .toBe(2_750);
+    expect(window.localStorage.getItem(LESSON_PLAYER_PREFERENCE_KEY)).toBeNull();
 
     await act(async () => button("Reset to lesson defaults").click());
     expect(slider.value).toBe("1.5");
-    expect(JSON.parse(window.localStorage.getItem(LESSON_PLAYER_PREFERENCE_KEY) ?? "{}").typeaheadTimeoutMs)
-      .toBe(1_500);
+    expect(document.querySelector<HTMLOutputElement>(".lesson-typeahead-control output")?.textContent).toBe("1.5s");
   });
 
-  it("records and persists a modified Skip shortcut that works from an answer field", async () => {
+  it("uses a modified Skip shortcut without writing browser storage", async () => {
     await renderPlayer();
     await act(async () => button("Lesson settings").click());
     const recorder = button("Alt+S");
@@ -860,8 +881,7 @@ describe("fullscreen lesson player", () => {
       shiftKey: true,
     })));
     expect(document.querySelector(".lesson-shortcut-status")?.textContent).toContain("Shift+K");
-    expect(JSON.parse(window.localStorage.getItem(LESSON_PLAYER_PREFERENCE_KEY) ?? "{}").skipShortcut)
-      .toEqual({ key: "k", altKey: false, ctrlKey: false, metaKey: false, shiftKey: true });
+    expect(window.localStorage.getItem(LESSON_PLAYER_PREFERENCE_KEY)).toBeNull();
 
     await act(async () => button("Close lesson settings").click());
     const answer = document.querySelector<HTMLInputElement>('input[value="a"]')!;
@@ -876,7 +896,7 @@ describe("fullscreen lesson player", () => {
 
   it("flushes pending progress before calling the explicit exit callback", async () => {
     const order: string[] = [];
-    const onProgressBatch = vi.fn(async () => { order.push("progress"); });
+    const onProgressBatch = vi.fn(async (_attempts: AttemptRecord[]) => { order.push("progress"); });
     const onExit = vi.fn(() => { order.push("exit"); });
     await renderPlayer({ onProgressBatch, onExit });
 
@@ -888,8 +908,59 @@ describe("fullscreen lesson player", () => {
 
     await act(async () => button("Exit lesson").click());
     expect(onProgressBatch).toHaveBeenCalledTimes(1);
+    expect(onProgressBatch.mock.calls[0][0][0]).toMatchObject({
+      questionId: "q1",
+      attemptNumber: 1,
+      answer: "a",
+      evaluationSource: "server_rule",
+      outcome: "correct",
+      transcript: null,
+    });
+    expect(onProgressBatch.mock.calls[0][0][0].attemptId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+    );
     expect(onExit).toHaveBeenCalledTimes(1);
     expect(order).toEqual(["progress", "exit"]);
+  });
+
+  it("does not advance until an attempt is durable and retries the same attempt after storage failure", async () => {
+    let releaseFirstSave: (() => void) | undefined;
+    const firstSave = new Promise<void>((resolve) => {
+      releaseFirstSave = resolve;
+    });
+    const onProgressBatch = vi.fn()
+      .mockImplementationOnce(() => firstSave)
+      .mockRejectedValueOnce(new Error("IndexedDB unavailable"))
+      .mockResolvedValue(undefined);
+    await renderPlayer({ onProgressBatch });
+
+    await selectAnswer("a");
+    await act(async () => button("Check answer").click());
+    await act(async () => {
+      button("Continue").click();
+      await Promise.resolve();
+    });
+
+    expect(document.querySelector("#lesson-player-title")?.textContent).toContain("first answer");
+    expect(onProgressBatch).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      releaseFirstSave?.();
+      await firstSave;
+    });
+    expect(document.querySelector("#lesson-player-title")?.textContent).toContain("second answer");
+
+    await selectAnswer("c");
+    await act(async () => button("Check answer").click());
+    await act(async () => button("Continue").click());
+    expect(document.querySelector(".inline-error")?.textContent).toContain("could not be saved");
+    expect(document.querySelector("#lesson-player-title")?.textContent).toContain("second answer");
+    const rejectedAttempt = onProgressBatch.mock.calls[1][0][0] as AttemptRecord;
+
+    await act(async () => button("Continue").click());
+    const retriedAttempt = onProgressBatch.mock.calls[2][0][0] as AttemptRecord;
+    expect(retriedAttempt.attemptId).toBe(rejectedAttempt.attemptId);
+    expect(onProgressBatch).toHaveBeenCalledTimes(3);
   });
 
   it("sends coaching only after an explicit message and keeps history in the active session", async () => {
@@ -955,7 +1026,7 @@ describe("fullscreen lesson player", () => {
     expect(onProgressBatch).not.toHaveBeenCalled();
   });
 
-  it("persists a listening cooldown and automatically uses a non-listening alternate after reload", async () => {
+  it("keeps a listening cooldown in the current lesson only", async () => {
     const primary: LessonQuestion = {
       id: "listen-primary",
       type: "dictation",
@@ -972,16 +1043,16 @@ describe("fullscreen lesson player", () => {
     await act(async () => button("Can't listen now").click());
     expect(document.querySelector("#lesson-player-title")?.textContent).toContain("Read instead");
     expect(Array.from(document.querySelectorAll("button")).some((candidate) => candidate.textContent?.includes("Can't listen now"))).toBe(false);
-    const stored = JSON.parse(window.localStorage.getItem(LESSON_PLAYER_PREFERENCE_KEY) ?? "{}") as { listeningDisabledUntil?: number };
-    expect(stored.listeningDisabledUntil).toBeGreaterThan(Date.now());
+    expect(window.localStorage.getItem(LESSON_PLAYER_PREFERENCE_KEY)).toBeNull();
 
     await act(async () => root?.unmount());
     root = null;
     await renderPlayer({ lesson: listeningLesson });
-    expect(document.querySelector("#lesson-player-title")?.textContent).toContain("Read instead");
+    expect(document.querySelector("#lesson-player-title")?.textContent).toContain("Listen and type");
+    expect(Array.from(document.querySelectorAll("button")).some((candidate) => candidate.textContent?.includes("Can't listen now"))).toBe(true);
   });
 
-  it("persists learning-aid overrides and resets them with pronunciation defaults", async () => {
+  it("keeps learning-aid overrides in memory and resets them with pronunciation defaults", async () => {
     await renderPlayer();
     await act(async () => button("Lesson settings").click());
     const labels = Array.from(document.querySelectorAll<HTMLLabelElement>(".lesson-settings-toggle"));
@@ -991,16 +1062,16 @@ describe("fullscreen lesson player", () => {
     await act(async () => readQuestion.click());
     await act(async () => pronunciation.click());
     await act(async () => button("Native reading").click());
-    let stored = JSON.parse(window.localStorage.getItem(LESSON_PLAYER_PREFERENCE_KEY) ?? "{}") as Record<string, unknown>;
-    expect(stored).toMatchObject({ readQuestion: true, showPronunciation: false, pronunciationMode: "native" });
+    expect(readQuestion.checked).toBe(true);
+    expect(pronunciation.checked).toBe(false);
+    expect(button("Native reading").getAttribute("aria-pressed")).toBe("true");
+    expect(window.localStorage.getItem(LESSON_PLAYER_PREFERENCE_KEY)).toBeNull();
 
     await act(async () => button("Reset to lesson defaults").click());
     expect(readQuestion.checked).toBe(false);
     expect(pronunciation.checked).toBe(true);
     expect(button("Romanized").getAttribute("aria-pressed")).toBe("true");
-    stored = JSON.parse(window.localStorage.getItem(LESSON_PLAYER_PREFERENCE_KEY) ?? "{}") as Record<string, unknown>;
-    expect(stored).not.toHaveProperty("readQuestion");
-    expect(stored).toMatchObject({ showPronunciation: true, pronunciationMode: "romanized" });
+    expect(window.localStorage.getItem(LESSON_PLAYER_PREFERENCE_KEY)).toBeNull();
   });
 
   it("previews pronunciation, filters target voices, and speaks only target-language text", async () => {
@@ -1075,10 +1146,7 @@ describe("fullscreen lesson player", () => {
       lang: "ja_JP",
       voice: expect.objectContaining({ voiceURI: "voice-ja-2" }),
     });
-    expect(JSON.parse(window.localStorage.getItem(SPEECH_PREFERENCE_KEY) ?? "{}")).toMatchObject({
-      voiceURI: "voice-ja-2",
-      rate: 1.5,
-    });
+    expect(window.localStorage.getItem(SPEECH_PREFERENCE_KEY)).toBeNull();
 
     await act(async () => button("Close lesson settings").click());
     expect(document.querySelector(".lesson-question-speakers")).toBeNull();

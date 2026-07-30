@@ -3,20 +3,23 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>Delete Meoi Data</title>
+    <title>Delete Meoing Data</title>
     <link rel="stylesheet" href="/legal.css">
   </head>
   <body>
     <main>
-      <p class="eyebrow">Meoi Bridge v2 · Browser-only</p>
-      <h1>Delete Meoi data</h1>
-      <p class="notice">Meoi has no cloud records, MCP tokens, or database entries to delete.</p>
+      <p class="eyebrow">Meoing · Account deletion</p>
+      <h1>Delete Meoing data</h1>
+      <p class="notice">Request deletion from your signed-in Meoing account. Application access is locked immediately and deletion is scheduled after a 30-day cancellation window.</p>
 
-      <h2>Delete the workspace</h2>
-      <p>Open your browser's site settings for <code>127.0.0.1</code> and clear its data. This removes the workspace localStorage from that browser.</p>
+      <h2>Before requesting deletion</h2>
+      <p>Transfer ownership of collections you want another member to keep, or schedule those collections for deletion. Collection content can be restored for 30 days before it is purged.</p>
 
-      <h2>Delete extension data</h2>
-      <p>Remove Meoi Bridge at <code>chrome://extensions</code> to delete its session queue and unit-to-conversation mappings. Temporary lessons, evaluations, and coaching already disappear when the Meoi page reloads.</p>
+      <h2>What is removed</h2>
+      <p>After 30 days, the maintenance process deletes the Auth user, profile, progress, statistics and owned R2 assets. Required audit tombstones are retained only for their stated retention period and are anonymized.</p>
+
+      <h2>Cancel or remove extension data</h2>
+      <p>Sign in during the 30-day window to cancel deletion. Signing out first attempts to sync pending website progress and retains any unsent batches only for that same account; requesting account deletion clears its IndexedDB progress outbox from the device. Removing Meoi Bridge at <code>chrome://extensions</code> deletes its session queue and unit-to-conversation mappings, but does not delete your cloud account.</p>
 
       <nav class="links"><a href="/privacy.html">Privacy</a><a href="/terms.html">Terms</a><a href="/support.html">Support</a><a href="/">Meoi</a></nav>
     </main>

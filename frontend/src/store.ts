@@ -231,6 +231,25 @@ export function createSeedState(): WorkspaceState {
   };
 }
 
+export function createEmptyWorkspaceState(): WorkspaceState {
+  return {
+    version: STORAGE_VERSION,
+    collections: {},
+    collectionOrder: [],
+    units: {},
+    unitOrder: [],
+    documents: {},
+    documentOrder: [],
+    studyItems: {},
+    studyItemOrder: [],
+    activeCollectionId: "",
+    activeUnitId: "",
+    activeKind: "document",
+    sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
+    theme: normalizeThemeConfig(DEFAULT_THEME),
+  };
+}
+
 function firstUnitId(state: WorkspaceState, collectionId: string): string {
   return state.unitOrder.find((id) => state.units[id]?.collectionId === collectionId) ?? "";
 }
@@ -253,6 +272,8 @@ function pruneUnitContent(state: WorkspaceState, unitIds: Set<string>): Workspac
 
 export function workspaceReducer(state: WorkspaceState, action: WorkspaceAction): WorkspaceState {
   switch (action.type) {
+    case "hydrate":
+      return action.state;
     case "selectCollection": {
       if (!state.collections[action.id]) return state;
       const unitId = firstUnitId(state, action.id);

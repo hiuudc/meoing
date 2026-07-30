@@ -19,6 +19,7 @@ import {
 } from "../editorUtils";
 
 export type SerializedImageNode = Spread<{
+  assetId?: string;
   altText: string;
   caption: string;
   height: number;
@@ -196,6 +197,7 @@ function ImageEditor({
 }
 
 export class ImageNode extends DecoratorNode<ReactNode> {
+  __assetId: string;
   __altText: string;
   __caption: string;
   __height: number;
@@ -214,6 +216,7 @@ export class ImageNode extends DecoratorNode<ReactNode> {
       node.__width,
       node.__height,
       node.__key,
+      node.__assetId,
     );
   }
 
@@ -224,6 +227,8 @@ export class ImageNode extends DecoratorNode<ReactNode> {
       serializedNode.caption,
       serializedNode.width,
       serializedNode.height,
+      undefined,
+      serializedNode.assetId,
     );
   }
 
@@ -234,8 +239,10 @@ export class ImageNode extends DecoratorNode<ReactNode> {
     width = 640,
     height = 0,
     key?: NodeKey,
+    assetId = "",
   ) {
     super(key);
+    this.__assetId = assetId;
     this.__src = sanitizeImageSource(src) ?? "";
     this.__altText = altText;
     this.__caption = caption;
@@ -285,6 +292,7 @@ export class ImageNode extends DecoratorNode<ReactNode> {
   exportJSON(): SerializedImageNode {
     return {
       ...super.exportJSON(),
+      ...(this.getAssetId() ? { assetId: this.getAssetId() } : {}),
       altText: this.getAltText(),
       caption: this.getCaption(),
       height: this.getHeight(),
@@ -299,6 +307,10 @@ export class ImageNode extends DecoratorNode<ReactNode> {
 
   getSource(): string {
     return this.getLatest().__src;
+  }
+
+  getAssetId(): string {
+    return this.getLatest().__assetId;
   }
 
   getAltText(): string {
@@ -318,7 +330,14 @@ export class ImageNode extends DecoratorNode<ReactNode> {
   }
 
   setSource(value: string): this {
-    this.getWritable().__src = sanitizeImageSource(value) ?? "";
+    const writable = this.getWritable();
+    writable.__src = sanitizeImageSource(value) ?? "";
+    writable.__assetId = "";
+    return this;
+  }
+
+  setAssetId(value: string): this {
+    this.getWritable().__assetId = value;
     return this;
   }
 

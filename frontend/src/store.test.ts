@@ -351,16 +351,16 @@ describe("theme drafts", () => {
     expect(applied.colorStops[0]).toBe(DEFAULT_THEME.colorStops[0]);
   });
 
-  it("supports one to eight color stops and surprises themes predictably", () => {
-    const oneStop = { ...DEFAULT_THEME, colorStops: ["#111111"] };
-    const stillOne = removeThemeStop(oneStop, 0);
-    const withStop = addThemeStop(oneStop);
+  it("supports two to eight color stops and surprises themes predictably", () => {
+    const twoStops = { ...DEFAULT_THEME, colorStops: ["#111111", "#333333"] };
+    const stillTwo = removeThemeStop(twoStops, 0);
+    const withStop = addThemeStop(twoStops);
     const full = { ...DEFAULT_THEME, colorStops: Array.from({ length: 8 }, () => "#222222") };
     const stillFull = addThemeStop(full);
     const surprised = surpriseTheme(DEFAULT_THEME, () => 0);
 
-    expect(stillOne.colorStops).toEqual(["#111111"]);
-    expect(withStop.colorStops).toEqual(["#111111", "#111111"]);
+    expect(stillTwo.colorStops).toEqual(["#111111", "#333333"]);
+    expect(withStop.colorStops).toEqual(["#111111", "#333333", "#333333"]);
     expect(stillFull.colorStops).toHaveLength(8);
     expect(surprised.colorStops).toEqual(["#6757F5", "#9B5CF6", "#D15BEC", "#F06EAF"]);
     expect(surprised.intensity).toBe(62);

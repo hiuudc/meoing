@@ -163,7 +163,7 @@ export function decorateLessonPresentation(
   };
   return {
     ...lesson,
-    schemaVersion: 7,
+    schemaVersion: 8,
     questions: lesson.questions.map(decorateQuestion),
     questionAlternates: lesson.questionAlternates.map((alternate) => ({
       ...alternate,

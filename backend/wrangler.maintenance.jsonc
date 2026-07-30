@@ -1,0 +1,85 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "meoing-maintenance",
+  "main": "src/maintenance-worker.ts",
+  "compatibility_date": "2026-07-30",
+  "compatibility_flags": ["nodejs_compat"],
+  "placement": {
+    "mode": "smart"
+  },
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.01
+    }
+  },
+  "vars": {
+    "APP_ENV": "local",
+    "SUPABASE_URL": "https://PROJECT_REF.supabase.co"
+  },
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "00000000000000000000000000000000"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "FILES",
+      "bucket_name": "meoing-files-local"
+    }
+  ],
+  "triggers": {
+    "crons": ["17 * * * *"]
+  },
+  "env": {
+    "staging": {
+      "vars": {
+        "APP_ENV": "staging",
+        "SUPABASE_URL": "https://STAGING_PROJECT_REF.supabase.co"
+      },
+      "hyperdrive": [
+        {
+          "binding": "HYPERDRIVE",
+          "id": "00000000000000000000000000000000"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "FILES",
+          "bucket_name": "meoing-files-staging"
+        }
+      ],
+      "triggers": {
+        "crons": ["17 * * * *"]
+      }
+    },
+    "production": {
+      "vars": {
+        "APP_ENV": "production",
+        "SUPABASE_URL": "https://PRODUCTION_PROJECT_REF.supabase.co"
+      },
+      "hyperdrive": [
+        {
+          "binding": "HYPERDRIVE",
+          "id": "00000000000000000000000000000000"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "FILES",
+          "bucket_name": "meoing-files-production"
+        }
+      ],
+      "triggers": {
+        "crons": ["17 * * * *"]
+      }
+    }
+  }
+}

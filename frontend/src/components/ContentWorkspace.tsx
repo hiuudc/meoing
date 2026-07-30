@@ -39,6 +39,9 @@ interface ContentWorkspaceProps {
   onOpenMobileNavigation: () => void;
   onSelectKind: (kind: ContentKind) => void;
   onCreate: () => void;
+  canCreate?: boolean;
+  canEdit?: boolean;
+  canDelete?: boolean;
   onEditDocument: (document: Document) => void;
   onDeleteDocument: (document: Document) => void;
   onEditStudyItem: (item: StudyItem) => void;
@@ -56,6 +59,9 @@ export function ContentWorkspace({
   onOpenMobileNavigation,
   onSelectKind,
   onCreate,
+  canCreate = true,
+  canEdit = true,
+  canDelete = true,
   onEditDocument,
   onDeleteDocument,
   onEditStudyItem,
@@ -115,7 +121,7 @@ export function ContentWorkspace({
               <h1>{unit ? cleanUnitName(unit.name) : "Choose a unit"}</h1>
               <p>{unit?.description ?? "Select or create a unit to start collecting your study material."}</p>
             </div>
-            <button className="primary-button" type="button" onClick={onCreate} disabled={!unit}>
+            <button className="primary-button" type="button" onClick={onCreate} disabled={!unit || !canCreate}>
               <Plus size={16} />
               <span>New {activeKind}</span>
             </button>
@@ -154,9 +160,21 @@ export function ContentWorkspace({
           </div>
 
           {activeKind === "document" ? (
-            <DocumentTable documents={visibleDocuments} onEdit={onEditDocument} onDelete={onDeleteDocument} />
+            <DocumentTable
+              documents={visibleDocuments}
+              onEdit={onEditDocument}
+              onDelete={onDeleteDocument}
+              canEdit={canEdit}
+              canDelete={canDelete}
+            />
           ) : (
-            <StudyItemTable items={visibleItems} onEdit={onEditStudyItem} onDelete={onDeleteStudyItem} />
+            <StudyItemTable
+              items={visibleItems}
+              onEdit={onEditStudyItem}
+              onDelete={onDeleteStudyItem}
+              canEdit={canEdit}
+              canDelete={canDelete}
+            />
           )}
         </section>
       </div>
@@ -168,9 +186,11 @@ interface DocumentTableProps {
   documents: Document[];
   onEdit: (document: Document) => void;
   onDelete: (document: Document) => void;
+  canEdit: boolean;
+  canDelete: boolean;
 }
 
-function DocumentTable({ documents, onEdit, onDelete }: DocumentTableProps) {
+function DocumentTable({ documents, onEdit, onDelete, canEdit, canDelete }: DocumentTableProps) {
   const seededItemCounts: Record<string, number> = {
     "morning-notes": 24,
     "at-cafe": 18,
@@ -199,7 +219,11 @@ function DocumentTable({ documents, onEdit, onDelete }: DocumentTableProps) {
           <span className="type-chip">{document.type}</span>
           <span>{seededItemCounts[document.id] ?? 0} items</span>
           <span>{document.updatedAt}</span>
-          <RowActions label={document.title} onEdit={() => onEdit(document)} onDelete={() => onDelete(document)} />
+          <RowActions
+            label={document.title}
+            onEdit={canEdit ? () => onEdit(document) : undefined}
+            onDelete={canDelete ? () => onDelete(document) : undefined}
+          />
         </div>
       ))}
     </div>
@@ -210,9 +234,11 @@ interface StudyItemTableProps {
   items: StudyItem[];
   onEdit: (item: StudyItem) => void;
   onDelete: (item: StudyItem) => void;
+  canEdit: boolean;
+  canDelete: boolean;
 }
 
-function StudyItemTable({ items, onEdit, onDelete }: StudyItemTableProps) {
+function StudyItemTable({ items, onEdit, onDelete, canEdit, canDelete }: StudyItemTableProps) {
   if (!items.length) return <EmptyList label="study items" />;
   return (
     <div className="content-table" role="table" aria-label="Study items">
@@ -232,18 +258,23 @@ function StudyItemTable({ items, onEdit, onDelete }: StudyItemTableProps) {
           <span>{item.translation}</span>
           <span className="notes-cell">{item.notes || "No notes yet"}</span>
           <span>{item.updatedAt}</span>
-          <RowActions label={item.text} onEdit={() => onEdit(item)} onDelete={() => onDelete(item)} />
+          <RowActions
+            label={item.text}
+            onEdit={canEdit ? () => onEdit(item) : undefined}
+            onDelete={canDelete ? () => onDelete(item) : undefined}
+          />
         </div>
       ))}
     </div>
   );
 }
 
-function RowActions({ label, onEdit, onDelete }: { label: string; onEdit: () => void; onDelete: () => void }) {
+function RowActions({ label, onEdit, onDelete }: { label: string; onEdit?: () => void; onDelete?: () => void }) {
+  if (!onEdit && !onDelete) return <span />;
   return (
     <div className="row-actions">
-      <button type="button" aria-label={`Edit ${label}`} onClick={onEdit}><Pencil size={14} /></button>
-      <button type="button" aria-label={`Delete ${label}`} onClick={onDelete}><Trash2 size={14} /></button>
+      {onEdit ? <button type="button" aria-label={`Edit ${label}`} onClick={onEdit}><Pencil size={14} /></button> : null}
+      {onDelete ? <button type="button" aria-label={`Delete ${label}`} onClick={onDelete}><Trash2 size={14} /></button> : null}
     </div>
   );
 }

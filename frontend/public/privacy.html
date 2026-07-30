@@ -8,23 +8,26 @@
   </head>
   <body>
     <main>
-      <p class="eyebrow">Meoi Bridge v2 · Browser-only</p>
+      <p class="eyebrow">Meoing · Cloud service and Meoi Bridge v8</p>
       <h1>Privacy</h1>
-      <p class="notice">Meoi has no backend, MCP, OAuth flow, or database. The extension sends requests directly through the ChatGPT tab where you are signed in.</p>
+      <p class="notice">Meoing requires an account. Supabase Auth manages sign-in, while Meoing’s Cloudflare Worker authorizes all application data stored in PostgreSQL and private R2 storage.</p>
 
-      <h2>Where data is kept</h2>
+      <h2>Data we store</h2>
       <ul>
-        <li>Your workspace library is stored in this website's localStorage on your device.</li>
-        <li>Lessons, evaluations, and coaching returned by ChatGPT remain only in the current page's memory and disappear on reload.</li>
-        <li>Queued prompts and results awaiting pickup use <code>chrome.storage.session</code> and are removed after Meoi acknowledges them.</li>
-        <li>Only the mapping between a unit and its ChatGPT conversation URL is kept in <code>chrome.storage.local</code>.</li>
+        <li>Account profile, collection membership, roles, settings, units, lessons and learning summaries are stored in PostgreSQL.</li>
+        <li>Uploaded files are stored in a private Cloudflare R2 bucket and are accessed only through short-lived authorized URLs.</li>
+        <li>Raw lesson answers, transcripts and outcomes are retained for up to one year. Audio, coaching conversations and long AI explanations are not stored.</li>
+        <li>The website uses IndexedDB only as a temporary outbox for progress that has not yet been acknowledged. Acknowledged batches are deleted immediately; rejected batches are shown for retry or discard. Signing out first attempts to sync and keeps any unsent batches isolated under that account so they can retry after the same user signs in again. Requesting account deletion clears that account&rsquo;s device outbox.</li>
       </ul>
 
       <h2>Extension scope</h2>
-      <p>The extension accepts commands only from Meoi on <code>127.0.0.1</code>, sends prompts through <code>chatgpt.com</code>, and reads only the new assistant turn created for that operation. It does not read chat history, user messages, cookies, or internal network traffic.</p>
+      <p>The extension accepts commands only from configured Meoing origins, sends prompts through <code>chatgpt.com</code>, and reads only the new assistant turn created for that operation. Pending prompts and results use extension session storage. It does not read unrelated chat history, cookies, or internal network traffic.</p>
 
-      <h2>Audio and YouTube</h2>
-      <p>Recordings stay in the browser for playback and are not uploaded to ChatGPT. YouTube URLs are embedded for viewing; accurate source-based lessons require a transcript or notes that you provide.</p>
+      <h2>Security and deletion</h2>
+      <p>Application requests require a verified Supabase session and are checked again against collection permissions by the Worker and PostgreSQL row-level security. You can request account deletion in Meoing. Access is locked immediately, cancellation remains available for 30 days, and retained audit records are anonymized.</p>
+
+      <h2>Audio and third-party services</h2>
+      <p>Recordings stay in the browser for playback and are not uploaded by Meoing. ChatGPT, Google OAuth, Supabase, Cloudflare and the configured email provider process data needed to provide their respective services.</p>
 
       <nav class="links"><a href="/terms.html">Terms</a><a href="/support.html">Support</a><a href="/delete-data.html">Delete data</a><a href="/">Meoi</a></nav>
     </main>

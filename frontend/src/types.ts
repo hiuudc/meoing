@@ -1,7 +1,10 @@
 import type { CollectionQuestionSettings, LearningProfile } from "./learning/types";
+import type { components } from "./api/generated";
 
 export type ContentKind = "document" | "word" | "phrase" | "sentence";
 export type StudyKind = Exclude<ContentKind, "document">;
+export type CollectionPermission =
+  components["schemas"]["Collection"]["effectivePermissions"][number];
 export type BaseTheme = "light" | "dusk" | "midnight" | "black";
 export type ColorThemeId =
   | "orchid"
@@ -26,6 +29,11 @@ export interface Collection {
   name: string;
   icon: string;
   accent: string;
+  description?: string;
+  ownerId?: string;
+  revision?: number;
+  effectivePermissions?: CollectionPermission[];
+  deletedAt?: string | null;
   learningProfile?: LearningProfile;
   questionSettings?: CollectionQuestionSettings;
 }
@@ -36,11 +44,15 @@ export interface Unit {
   name: string;
   description: string;
   instructionOverride?: string;
+  languageCode?: string;
+  revision?: number;
+  deletedAt?: string | null;
 }
 
 export interface Document {
   id: string;
   unitId: string;
+  sourceIndex?: number;
   title: string;
   type: string;
   body: string;
@@ -51,6 +63,7 @@ export interface Document {
 export interface StudyItem {
   id: string;
   unitId: string;
+  sourceIndex?: number;
   kind: StudyKind;
   text: string;
   translation: string;
@@ -86,6 +99,7 @@ export interface WorkspaceState {
 }
 
 export type WorkspaceAction =
+  | { type: "hydrate"; state: WorkspaceState }
   | { type: "selectCollection"; id: string }
   | { type: "selectUnit"; id: string }
   | { type: "selectKind"; kind: ContentKind }

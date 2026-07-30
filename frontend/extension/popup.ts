@@ -1,6 +1,12 @@
 import { isTerminalPhase } from "./operation-state";
 import { STORAGE_KEYS, type OperationStateMap, type QueueMap, type UnitChatMap } from "./shared";
 
+declare const __MEOI_WEB_URL__: string | undefined;
+
+const meoingWebUrl = typeof __MEOI_WEB_URL__ === "undefined"
+  ? "http://127.0.0.1:5173/"
+  : __MEOI_WEB_URL__;
+
 async function render() {
   const [local, session] = await Promise.all([
     chrome.storage.local.get([STORAGE_KEYS.unitChats]),
@@ -31,6 +37,6 @@ async function render() {
   document.querySelector<HTMLElement>("#details")!.textContent = `${Object.keys(chats).length} linked units · ${queueLength} queued · ${completed} unacknowledged results`;
 }
 
-document.querySelector<HTMLButtonElement>("#open-meoi")?.addEventListener("click", () => void chrome.tabs.create({ url: "http://127.0.0.1:5173/" }));
+document.querySelector<HTMLButtonElement>("#open-meoi")?.addEventListener("click", () => void chrome.tabs.create({ url: meoingWebUrl }));
 chrome.storage.onChanged.addListener(() => void render());
 void render();

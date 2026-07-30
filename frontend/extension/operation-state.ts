@@ -108,6 +108,33 @@ export function publicOperationState(state: PersistedOperationState): ChatOperat
   };
 }
 
+function operationTimestamp(state: PersistedOperationState): number {
+  const updatedAt = Date.parse(state.updatedAt);
+  if (Number.isFinite(updatedAt)) return updatedAt;
+  const queuedAt = Date.parse(state.operation.queuedAt);
+  return Number.isFinite(queuedAt) ? queuedAt : 0;
+}
+
+export function latestUnitOperation(
+  states: OperationStateMap,
+  unitId: string,
+  kind?: QueuedOperation["kind"],
+): PersistedOperationState | undefined {
+  let latest: PersistedOperationState | undefined;
+  Object.values(states).forEach((state) => {
+    if (state.unitId !== unitId || (kind && state.operation.kind !== kind)) return;
+    const timestamp = operationTimestamp(state);
+    const latestTimestamp = latest ? operationTimestamp(latest) : -1;
+    if (!latest
+      || timestamp > latestTimestamp
+      || (timestamp === latestTimestamp && state.operationId.localeCompare(latest.operationId) > 0)
+    ) {
+      latest = state;
+    }
+  });
+  return latest;
+}
+
 export function appendQueuedOperation(queues: QueueMap, unitId: string, operationId: string): QueueMap {
   const current = queues[unitId] ?? [];
   if (current.includes(operationId)) return queues;

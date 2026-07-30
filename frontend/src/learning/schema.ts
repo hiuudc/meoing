@@ -41,6 +41,44 @@ const presentationSchema = z
     wordTooltips: z.boolean(),
   })
   .strict();
+const trackedTermsSchema = z
+  .object({
+    words: z.array(plainText.max(2_000)).max(80),
+    phrases: z.array(plainText.max(2_000)).max(80),
+    sentences: z.array(plainText.max(2_000)).max(80),
+  })
+  .strict()
+  .superRefine((terms, context) => {
+    (["words", "phrases", "sentences"] as const).forEach((kind) => {
+      if (new Set(terms[kind]).size !== terms[kind].length) {
+        context.addIssue({
+          code: "custom",
+          path: [kind],
+          message: `${kind} tracking values must be unique.`,
+        });
+      }
+    });
+  });
+const questionTrackingSchema = z
+  .object({
+    encountered: trackedTermsSchema,
+    assessed: trackedTermsSchema,
+  })
+  .strict()
+  .superRefine((tracking, context) => {
+    (["words", "phrases", "sentences"] as const).forEach((kind) => {
+      const encountered = new Set(tracking.encountered[kind]);
+      tracking.assessed[kind].forEach((term, index) => {
+        if (!encountered.has(term)) {
+          context.addIssue({
+            code: "custom",
+            path: ["assessed", kind, index],
+            message: "An assessed target must also be encountered.",
+          });
+        }
+      });
+    });
+  });
 const pronunciationSchema = z
   .object({ native: plainText.max(300).optional(), romanized: plainText.max(300).optional() })
   .strict()
@@ -164,6 +202,7 @@ const baseFields = {
   evaluationMode: z.enum(["local", "ai"]),
   presentation: presentationSchema.optional(),
   glossaryTargets: z.array(plainText.max(2_000)).max(80).optional(),
+  tracking: questionTrackingSchema,
   answerBank: answerBankSchema.optional(),
 };
 
@@ -354,7 +393,7 @@ function cjkLexicalUnitCount(value: string, glossary: Lesson["glossary"]): numbe
   return count || undefined;
 }
 
-function validateSchemaSevenQuestion(
+function validateSchemaEightQuestion(
   question: Lesson["questions"][number],
   lesson: Pick<Lesson, "targetLanguage" | "glossary">,
 ): string[] {
@@ -440,7 +479,7 @@ export function validateQuestionGlossaryCoverage(
 
 export const lessonSchema = z
   .object({
-    schemaVersion: z.literal(7),
+    schemaVersion: z.literal(8),
     id,
     unitId: id,
     title: plainText.max(300),
@@ -474,7 +513,7 @@ export const lessonSchema = z
           context.addIssue({ code: "custom", path: ["questions", index, "template"], message });
         });
       }
-      validateSchemaSevenQuestion(question, lesson).forEach((message) => {
+      validateSchemaEightQuestion(question, lesson).forEach((message) => {
         context.addIssue({ code: "custom", path: ["questions", index], message });
       });
     });
@@ -507,12 +546,12 @@ export const lessonSchema = z
           context.addIssue({ code: "custom", path: ["questionAlternates", index, "question", "template"], message });
         });
       }
-      validateSchemaSevenQuestion(alternate.question, lesson).forEach((message) => {
+      validateSchemaEightQuestion(alternate.question, lesson).forEach((message) => {
         context.addIssue({ code: "custom", path: ["questionAlternates", index, "question"], message });
       });
     });
     if (lesson.questionAlternates.length !== lesson.questions.length) {
-      context.addIssue({ code: "custom", path: ["questionAlternates"], message: "Schema-v7 lessons need exactly one alternate per primary question." });
+      context.addIssue({ code: "custom", path: ["questionAlternates"], message: "Schema-v8 lessons need exactly one alternate per primary question." });
     }
     [...lesson.questions, ...lesson.questionAlternates.map((alternate) => alternate.question)].forEach((question) => {
       validateQuestionGlossaryCoverage(question, lesson.glossary).forEach((message) => {
@@ -616,7 +655,7 @@ export interface LessonExpectation {
 export function validateLessonForExpectation(lesson: Lesson, expectation: LessonExpectation): string[] {
   const errors: string[] = [];
   const allowedFormats = new Set<LessonQuestionFormat>(expectation.allowedFormats);
-  if (lesson.schemaVersion !== 7) errors.push("Generated lessons must use schemaVersion 7.");
+  if (lesson.schemaVersion !== 8) errors.push("Generated lessons must use schemaVersion 8.");
   if (new Set(lesson.questions.map((question) => question.type)).size < 5) {
     errors.push("Lesson must use at least five formats.");
   }

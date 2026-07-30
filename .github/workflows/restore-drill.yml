@@ -1,0 +1,50 @@
+name: Monthly backup restore drill
+
+on:
+  schedule:
+    - cron: "41 3 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-restore-drill
+  cancel-in-progress: false
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    environment: production-backup
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+        working-directory: backend
+      - name: Install age
+        run: sudo apt-get update && sudo apt-get install --yes age
+      - name: Start disposable Supabase database
+        run: npm run db:start
+        working-directory: backend
+      - name: Recreate schema from committed migrations
+        run: npx supabase db reset
+        working-directory: backend
+      - name: Restore and verify latest encrypted backup
+        run: bash .github/scripts/restore-drill.sh
+        env:
+          RESTORE_DRILL_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+          RESTORE_DRILL_SCHEMA_READY: "1"
+          BACKUP_AGE_IDENTITY: ${{ secrets.BACKUP_AGE_IDENTITY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_BACKUP_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_BACKUP_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_BACKUP_ENDPOINT: ${{ secrets.R2_BACKUP_ENDPOINT }}
+          R2_BACKUP_BUCKET: ${{ secrets.R2_BACKUP_BUCKET }}
+      - name: Stop disposable Supabase database
+        if: always()
+        run: npx supabase stop --no-backup
+        working-directory: backend

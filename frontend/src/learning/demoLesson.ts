@@ -593,14 +593,26 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
     defaultMode,
   } as const);
   const question = <Type extends LessonQuestion["type"]>(
-    value: Omit<Extract<LessonQuestion, { type: Type }>, "id" | "explanation" | "hint"> & { type: Type },
+    value: Omit<Extract<LessonQuestion, { type: Type }>, "id" | "explanation" | "hint" | "tracking"> & { type: Type },
     index: number,
   ): Extract<LessonQuestion, { type: Type }> => ({
     ...value,
     id: `${prefix}-q${index}`,
     explanation,
     hint,
-  } as Extract<LessonQuestion, { type: Type }>);
+    tracking: {
+      encountered: {
+        words: [...new Set(value.glossaryTargets ?? [])],
+        phrases: [],
+        sentences: [],
+      },
+      assessed: {
+        words: [...new Set(value.glossaryTargets ?? [])],
+        phrases: [],
+        sentences: [],
+      },
+    },
+  } as unknown as Extract<LessonQuestion, { type: Type }>);
 
   const questions: LessonQuestion[] = [
     question({
@@ -885,7 +897,7 @@ export function createLocalPreviewLesson(unitId: string, unitName: string, profi
   });
 
   return decorateLessonPresentation({
-    schemaVersion: 7,
+    schemaVersion: 8,
     id: `${prefix}-lesson`,
     unitId,
     title: `${copy.title}: ${profile.sourceLanguage} → ${profile.targetLanguage}`,

@@ -43,6 +43,9 @@ class DispatchStubBridge extends StubBridge {
     this.commands.push(command);
     this.payloads.push(payload);
     if (command === "RESET_UNIT_CHAT") return { reset: true } as TResponse;
+    if (command === "GET_UNIT_OPERATION") {
+      return { operation: state("completed", { operationId: "lesson-1" }) } as TResponse;
+    }
     return { operationId: "op-1", phase: "queued" } as TResponse;
   }
 }
@@ -173,6 +176,17 @@ describe("ExtensionBridge operation waiting", () => {
     expect(bridge.commands).toEqual(["RESET_UNIT_CHAT"]);
     expect(bridge.payloads).toEqual([{ unitId: "unit-1" }]);
   });
+
+  it("queries the extension-owned latest operation by unit and kind", async () => {
+    const bridge = new DispatchStubBridge([state("queued")]);
+    await expect(bridge.getLatestUnitOperation("unit-1", "create_lesson")).resolves.toMatchObject({
+      operationId: "lesson-1",
+      unitId: "unit-1",
+      phase: "completed",
+    });
+    expect(bridge.commands).toEqual(["GET_UNIT_OPERATION"]);
+    expect(bridge.payloads).toEqual([{ unitId: "unit-1", kind: "create_lesson" }]);
+  });
 });
 
 describe("ExtensionBridge compatibility detection", () => {
@@ -200,7 +214,7 @@ describe("ExtensionBridge compatibility detection", () => {
     });
   });
 
-  it("locks protocol v8 when extension 8.0.3 is installed or the patch is not reported", async () => {
+  it("locks protocol v8 when extension 8.0.4 is installed or the patch is not reported", async () => {
     vi.useFakeTimers();
     const postMessage = vi.spyOn(window, "postMessage").mockImplementation((message: unknown) => {
       const request = message as {
@@ -218,7 +232,7 @@ describe("ExtensionBridge compatibility detection", () => {
             nonce: request.nonce,
             requestId: request.requestId,
             ok: true,
-            data: { ...integrationStatus, extensionVersion: "8.0.3" },
+            data: { ...integrationStatus, extensionVersion: "8.0.4" },
           },
           origin: window.location.origin,
           source: window,
@@ -230,7 +244,7 @@ describe("ExtensionBridge compatibility detection", () => {
     await expect(oldPatch).resolves.toMatchObject({
       state: "outdated",
       version: 8,
-      integration: { extensionVersion: "8.0.3" },
+      integration: { extensionVersion: "8.0.4" },
     });
 
     postMessage.mockRestore();

@@ -3,20 +3,16 @@
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ApiClient } from "../api/client";
+import { buildProgressBatch } from "../api/progressOutbox";
 import { createLocalPreviewLesson } from "../learning/demoLesson";
 import { normalizeLearningProfile } from "../learning/profile";
+import type { AttemptRecord, LessonProgressSnapshot } from "../learning/types";
 import {
   ExtensionBridgeError,
   extensionBridge,
   type ExtensionCompatibility,
 } from "../integration/extensionBridge";
-import { LEARNING_STORAGE_KEY } from "../integration/learningStorage";
-import {
-  PENDING_LEARNING_OPERATIONS_KEY,
-  createPendingLearningOperationStore,
-  putPendingLearningOperation,
-  savePendingLearningOperations,
-} from "../integration/pendingLearningOperations";
 import {
   MEOI_CHAT_RESULT_TYPE,
   MEOI_EXTENSION_MIN_VERSION,
@@ -25,7 +21,13 @@ import {
   type ChatOperationState,
 } from "../integration/protocol";
 import { createSeedState } from "../store";
-import { LearningWorkspace, publicLearningError } from "./LearningWorkspace";
+import {
+  canDeleteStoredLesson,
+  LearningWorkspace,
+  persistProgressBeforeEvaluationAck,
+  progressSnapshotFromWire,
+  publicLearningError,
+} from "./LearningWorkspace";
 
 let root: Root | null = null;
 
@@ -44,8 +46,16 @@ function memoryStorage(): Storage {
 async function renderWithCompatibility(
   compatibility: ExtensionCompatibility,
   state = createSeedState(),
+  cloud?: { api: ApiClient; userId: string },
+  recoveredOperation: ChatOperationState | null = null,
+  permissions: {
+    canCreateLessons?: boolean;
+    canDeleteContent?: boolean;
+    canManageCollectionProfile?: boolean;
+  } = {},
 ) {
   vi.spyOn(extensionBridge, "detectCompatibility").mockResolvedValue(compatibility);
+  vi.spyOn(extensionBridge, "getLatestUnitOperation").mockResolvedValue(recoveredOperation);
   const collection = state.collections[state.activeCollectionId];
   const unit = state.units[state.activeUnitId];
   document.body.innerHTML = '<div class="app-shell"><div id="mount"></div></div>';
@@ -64,6 +74,9 @@ async function renderWithCompatibility(
       onModeChange: vi.fn(),
       onOpenMobileNavigation: vi.fn(),
       onUpdateProfile: vi.fn(),
+      api: cloud?.api,
+      userId: cloud?.userId,
+      ...permissions,
     }));
     await Promise.resolve();
     await Promise.resolve();
@@ -108,11 +121,6 @@ function completedState(
     updatedAt: new Date().toISOString(),
     result,
   };
-}
-
-function storePending(operation: ReturnType<typeof pendingResult>["operation"]) {
-  const store = putPendingLearningOperation(createPendingLearningOperationStore(), operation);
-  expect(savePendingLearningOperations(store, window.localStorage)).toBe(true);
 }
 
 beforeEach(() => {
@@ -164,18 +172,18 @@ describe("LearningWorkspace bridge v8 gate", () => {
     expect(document.body.textContent).not.toContain("Learning profile");
   });
 
-  it("locks Learn when protocol v8 comes from extension 8.0.3", async () => {
+  it("locks Learn when protocol v8 comes from extension 8.0.4", async () => {
     await renderWithCompatibility({
       state: "outdated",
       version: 8,
       integration: {
         installed: true,
-        extensionVersion: "8.0.3",
+        extensionVersion: "8.0.4",
         pausedForQuota: false,
         queueLength: 0,
       },
     });
-    expect(document.querySelector(".learning-bridge-gate")?.textContent).toContain("Version 8.0.3 was detected");
+    expect(document.querySelector(".learning-bridge-gate")?.textContent).toContain("Version 8.0.4 was detected");
     expect(document.body.textContent).toContain(`Update Meoi Bridge to ${MEOI_EXTENSION_MIN_VERSION}`);
     expect(document.body.textContent).not.toContain("Player demo");
   });
@@ -193,155 +201,369 @@ describe("LearningWorkspace bridge v8 gate", () => {
   });
 });
 
-describe("LearningWorkspace pending lesson recovery", () => {
+describe("LearningWorkspace cloud lesson persistence", () => {
   const ready: ExtensionCompatibility = {
     state: "ready",
     version: 8,
     integration: { installed: true, extensionVersion: MEOI_EXTENSION_MIN_VERSION, pausedForQuota: false, queueLength: 0 },
   };
 
-  it("recovers a completed lesson after remount and saves before ACK", async () => {
-    const state = createSeedState();
-    const { operation, result } = pendingResult(state);
-    storePending(operation);
+  function createCloudApi(state: ReturnType<typeof createSeedState>) {
+    const unit = state.units[state.activeUnitId];
     const events: string[] = [];
-    const originalSetItem = window.localStorage.setItem.bind(window.localStorage);
-    vi.spyOn(window.localStorage, "setItem").mockImplementation((key, value) => {
-      if (key === LEARNING_STORAGE_KEY) events.push("save");
-      originalSetItem(key, value);
+    const get = vi.fn(async () => ({ data: { items: [], nextCursor: null } }));
+    const post = vi.fn(async (path: string, body?: unknown) => {
+      if (path === "/v1/lessons") {
+        events.push("save");
+        const payload = (body as { payload: unknown }).payload;
+        return {
+          data: {
+            id: "server-lesson",
+            unitId: unit.id,
+            ownerId: "user-1",
+            status: "draft",
+            revision: 1,
+            payload,
+            createdAt: new Date().toISOString(),
+          },
+        };
+      }
+      if (path === "/v1/lessons/server-lesson/progress") {
+        events.push("session");
+        return { data: { id: "progress-session" } };
+      }
+      throw new Error(`Unexpected POST ${path}`);
     });
-    vi.spyOn(extensionBridge, "getOperationState").mockResolvedValue(completedState(operation, result));
-    vi.spyOn(extensionBridge, "acknowledgeOperation").mockImplementation(async () => {
-      events.push("ack");
-      return true;
-    });
+    const api = { get, post, delete: vi.fn() } as unknown as ApiClient;
+    return { api, events, get, post };
+  }
 
-    await renderWithCompatibility(ready, state);
-    await act(async () => {
-      await vi.waitFor(() => expect(window.localStorage.getItem(LEARNING_STORAGE_KEY)).not.toBeNull());
-    });
-
-    expect(events.indexOf("save")).toBeGreaterThanOrEqual(0);
-    expect(events.indexOf("ack")).toBeGreaterThan(events.indexOf("save"));
-    expect(window.localStorage.getItem(PENDING_LEARNING_OPERATIONS_KEY)).toContain('"operationsByUnit":{}');
-    expect(document.body.textContent).toContain("Lesson received from ChatGPT and saved locally");
-  });
-
-  it("records the operation ID before dispatching a new lesson request", async () => {
+  it("saves a generated lesson through the Worker before acknowledging the extension", async () => {
     const state = createSeedState();
+    const cloud = createCloudApi(state);
     const dispatch = vi.spyOn(extensionBridge, "dispatchAndWait").mockImplementation(async (payload) => {
-      expect(window.localStorage.getItem(PENDING_LEARNING_OPERATIONS_KEY)).toContain(payload.operationId);
       const generated = pendingResult(state, payload.operationId);
       return completedState(generated.operation, generated.result);
     });
-    vi.spyOn(extensionBridge, "acknowledgeOperation").mockResolvedValue(true);
+    vi.spyOn(extensionBridge, "acknowledgeOperation").mockImplementation(async () => {
+      cloud.events.push("ack");
+      return true;
+    });
 
-    await renderWithCompatibility(ready, state);
+    await renderWithCompatibility(ready, state, { api: cloud.api, userId: "user-1" });
+    await vi.waitFor(() => expect(cloud.get).toHaveBeenCalled());
     const create = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
       .find((button) => button.textContent?.includes("Create lesson"));
     expect(create).toBeTruthy();
+    expect(create!.disabled).toBe(false);
     await act(async () => {
-      create!.click();
+      create!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
-      await vi.waitFor(() => expect(window.localStorage.getItem(LEARNING_STORAGE_KEY)).not.toBeNull());
+      await vi.waitFor(() => expect(cloud.events).toEqual(["save", "session", "ack"]));
     });
+
+    expect(cloud.events).toEqual(["save", "session", "ack"]);
+    expect(window.localStorage.length).toBe(0);
   });
 
-  it("reattaches to an active operation before consuming its completed result", async () => {
+  it("loads existing validated lessons from the Worker without localStorage", async () => {
     const state = createSeedState();
-    const { operation, result } = pendingResult(state);
-    storePending(operation);
-    vi.spyOn(extensionBridge, "getOperationState").mockResolvedValue({
-      operationId: operation.operationId,
-      unitId: operation.unitId,
-      phase: "awaiting_response",
-      repairAttempt: 0,
-      updatedAt: new Date().toISOString(),
-    });
-    const waitSpy = vi.spyOn(extensionBridge, "waitForOperation")
-      .mockResolvedValue(completedState(operation, result));
-    vi.spyOn(extensionBridge, "acknowledgeOperation").mockResolvedValue(true);
-
-    await renderWithCompatibility(ready, state);
+    const lesson = pendingResult(state).result.result!.lesson!;
+    const api = {
+      get: vi.fn(async () => ({
+        data: {
+          items: [{
+            id: "server-lesson",
+            unitId: state.activeUnitId,
+            ownerId: "user-1",
+            status: "draft",
+            revision: 1,
+            payload: lesson,
+            createdAt: new Date().toISOString(),
+          }],
+          nextCursor: null,
+        },
+      })),
+      post: vi.fn(),
+      delete: vi.fn(),
+    } as unknown as ApiClient;
+    await renderWithCompatibility(ready, state, { api, userId: "user-1" });
     await act(async () => {
-      await vi.waitFor(() => expect(waitSpy).toHaveBeenCalledWith(
-        operation.operationId,
-        expect.objectContaining({ signal: expect.any(AbortSignal) }),
-      ));
-      await vi.waitFor(() => expect(window.localStorage.getItem(LEARNING_STORAGE_KEY)).not.toBeNull());
+      await vi.waitFor(() => expect(document.body.textContent).toContain("Synced lesson history"));
     });
+    expect(document.body.textContent).toContain("Synced");
+    expect(document.querySelector('[aria-label^="Delete saved lesson"]')).not.toBeNull();
+    expect(window.localStorage.length).toBe(0);
   });
 
-  it("keeps the extension result when local save fails and retries it later", async () => {
+  it("loads raw attempts from the authorized progress detail route", async () => {
     const state = createSeedState();
-    const { operation, result } = pendingResult(state);
-    storePending(operation);
-    const originalSetItem = window.localStorage.setItem.bind(window.localStorage);
-    let failLearningSave = true;
-    vi.spyOn(window.localStorage, "setItem").mockImplementation((key, value) => {
-      if (key === LEARNING_STORAGE_KEY && failLearningSave) throw new DOMException("Quota exceeded", "QuotaExceededError");
-      originalSetItem(key, value);
+    const lesson = pendingResult(state).result.result!.lesson!;
+    const progressId = "progress-detail-1";
+    const get = vi.fn(async (path: string) => {
+      if (path.startsWith("/v1/lessons?")) {
+        return {
+          data: {
+            items: [{
+              id: "server-lesson",
+              unitId: state.activeUnitId,
+              ownerId: "user-1",
+              status: "draft",
+              revision: 1,
+              payload: lesson,
+              createdAt: "2026-07-30T09:00:00.000Z",
+            }],
+            nextCursor: null,
+          },
+        };
+      }
+      if (path.startsWith("/v1/progress?")) {
+        return {
+          data: {
+            items: [{
+              id: progressId,
+              lessonId: "server-lesson",
+              updatedAt: "2026-07-30T10:00:00.000Z",
+            }],
+            nextCursor: null,
+          },
+        };
+      }
+      if (path === `/v1/progress/${progressId}`) {
+        return {
+          data: {
+            id: progressId,
+            lessonId: "server-lesson",
+            updatedAt: "2026-07-30T10:00:00.000Z",
+            attempts: [{
+              questionId: lesson.questions[0].id,
+              attemptNumber: 1,
+              status: "correct",
+            }],
+          },
+        };
+      }
+      throw new Error(`Unexpected GET ${path}`);
     });
-    vi.spyOn(extensionBridge, "getOperationState").mockResolvedValue(completedState(operation, result));
-    const acknowledge = vi.spyOn(extensionBridge, "acknowledgeOperation").mockResolvedValue(true);
+    const api = {
+      get,
+      post: vi.fn(),
+      delete: vi.fn(),
+    } as unknown as ApiClient;
 
-    await renderWithCompatibility(ready, state);
-    await act(async () => {
-      await vi.waitFor(() => expect(document.body.textContent).toContain("Retry local save"));
-    });
-    expect(acknowledge).not.toHaveBeenCalled();
-    expect(window.localStorage.getItem(PENDING_LEARNING_OPERATIONS_KEY)).toContain(operation.operationId);
+    await renderWithCompatibility(ready, state, { api, userId: "user-1" });
 
-    failLearningSave = false;
-    const retry = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
-      .find((button) => button.textContent?.includes("Retry local save"));
-    expect(retry).toBeTruthy();
-    await act(async () => {
-      retry!.click();
-      await vi.waitFor(() => expect(acknowledge).toHaveBeenCalledWith(operation.operationId));
-    });
-    expect(window.localStorage.getItem(LEARNING_STORAGE_KEY)).not.toBeNull();
+    await vi.waitFor(() => expect(get).toHaveBeenCalledWith(
+      `/v1/progress/${progressId}`,
+      expect.any(AbortSignal),
+    ));
+    const expectedMastery = Math.round((1 / lesson.questions.length) * 100);
+    await vi.waitFor(() => expect(document.body.textContent).toContain(`${expectedMastery}%`));
   });
 
-  it("clears stale pending metadata when an extension reload loses the operation", async () => {
+  it("rebuilds the latest lesson mastery snapshot from cloud attempts", () => {
     const state = createSeedState();
-    const { operation } = pendingResult(state);
-    storePending(operation);
-    vi.spyOn(extensionBridge, "getOperationState").mockRejectedValue(
-      new ExtensionBridgeError("OPERATION_STATE_NOT_FOUND", "Operation not found."),
+    const lesson = pendingResult(state).result.result!.lesson!;
+    const first = lesson.questions[0].id;
+    const second = lesson.questions[1].id;
+
+    expect(progressSnapshotFromWire(lesson, {
+      id: "progress-1",
+      lessonId: lesson.id,
+      updatedAt: "2026-07-30T10:00:00.000Z",
+      attempts: [
+        { questionId: first, attemptNumber: 1, status: "correct" },
+        { questionId: second, attemptNumber: 1, status: "incorrect" },
+        { questionId: second, attemptNumber: 2, status: "correct" },
+        { questionId: "not-in-lesson", attemptNumber: 1, status: "correct" },
+      ],
+    })).toEqual(expect.objectContaining({
+      lessonId: lesson.id,
+      completedQuestionIds: [first, second],
+      attemptsByQuestion: { [first]: 1, [second]: 2 },
+      firstTryCorrect: 1,
+      masteryPercent: Math.round((2 / lesson.questions.length) * 100),
+    }));
+  });
+
+  it("acknowledges an AI evaluation only after its progress batch is durable", async () => {
+    const events: string[] = [];
+    const attempt: AttemptRecord = {
+      attemptId: "11111111-1111-4111-8111-111111111111",
+      questionId: "question-1",
+      attemptNumber: 1,
+      answer: "cat",
+      evaluationSource: "client_extension",
+      status: "correct",
+      outcome: "correct",
+      score: 1,
+      firstTry: true,
+      answeredAt: "2026-07-30T10:00:00.000Z",
+    };
+    const snapshot: LessonProgressSnapshot = {
+      lessonId: "22222222-2222-4222-8222-222222222222",
+      completedQuestionIds: ["question-1"],
+      attemptsByQuestion: { "question-1": 1 },
+      firstTryCorrect: 1,
+      totalQuestions: 1,
+      masteryPercent: 100,
+      updatedAt: "2026-07-30T10:00:00.000Z",
+    };
+    const pendingAcks = new Map([["question-1", ["extension-operation"]]]);
+
+    const failures = await persistProgressBeforeEvaluationAck(
+      "user-1",
+      "progress-1",
+      buildProgressBatch([attempt], snapshot, "33333333-3333-4333-8333-333333333333"),
+      [attempt],
+      pendingAcks,
+      {
+        enqueue: vi.fn(async () => { events.push("enqueue"); }),
+        acknowledge: vi.fn(async () => {
+          events.push("ack");
+          return true;
+        }),
+      },
     );
 
-    await renderWithCompatibility(ready, state);
-    await act(async () => {
-      await vi.waitFor(() => expect(document.body.textContent).toContain("no longer has this lesson operation"));
-    });
-    expect(window.localStorage.getItem(PENDING_LEARNING_OPERATIONS_KEY)).toContain('"operationsByUnit":{}');
-    expect(document.body.textContent).toContain("Create lesson again");
+    expect(events).toEqual(["enqueue", "ack"]);
+    expect(failures).toBe(0);
+    expect(pendingAcks.size).toBe(0);
   });
 
-  it("retains a failed validator result until the learner creates again", async () => {
-    const state = createSeedState();
-    const { operation } = pendingResult(state);
-    storePending(operation);
-    vi.spyOn(extensionBridge, "getOperationState").mockResolvedValue({
-      operationId: operation.operationId,
-      unitId: operation.unitId,
-      phase: "failed",
-      repairAttempt: 3,
-      updatedAt: new Date().toISOString(),
-      error: {
-        code: "INVALID_CHATGPT_RESPONSE",
-        message: "questionAlternates must contain one alternate for every primary question.",
+  it("retains the extension result when the progress outbox write fails", async () => {
+    const attempt: AttemptRecord = {
+      attemptId: "11111111-1111-4111-8111-111111111111",
+      questionId: "question-1",
+      attemptNumber: 1,
+      answer: "cat",
+      evaluationSource: "client_extension",
+      status: "correct",
+      outcome: "correct",
+      score: 1,
+      firstTry: true,
+      answeredAt: "2026-07-30T10:00:00.000Z",
+    };
+    const snapshot: LessonProgressSnapshot = {
+      lessonId: "22222222-2222-4222-8222-222222222222",
+      completedQuestionIds: ["question-1"],
+      attemptsByQuestion: { "question-1": 1 },
+      firstTryCorrect: 1,
+      totalQuestions: 1,
+      masteryPercent: 100,
+      updatedAt: "2026-07-30T10:00:00.000Z",
+    };
+    const pendingAcks = new Map([["question-1", ["extension-operation"]]]);
+    const acknowledge = vi.fn(async () => true);
+
+    await expect(persistProgressBeforeEvaluationAck(
+      "user-1",
+      "progress-1",
+      buildProgressBatch([attempt], snapshot, "33333333-3333-4333-8333-333333333333"),
+      [attempt],
+      pendingAcks,
+      {
+        enqueue: vi.fn(async () => { throw new Error("IndexedDB unavailable"); }),
+        acknowledge,
       },
+    )).rejects.toThrow("IndexedDB unavailable");
+
+    expect(acknowledge).not.toHaveBeenCalled();
+    expect(pendingAcks.get("question-1")).toEqual(["extension-operation"]);
+  });
+
+  it("recovers an extension-owned lesson after a reload mid-operation", async () => {
+    const state = createSeedState();
+    const cloud = createCloudApi(state);
+    const generated = pendingResult(state, "operation-from-before-reload");
+    const completed = completedState(generated.operation, generated.result);
+    const recovered: ChatOperationState = {
+      ...completed,
+      phase: "awaiting_response",
+      result: undefined,
+    };
+    const getById = vi.spyOn(extensionBridge, "getOperationState");
+    const waitForOperation = vi.spyOn(extensionBridge, "waitForOperation").mockResolvedValue(completed);
+    vi.spyOn(extensionBridge, "acknowledgeOperation").mockImplementation(async () => {
+      cloud.events.push("ack");
+      return true;
+    });
+
+    await renderWithCompatibility(ready, state, { api: cloud.api, userId: "user-1" }, recovered);
+    await act(async () => {
+      await vi.waitFor(() => expect(cloud.events).toEqual(["save", "session", "ack"]));
+    });
+
+    expect(extensionBridge.getLatestUnitOperation).toHaveBeenCalledWith(
+      state.activeUnitId,
+      "create_lesson",
+    );
+    expect(cloud.post).toHaveBeenCalledWith(
+      "/v1/lessons",
+      expect.any(Object),
+      "operation-from-before-reload",
+    );
+    expect(waitForOperation).toHaveBeenCalledWith(
+      "operation-from-before-reload",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(getById).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain("Lesson received from ChatGPT and synced to Meoing.");
+    expect(window.localStorage.length).toBe(0);
+  });
+
+  it("retains an extension result in memory when cloud saving fails", async () => {
+    const state = createSeedState();
+    const cloud = createCloudApi(state);
+    cloud.post.mockImplementationOnce(async () => {
+      throw new Error("database unavailable");
+    });
+    const dispatch = vi.spyOn(extensionBridge, "dispatchAndWait").mockImplementation(async (payload) => {
+      const generated = pendingResult(state, payload.operationId);
+      return completedState(generated.operation, generated.result);
     });
     const acknowledge = vi.spyOn(extensionBridge, "acknowledgeOperation").mockResolvedValue(true);
 
-    await renderWithCompatibility(ready, state);
+    await renderWithCompatibility(ready, state, { api: cloud.api, userId: "user-1" });
+    await vi.waitFor(() => expect(cloud.get).toHaveBeenCalled());
+    const create = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.includes("Create lesson"));
     await act(async () => {
-      await vi.waitFor(() => expect(document.body.textContent).toContain("questionAlternates must contain"));
+      create!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(cloud.post).toHaveBeenCalledWith(
+        "/v1/lessons",
+        expect.any(Object),
+        expect.any(String),
+      ));
     });
-    expect(document.body.textContent).toContain("Create lesson again");
-    expect(window.localStorage.getItem(PENDING_LEARNING_OPERATIONS_KEY)).toContain(operation.operationId);
     expect(acknowledge).not.toHaveBeenCalled();
+    expect(window.localStorage.length).toBe(0);
+  });
+
+  it("keeps lesson creation read-only when effective permissions omit create_lessons", async () => {
+    await renderWithCompatibility(ready, createSeedState(), undefined, null, {
+      canCreateLessons: false,
+      canDeleteContent: false,
+      canManageCollectionProfile: false,
+    });
+
+    expect(document.body.textContent).toContain("Lesson creation is read-only");
+    expect(Array.from(document.querySelectorAll("button")).some(
+      (button) => button.textContent?.includes("Create lesson"),
+    )).toBe(false);
+    expect(document.querySelector(".profile-editor")).toBeNull();
+  });
+
+  it("matches the backend lesson-delete rule for own drafts and delete_content", () => {
+    const ownDraft = { ownerId: "user-1", status: "draft" as const };
+    const ownPublished = { ownerId: "user-1", status: "published" as const };
+    const otherDraft = { ownerId: "user-2", status: "draft" as const };
+
+    expect(canDeleteStoredLesson(ownDraft, "user-1", false)).toBe(true);
+    expect(canDeleteStoredLesson(ownPublished, "user-1", false)).toBe(false);
+    expect(canDeleteStoredLesson(otherDraft, "user-1", false)).toBe(false);
+    expect(canDeleteStoredLesson(ownPublished, "user-1", true)).toBe(true);
+    expect(canDeleteStoredLesson(otherDraft, "user-1", true)).toBe(true);
   });
 });

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Meoi Bridge",
-  "version": "8.0.4",
-  "description": "Send Meoi requests through ChatGPT Web and return validated JSON without an API, MCP, or database.",
+  "version": "8.0.5",
+  "description": "Send Meoing lesson requests through ChatGPT Web and return validated lesson v8 results.",
   "minimum_chrome_version": "120",
   "permissions": ["storage", "tabs"],
   "host_permissions": ["https://chatgpt.com/*"],

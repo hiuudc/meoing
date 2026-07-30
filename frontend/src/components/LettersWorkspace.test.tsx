@@ -3,7 +3,12 @@ import { act, createElement, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { lettersPracticeExerciseCount } from "../learning/lettersPractice";
-import { LettersLessonIntro, LettersPractice } from "./LettersWorkspace";
+import {
+  createCharacterProgressSyncQueue,
+  LettersLessonIntro,
+  LettersPractice,
+  mergeCharacterProgress,
+} from "./LettersWorkspace";
 
 vi.mock("../learning/CharacterTracingResponse", () => ({
   CharacterTracingResponse: ({ question }: { question: { character: string } }) => (
@@ -31,6 +36,92 @@ class TestSpeechUtterance {
     this.text = text;
   }
 }
+
+describe("character progress conflict merge", () => {
+  it("keeps remote characters while letting the current device win on overlapping values", () => {
+    expect(mergeCharacterProgress(
+      {
+        requireStrokeOrder: false,
+        showStrokeGuide: false,
+        strokeTolerance: 0.5,
+        practiceCharacterCount: 3,
+        characters: { "あ": "mastered", "い": "practicing" },
+      },
+      {
+        requireStrokeOrder: true,
+        showStrokeGuide: true,
+        strokeTolerance: 1,
+        practiceCharacterCount: 5,
+        characters: { "い": "mastered", "う": "practicing" },
+      },
+    )).toEqual({
+      requireStrokeOrder: true,
+      showStrokeGuide: true,
+      strokeTolerance: 1,
+      practiceCharacterCount: 5,
+      characters: {
+        "あ": "mastered",
+        "い": "mastered",
+        "う": "practicing",
+      },
+    });
+  });
+});
+
+describe("character progress sync queue", () => {
+  it("flushes a debounced value immediately when its owner is leaving", async () => {
+    const persist = vi.fn(async (value: string) => value);
+    const cancelScheduled = vi.fn();
+    const scheduleTask = vi.fn(() => cancelScheduled);
+    const queue = createCharacterProgressSyncQueue({ persist, scheduleTask });
+
+    queue.schedule("mastered");
+    expect(persist).not.toHaveBeenCalled();
+
+    await queue.flush();
+
+    expect(cancelScheduled).toHaveBeenCalledOnce();
+    expect(persist).toHaveBeenCalledOnce();
+    expect(persist).toHaveBeenCalledWith("mastered");
+    expect(queue.hasPending()).toBe(false);
+  });
+
+  it("keeps a failed value pending and retries it automatically", async () => {
+    const scheduled: Array<{ callback: () => void; delay: number; cancelled: boolean }> = [];
+    const scheduleTask = (callback: () => void, delay: number) => {
+      const task = { callback, delay, cancelled: false };
+      scheduled.push(task);
+      return () => {
+        task.cancelled = true;
+      };
+    };
+    const persist = vi.fn()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockImplementation(async (value: string) => value);
+    const queue = createCharacterProgressSyncQueue({
+      persist,
+      debounceMs: 350,
+      retryBaseMs: 1_000,
+      scheduleTask,
+    });
+
+    queue.schedule("practicing");
+    expect(scheduled[0]).toMatchObject({ delay: 350, cancelled: false });
+    scheduled[0].callback();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(persist).toHaveBeenCalledTimes(1);
+    expect(queue.hasPending()).toBe(true);
+
+    expect(scheduled[1]).toMatchObject({ delay: 1_000, cancelled: false });
+    scheduled[1].callback();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(persist).toHaveBeenCalledTimes(2);
+    expect(persist).toHaveBeenLastCalledWith("practicing");
+    expect(queue.hasPending()).toBe(false);
+  });
+});
 
 function button(label: string): HTMLButtonElement {
   const match = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))

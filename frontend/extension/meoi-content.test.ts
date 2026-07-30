@@ -20,6 +20,53 @@ afterEach(() => {
 });
 
 describe("Meoi page content bridge", () => {
+  it("forwards the unit-operation recovery query to the extension worker", async () => {
+    let messageListener: ((event: MessageEvent) => void) | undefined;
+    const fakeWindow: FakeWindow = {
+      location: { origin: "http://127.0.0.1:5173" },
+      addEventListener: vi.fn((_type: string, listener: (event: MessageEvent) => void) => {
+        messageListener = listener;
+      }),
+      removeEventListener: vi.fn(),
+      postMessage: vi.fn(),
+    };
+    const sendMessage = vi.fn((
+      _message: unknown,
+      callback: (result: unknown) => void,
+    ) => callback({ ok: true, data: { operation: null } }));
+    vi.stubGlobal("window", fakeWindow);
+    vi.stubGlobal("chrome", { runtime: { sendMessage, lastError: undefined } });
+
+    await import("./meoi-content");
+    const request: ExtensionRequest = {
+      source: MEOI_PAGE_SOURCE,
+      version: MEOI_EXTENSION_PROTOCOL_VERSION,
+      nonce: "nonce-123456",
+      requestId: "request-recovery",
+      command: "GET_UNIT_OPERATION",
+      payload: { unitId: "unit-1", kind: "create_lesson" },
+    };
+
+    messageListener?.({
+      source: fakeWindow,
+      origin: fakeWindow.location.origin,
+      data: request,
+    } as unknown as MessageEvent);
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      { kind: "MEOI_PAGE_REQUEST", request },
+      expect.any(Function),
+    );
+    expect(fakeWindow.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: request.requestId,
+        ok: true,
+        data: { operation: null },
+      }),
+      fakeWindow.location.origin,
+    );
+  });
+
   it("reports an invalidated extension context without throwing and removes the stale listener", async () => {
     let messageListener: ((event: MessageEvent) => void) | undefined;
     const fakeWindow: FakeWindow = {

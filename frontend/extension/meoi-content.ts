@@ -11,7 +11,7 @@ import { isAllowedMeoiOrigin } from "./integration-policy";
 
 const commands = new Set([
   "SEND_OPERATION", "OPEN_VOICE", "GET_INTEGRATION_STATUS",
-  "GET_OPERATION_STATE", "RETRY_OPERATION", "ACK_OPERATION_RESULT", "RESET_UNIT_CHAT",
+  "GET_UNIT_OPERATION", "GET_OPERATION_STATE", "RETRY_OPERATION", "ACK_OPERATION_RESULT", "RESET_UNIT_CHAT",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -28,6 +28,9 @@ function validRequest(value: unknown): value is ExtensionRequest<Record<string, 
   if (typeof value.command !== "string" || !commands.has(value.command) || !isRecord(value.payload)) return false;
   const payload = value.payload;
   if (["OPEN_VOICE", "RESET_UNIT_CHAT"].includes(value.command) && typeof payload.unitId !== "string") return false;
+  if (value.command === "GET_UNIT_OPERATION"
+    && (typeof payload.unitId !== "string"
+      || (payload.kind !== undefined && !["create_lesson", "evaluate_answer", "coaching"].includes(String(payload.kind))))) return false;
   if (["GET_OPERATION_STATE", "RETRY_OPERATION", "ACK_OPERATION_RESULT"].includes(value.command) && typeof payload.operationId !== "string") return false;
   if (value.command === "SEND_OPERATION") {
     const expectation = payload.expectation;

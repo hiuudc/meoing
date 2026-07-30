@@ -22,7 +22,7 @@ import {
   type UIEvent,
 } from "react";
 import { createPortal } from "react-dom";
-import { loadLocalLearningCache } from "../integration/learningStorage";
+import { ApiError, type ApiClient } from "../api/client";
 import { CharacterTracingResponse } from "../learning/CharacterTracingResponse";
 import { LessonPlayer } from "../learning/LessonPlayer";
 import {
@@ -33,16 +33,17 @@ import {
   getCharacterWindow,
   INTERNAL_CHARACTER_DISPLAY_LABELS,
   INTERNAL_CHARACTER_READINGS,
-  loadLettersProgress,
+  createLettersProgressStore,
   matchesCharacterQuery,
+  normalizeLettersProgressStore,
   normalizeLettersPracticeCharacterCount,
-  saveLettersProgress,
   scriptForCharacter,
   scriptsForLanguage,
   unicodeLabel,
   updateLettersLanguageProgress,
   type LetterSettings,
   type LetterProgressStatus,
+  type LettersLanguageProgress,
   type LettersProgressStore,
   type LettersScript,
 } from "../learning/letters";
@@ -53,13 +54,13 @@ import {
   type LettersCharacterMetadata,
   type LettersPracticeSession,
 } from "../learning/lettersPractice";
+import { getSupportedLanguage } from "../learning/languages";
 import { normalizeLearningProfile } from "../learning/profile";
 import { languageTagForSpeech, speechTextForLanguage } from "../learning/speech";
 import { loadStrokeCatalog } from "../learning/strokeData";
 import type {
   AttemptRecord,
   CharacterTracingQuestion,
-  GlossaryEntry,
   LessonProgressSnapshot,
   QuestionAnswer,
 } from "../learning/types";
@@ -75,6 +76,8 @@ interface LettersWorkspaceProps {
   mode: WorkspaceMode;
   onModeChange: (mode: WorkspaceMode) => void;
   onOpenMobileNavigation: () => void;
+  api?: ApiClient;
+  userId?: string;
 }
 
 interface VirtualCharacterGridProps {
@@ -132,16 +135,118 @@ interface LettersLessonIntroProps {
 const GRID_ROW_HEIGHT = 100;
 const GRID_MIN_COLUMN_WIDTH = 88;
 const GRID_OVERSCAN_ROWS = 3;
+const CHARACTER_PROGRESS_SCOPE = "user";
+
+interface CharacterProgressResponse {
+  characters: unknown;
+  revision?: number;
+}
+
+interface CharacterProgressSyncQueueOptions<T> {
+  persist: (value: T) => Promise<T>;
+  onSynced?: (value: T) => void;
+  onError?: (error: unknown) => void;
+  isRetryable?: (error: unknown) => boolean;
+  debounceMs?: number;
+  retryBaseMs?: number;
+  scheduleTask?: (callback: () => void, delay: number) => () => void;
+}
+
+export interface CharacterProgressSyncQueue<T> {
+  schedule(value: T): void;
+  flush(): Promise<void>;
+  hasPending(): boolean;
+}
+
+export function createCharacterProgressSyncQueue<T>({
+  persist,
+  onSynced,
+  onError,
+  isRetryable = () => true,
+  debounceMs = 350,
+  retryBaseMs = 1_000,
+  scheduleTask = (callback, delay) => {
+    const timer = setTimeout(callback, delay);
+    return () => clearTimeout(timer);
+  },
+}: CharacterProgressSyncQueueOptions<T>): CharacterProgressSyncQueue<T> {
+  let pending: T | undefined;
+  let cancelTimer: (() => void) | null = null;
+  let running: Promise<void> | null = null;
+  let retryCount = 0;
+
+  function clearTimer() {
+    cancelTimer?.();
+    cancelTimer = null;
+  }
+
+  function scheduleTimer(delay: number) {
+    clearTimer();
+    cancelTimer = scheduleTask(() => {
+      cancelTimer = null;
+      void flush();
+    }, delay);
+  }
+
+  async function drain() {
+    while (pending !== undefined) {
+      const candidate = pending;
+      pending = undefined;
+      try {
+        const synced = await persist(candidate);
+        retryCount = 0;
+        onSynced?.(synced);
+      } catch (error) {
+        if (pending === undefined) pending = candidate;
+        onError?.(error);
+        if (isRetryable(error)) {
+          retryCount += 1;
+          scheduleTimer(Math.min(retryBaseMs * (2 ** (retryCount - 1)), 30_000));
+        }
+        return;
+      }
+    }
+  }
+
+  function flush(): Promise<void> {
+    clearTimer();
+    if (running) {
+      return running.then(() => (pending === undefined ? undefined : flush()));
+    }
+    const operation = drain();
+    running = operation.finally(() => {
+      running = null;
+    });
+    return running;
+  }
+
+  return {
+    schedule(value) {
+      pending = value;
+      retryCount = 0;
+      scheduleTimer(debounceMs);
+    },
+    flush,
+    hasPending: () => pending !== undefined,
+  };
+}
+
+export function mergeCharacterProgress(
+  remote: LettersLanguageProgress,
+  local: LettersLanguageProgress,
+): LettersLanguageProgress {
+  return {
+    ...remote,
+    ...local,
+    characters: {
+      ...remote.characters,
+      ...local.characters,
+    },
+  };
+}
 
 function singleCharacter(value: string): boolean {
   return [...value].length === 1;
-}
-
-function glossaryMetadata(entry: GlossaryEntry): LettersCharacterMetadata {
-  return {
-    reading: entry.pronunciation?.romanized ?? entry.pronunciation?.native,
-    meaning: entry.meaning,
-  };
 }
 
 function collectionCharacterMetadata(
@@ -152,15 +257,6 @@ function collectionCharacterMetadata(
   studyItems.forEach((item) => {
     if (!unitIds.has(item.unitId) || !singleCharacter(item.text.trim())) return;
     metadata.set(item.text.trim(), { meaning: item.translation.trim() || undefined });
-  });
-  const cache = loadLocalLearningCache(window.localStorage);
-  unitIds.forEach((unitId) => {
-    (cache.lessonsByUnit[unitId] ?? []).forEach(({ lesson }) => {
-      lesson.glossary.forEach((entry) => {
-        if (!singleCharacter(entry.term)) return;
-        metadata.set(entry.term, { ...metadata.get(entry.term), ...glossaryMetadata(entry) });
-      });
-    });
   });
   INTERNAL_CHARACTER_READINGS.forEach((reading, character) => {
     metadata.set(character, { ...metadata.get(character), reading });
@@ -692,6 +788,8 @@ export function LettersWorkspace({
   mode,
   onModeChange,
   onOpenMobileNavigation,
+  api,
+  userId,
 }: LettersWorkspaceProps) {
   const profile = normalizeLearningProfile(collection.learningProfile);
   const language = profile.targetLanguage;
@@ -718,15 +816,19 @@ export function LettersWorkspace({
   const [traceSettingsRevision, setTraceSettingsRevision] = useState(0);
   const letterSettingsReturnFocusRef = useRef<HTMLButtonElement | null>(null);
   const restoreLetterSettingsFocusRef = useRef(false);
-  const [progressStore, setProgressStore] = useState<LettersProgressStore>(() => loadLettersProgress(window.localStorage));
+  const [progressStore, setProgressStore] = useState<LettersProgressStore>(createLettersProgressStore);
+  const [progressSyncError, setProgressSyncError] = useState("");
+  const progressRevisionRef = useRef(0);
+  const lastSyncedProgressRef = useRef("");
+  const progressSyncQueueRef = useRef<CharacterProgressSyncQueue<LettersLanguageProgress> | null>(null);
   const unitIds = useMemo(() => new Set(units.map((unit) => unit.id)), [units]);
   const metadata = useMemo(
     () => collectionCharacterMetadata(unitIds, studyItems),
     [collection.id, studyItems, unitIds],
   );
   const languageProgress = useMemo(
-    () => getLettersLanguageProgress(progressStore, collection.id, language),
-    [collection.id, language, progressStore],
+    () => getLettersLanguageProgress(progressStore, CHARACTER_PROGRESS_SCOPE, language),
+    [language, progressStore],
   );
   const letterSettings = useMemo<LetterSettings>(() => ({
     requireStrokeOrder: languageProgress.requireStrokeOrder,
@@ -800,8 +902,146 @@ export function LettersWorkspace({
   }, [language, scriptDefinitions.length]);
 
   useEffect(() => {
-    saveLettersProgress(progressStore, window.localStorage);
-  }, [progressStore]);
+    lastSyncedProgressRef.current = "";
+    setProgressSyncError("");
+    const languageCode = getSupportedLanguage(language)?.locale.split("-")[0] ?? "und";
+    if (!api || !userId) {
+      const empty = createLettersProgressStore();
+      setProgressStore(empty);
+      progressRevisionRef.current = 0;
+      lastSyncedProgressRef.current = JSON.stringify(
+        getLettersLanguageProgress(empty, CHARACTER_PROGRESS_SCOPE, language),
+      );
+      return;
+    }
+    let active = true;
+    void api.get<CharacterProgressResponse>(
+      `/v1/characters?languageCode=${encodeURIComponent(languageCode)}`,
+    ).then((response) => {
+      if (!active) return;
+      const normalized = normalizeLettersProgressStore({
+        version: 1,
+        collections: {
+          [CHARACTER_PROGRESS_SCOPE]: {
+            [language]: response.data.characters,
+          },
+        },
+      });
+      setProgressStore(normalized);
+      progressRevisionRef.current = response.data.revision ?? 0;
+      lastSyncedProgressRef.current = JSON.stringify(
+        getLettersLanguageProgress(normalized, CHARACTER_PROGRESS_SCOPE, language),
+      );
+    }).catch(() => {
+      if (!active) return;
+      const empty = createLettersProgressStore();
+      setProgressStore(empty);
+      progressRevisionRef.current = 0;
+      lastSyncedProgressRef.current = JSON.stringify(
+        getLettersLanguageProgress(empty, CHARACTER_PROGRESS_SCOPE, language),
+      );
+    });
+    return () => {
+      active = false;
+    };
+  }, [api, language, userId]);
+
+  useEffect(() => {
+    if (!api || !userId) return;
+    let active = true;
+    const languageCode = getSupportedLanguage(language)?.locale.split("-")[0] ?? "und";
+    let expectedRevision: number | null = null;
+    const queue = createCharacterProgressSyncQueue<LettersLanguageProgress>({
+      async persist(localCandidate) {
+        let candidate = localCandidate;
+        if (expectedRevision === null) expectedRevision = progressRevisionRef.current;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          try {
+            const response = await api.put<CharacterProgressResponse>("/v1/characters", {
+              languageCode,
+              characters: candidate,
+              expectedRevision,
+            });
+            expectedRevision = response.data.revision ?? expectedRevision + 1;
+            if (active) progressRevisionRef.current = expectedRevision;
+            return candidate;
+          } catch (error) {
+            if (!(error instanceof ApiError) || error.code !== "REVISION_CONFLICT") throw error;
+            const latest = await api.get<CharacterProgressResponse>(
+              `/v1/characters?languageCode=${encodeURIComponent(languageCode)}`,
+            );
+            const normalized = normalizeLettersProgressStore({
+              version: 1,
+              collections: {
+                [CHARACTER_PROGRESS_SCOPE]: {
+                  [language]: latest.data.characters,
+                },
+              },
+            });
+            candidate = mergeCharacterProgress(
+              getLettersLanguageProgress(normalized, CHARACTER_PROGRESS_SCOPE, language),
+              candidate,
+            );
+            expectedRevision = latest.data.revision ?? 0;
+          }
+        }
+        throw new Error("Character progress changed repeatedly while it was being synchronized.");
+      },
+      onSynced(candidate) {
+        if (!active) return;
+        lastSyncedProgressRef.current = JSON.stringify(candidate);
+        setProgressSyncError("");
+        setProgressStore((current) => updateLettersLanguageProgress(
+          current,
+          CHARACTER_PROGRESS_SCOPE,
+          language,
+          (currentLanguage) => mergeCharacterProgress(candidate, currentLanguage),
+        ));
+      },
+      onError(error) {
+        if (!active) return;
+        const retrying = !(error instanceof ApiError)
+          || error.status === 408
+          || error.status === 425
+          || error.status === 429
+          || error.status >= 500;
+        setProgressSyncError(retrying
+          ? "Character progress has not synced yet. Meoing will retry automatically."
+          : "Character progress could not be synced. Try again before leaving this page.");
+      },
+      isRetryable(error) {
+        return !(error instanceof ApiError)
+          || error.status === 408
+          || error.status === 425
+          || error.status === 429
+          || error.status >= 500;
+      },
+    });
+    progressSyncQueueRef.current = queue;
+
+    const flush = () => {
+      if (document.visibilityState === "hidden" || queue.hasPending()) void queue.flush();
+    };
+    document.addEventListener("visibilitychange", flush);
+    window.addEventListener("online", flush);
+    window.addEventListener("pagehide", flush);
+    return () => {
+      active = false;
+      document.removeEventListener("visibilitychange", flush);
+      window.removeEventListener("online", flush);
+      window.removeEventListener("pagehide", flush);
+      if (progressSyncQueueRef.current === queue) progressSyncQueueRef.current = null;
+      void queue.flush();
+    };
+  }, [api, language, userId]);
+
+  useEffect(() => {
+    const queue = progressSyncQueueRef.current;
+    if (!queue || !lastSyncedProgressRef.current) return;
+    const serialized = JSON.stringify(languageProgress);
+    if (serialized === lastSyncedProgressRef.current) return;
+    queue.schedule(languageProgress);
+  }, [api, language, languageProgress, userId]);
 
   const scriptCharacters = useMemo(
     () => catalog.filter((character) => scriptForCharacter(language, character) === activeScript),
@@ -836,7 +1076,7 @@ export function LettersWorkspace({
   function updateProgress(
     update: (progress: ReturnType<typeof getLettersLanguageProgress>) => ReturnType<typeof getLettersLanguageProgress>,
   ) {
-    setProgressStore((current) => updateLettersLanguageProgress(current, collection.id, language, update));
+    setProgressStore((current) => updateLettersLanguageProgress(current, CHARACTER_PROGRESS_SCOPE, language, update));
   }
 
   function openLetterSettings(trigger: HTMLButtonElement) {
@@ -1132,7 +1372,19 @@ export function LettersWorkspace({
       <aside className="overview-panel letters-control-panel" aria-label="Letters progress">
         <section>
           <div className="overview-title-row"><h2>Letters progress</h2><Check size={17} /></div>
-          <p className="control-copy">Progress is stored only in this browser and is isolated by Collection and learning language.</p>
+          <p className="control-copy">Character progress syncs privately to your account for this learning language and is independent of Collections.</p>
+          {progressSyncError ? (
+            <div className="inline-error" role="alert">
+              <span>{progressSyncError}</span>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => void progressSyncQueueRef.current?.flush()}
+              >
+                <RefreshCw size={14} /> Retry sync
+              </button>
+            </div>
+          ) : null}
         </section>
         {scriptDefinitions.length ? (
           <section className="control-section">

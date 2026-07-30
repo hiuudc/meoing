@@ -1,0 +1,18 @@
+{
+  "rules": [
+    {
+      "allowed": {
+        "origins": [
+          "http://127.0.0.1:5173",
+          "http://localhost:5173",
+          "https://staging.meoing.app",
+          "https://meoing.app"
+        ],
+        "methods": ["GET", "HEAD", "PUT"],
+        "headers": ["content-length", "content-type", "x-amz-checksum-sha256"]
+      },
+      "exposeHeaders": ["etag"],
+      "maxAgeSeconds": 3600
+    }
+  ]
+}

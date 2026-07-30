@@ -295,7 +295,7 @@ export function addThemeStop(theme: ThemeConfig): ThemeConfig {
 }
 
 export function removeThemeStop(theme: ThemeConfig, index: number): ThemeConfig {
-  if (theme.colorStops.length <= 1) return theme;
+  if (theme.colorStops.length <= 2) return theme;
   return markThemeCustom({ ...theme, colorStops: theme.colorStops.filter((_, itemIndex) => itemIndex !== index) });
 }
 

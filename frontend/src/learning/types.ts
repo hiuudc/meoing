@@ -75,6 +75,17 @@ export interface AnswerBank {
   defaultMode: "keyboard" | "bank";
 }
 
+export interface TrackedTerms {
+  words: string[];
+  phrases: string[];
+  sentences: string[];
+}
+
+export interface QuestionTracking {
+  encountered: TrackedTerms;
+  assessed: TrackedTerms;
+}
+
 export interface CharacterTracingSettings {
   requireStrokeOrder: boolean;
 }
@@ -91,6 +102,7 @@ export interface BaseQuestion {
   evaluationMode: EvaluationMode;
   presentation?: QuestionPresentationSettings;
   glossaryTargets?: string[];
+  tracking?: QuestionTracking;
   answerBank?: AnswerBank;
 }
 
@@ -354,8 +366,11 @@ export interface SourceReference {
 }
 
 export interface Lesson {
-  schemaVersion: 7;
+  schemaVersion: 8;
   id: string;
+  revision?: number;
+  ownerId?: string;
+  status?: "draft" | "published";
   unitId: string;
   title: string;
   summary: string;
@@ -418,10 +433,18 @@ export interface AiGradeRequest {
 
 export type GradeResult = LocalGradeResult | AiGradeRequest;
 
+export type EvaluationSource = "client_extension" | "server_rule";
+export type AttemptOutcome = "correct" | "incorrect" | "skipped";
+
 export interface AttemptRecord {
+  attemptId: string;
   questionId: string;
   attemptNumber: number;
+  answer: QuestionAnswer;
+  evaluationSource: EvaluationSource;
   status: EvaluationStatus;
+  outcome?: AttemptOutcome;
+  transcript?: string | null;
   score: number;
   firstTry: boolean;
   answeredAt: string;

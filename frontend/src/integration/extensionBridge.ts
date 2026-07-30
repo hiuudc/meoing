@@ -12,6 +12,8 @@ import {
   type OperationDispatchReceipt,
   type OperationStatePayload,
   type SendOperationPayload,
+  type UnitOperationLookup,
+  type UnitOperationPayload,
 } from "./protocol";
 
 const REQUEST_TIMEOUT_MS = 20_000;
@@ -226,6 +228,17 @@ export class ExtensionBridge {
 
   getOperationState(operationId: string): Promise<ChatOperationState> {
     return this.send<ChatOperationState, OperationStatePayload>("GET_OPERATION_STATE", { operationId });
+  }
+
+  async getLatestUnitOperation(
+    unitId: string,
+    kind?: UnitOperationPayload["kind"],
+  ): Promise<ChatOperationState | null> {
+    const result = await this.send<UnitOperationLookup, UnitOperationPayload>(
+      "GET_UNIT_OPERATION",
+      kind ? { unitId, kind } : { unitId },
+    );
+    return result.operation;
   }
 
   async waitForOperation(operationId: string, options: WaitForOperationOptions = {}): Promise<ChatOperationState> {

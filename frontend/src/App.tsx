@@ -1,21 +1,32 @@
-import { useEffect, useMemo, useReducer, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
+import { ApiError, apiErrorMessage } from "./api/client";
+import { prepareLexicalDocumentForStorage } from "./api/files";
+import { upsertSetting } from "./api/settings";
+import { loadCloudWorkspace, loadDeletedCollections, serializeUnitContent } from "./api/workspace";
+import { useAuth } from "./auth/AuthProvider";
+import { AccountMenu } from "./auth/AccountMenu";
 import { AppearanceModal } from "./components/AppearanceModal";
+import { CollectionAdminModal } from "./components/CollectionAdminModal";
 import { CollectionRail } from "./components/CollectionRail";
 import { CollectionQuestionSettingsModal } from "./components/CollectionQuestionSettingsModal";
 import { ContentWorkspace } from "./components/ContentWorkspace";
+import { DeletedCollectionsModal } from "./components/DeletedCollectionsModal";
+import { DeletedUnitsModal } from "./components/DeletedUnitsModal";
 import { EntityEditorModal, type EditorState } from "./components/EntityEditorModal";
+import { InviteAcceptanceModal } from "./components/InviteAcceptanceModal";
 import { OverviewPanel } from "./components/OverviewPanel";
 import { LearningWorkspace } from "./components/LearningWorkspace";
 import { LettersWorkspace } from "./components/LettersWorkspace";
-import { pruneStoredLessonsFromStorage } from "./integration/learningStorage";
 import { ThemeCustomizerDrawer } from "./components/ThemeCustomizerDrawer";
+import { UnitRevisionsModal } from "./components/UnitRevisionsModal";
 import { WorkspaceSidebar } from "./components/WorkspaceSidebar";
 import { normalizeLearningProfile } from "./learning/profile";
 import { getSupportedLanguage } from "./learning/languages";
-import { loadWorkspace, makeId, saveWorkspace, workspaceReducer } from "./store";
+import { createEmptyWorkspaceState, makeId, workspaceReducer } from "./store";
 import { accentStyle, cloneTheme, reconcileThemeSelection, themeStyle } from "./theme";
 import type {
   Collection,
+  CollectionPermission,
   Document,
   StudyItem,
   StudyKind,
@@ -26,8 +37,13 @@ import { cleanUnitName } from "./unit";
 import type { WorkspaceMode } from "./components/WorkspaceModeSwitch";
 
 export function App() {
-  const [state, dispatch] = useReducer(workspaceReducer, undefined, () => loadWorkspace(window.localStorage));
+  const auth = useAuth();
+  const api = auth.api;
+  const [state, dispatch] = useReducer(workspaceReducer, undefined, createEmptyWorkspaceState);
+  const [workspaceLoading, setWorkspaceLoading] = useState(true);
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const [editor, setEditor] = useState<EditorState | null>(null);
+  const [editorExpectedRevision, setEditorExpectedRevision] = useState<number | null>(null);
   const [collectionAccentPreview, setCollectionAccentPreview] = useState<string | null>(null);
   const [appearanceDraft, setAppearanceDraft] = useState<ReturnType<typeof cloneTheme> | null>(null);
   const [themeDraft, setThemeDraft] = useState<ReturnType<typeof cloneTheme> | null>(null);
@@ -37,23 +53,79 @@ export function App() {
   const [sidebarWidthDraft, setSidebarWidthDraft] = useState<number | null>(null);
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>("library");
   const [questionSettingsCollection, setQuestionSettingsCollection] = useState<Collection | null>(null);
+  const [collectionAdminOpen, setCollectionAdminOpen] = useState(false);
+  const [deletedCollections, setDeletedCollections] = useState<Collection[]>([]);
+  const [deletedCollectionsOpen, setDeletedCollectionsOpen] = useState(false);
+  const [deletedUnitsOpen, setDeletedUnitsOpen] = useState(false);
+  const [unitRevisionsUnit, setUnitRevisionsUnit] = useState<Unit | null>(null);
+  const [pendingInviteToken, setPendingInviteToken] = useState<string | null>(() => (
+    new URLSearchParams(window.location.search).get("invite")
+  ));
+
+  const refreshWorkspace = useCallback(async () => {
+    if (!api) return;
+    setWorkspaceLoading(true);
+    try {
+      const [nextState, nextDeletedCollections] = await Promise.all([
+        loadCloudWorkspace(api),
+        loadDeletedCollections(api).catch(() => []),
+      ]);
+      dispatch({ type: "hydrate", state: nextState });
+      setDeletedCollections(nextDeletedCollections);
+      setWorkspaceError(null);
+    } catch (error) {
+      setWorkspaceError(apiErrorMessage(error));
+    } finally {
+      setWorkspaceLoading(false);
+    }
+  }, [api]);
 
   useEffect(() => {
-    saveWorkspace(state, window.localStorage);
-  }, [state]);
+    void refreshWorkspace();
+  }, [refreshWorkspace]);
 
   useEffect(() => {
-    pruneStoredLessonsFromStorage(window.localStorage, new Set(state.unitOrder));
-  }, [state.unitOrder]);
+    if (!pendingInviteToken) return;
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has("invite")) return;
+    url.searchParams.delete("invite");
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  }, [pendingInviteToken]);
 
   useEffect(() => {
-    if (!mobileNavigationOpen || editor || questionSettingsCollection || appearanceDraft || themeDraft || pendingAppearanceDraft || pendingThemeDraft) return;
+    if (
+      !mobileNavigationOpen
+      || editor
+      || questionSettingsCollection
+      || collectionAdminOpen
+      || deletedCollectionsOpen
+      || deletedUnitsOpen
+      || unitRevisionsUnit
+      || pendingInviteToken
+      || appearanceDraft
+      || themeDraft
+      || pendingAppearanceDraft
+      || pendingThemeDraft
+    ) return;
     function onEscape(event: KeyboardEvent) {
       if (event.key === "Escape") setMobileNavigationOpen(false);
     }
     window.addEventListener("keydown", onEscape);
     return () => window.removeEventListener("keydown", onEscape);
-  }, [appearanceDraft, editor, mobileNavigationOpen, pendingAppearanceDraft, pendingThemeDraft, questionSettingsCollection, themeDraft]);
+  }, [
+    appearanceDraft,
+    collectionAdminOpen,
+    deletedCollectionsOpen,
+    deletedUnitsOpen,
+    editor,
+    mobileNavigationOpen,
+    pendingAppearanceDraft,
+    pendingInviteToken,
+    pendingThemeDraft,
+    questionSettingsCollection,
+    themeDraft,
+    unitRevisionsUnit,
+  ]);
 
   const collections = useMemo(
     () => state.collectionOrder.map((id) => state.collections[id]).filter(Boolean),
@@ -92,11 +164,18 @@ export function App() {
     () => unitStudyItems.filter((item) => item.kind === "word"),
     [unitStudyItems],
   );
+  const hasPermission = useCallback((
+    collection: Collection | undefined,
+    permission: CollectionPermission,
+  ) => Boolean(collection?.effectivePermissions?.includes(permission)), []);
+  const canManageCollection = hasPermission(activeCollection, "manage_collection");
+  const canCreateContent = hasPermission(activeCollection, "create_content");
+  const canEditContent = hasPermission(activeCollection, "edit_content");
+  const canDeleteContent = hasPermission(activeCollection, "delete_content");
+  const canCreateLessons = hasPermission(activeCollection, "create_lessons");
 
-  if (!activeCollection) return null;
-
-  function confirmDelete(label: string, callback: () => void) {
-    if (window.confirm(`Delete "${label}"? This cannot be undone.`)) callback();
+  function confirmDelete(label: string, callback: () => void | Promise<void>) {
+    if (window.confirm(`Delete "${label}"? It can be restored for 30 days.`)) void callback();
   }
 
   function createContent() {
@@ -107,70 +186,245 @@ export function App() {
 
   function openEditor(nextEditor: EditorState) {
     setCollectionAccentPreview(null);
+    if (nextEditor.type === "collection" || nextEditor.type === "unit") {
+      setEditorExpectedRevision(nextEditor.value?.revision ?? null);
+    } else {
+      setEditorExpectedRevision(state.units[nextEditor.unitId]?.revision ?? null);
+    }
     setEditor(nextEditor);
   }
 
   function closeEditor() {
     setCollectionAccentPreview(null);
+    setEditorExpectedRevision(null);
     setEditor(null);
   }
 
-  function submitEditor(fields: Record<string, string>): string | null {
+  async function saveCollectionSetting(collectionId: string, key: string, value: unknown) {
+    if (!api) throw new Error("The API is not available.");
+    await upsertSetting(api, { scope: "collection", collectionId }, key, value);
+  }
+
+  async function saveUserSetting(key: string, value: unknown) {
+    if (!api) throw new Error("The API is not available.");
+    await upsertSetting(api, { scope: "user" }, key, value);
+  }
+
+  async function submitEditor(fields: Record<string, string>): Promise<string | null> {
     if (!editor) return "The editor is no longer available.";
-    let action: WorkspaceAction;
-    if (editor.type === "collection") {
-      const currentProfile = normalizeLearningProfile(editor.value?.learningProfile);
-      const collection: Collection = {
-        id: editor.value?.id ?? makeId("collection"),
-        name: fields.name.trim(),
-        icon: fields.icon.trim(),
-        accent: fields.accent,
-        learningProfile: normalizeLearningProfile({
+    if (!api) return "The API is not available.";
+    const uploadedAssetIds: string[] = [];
+    try {
+      if (editor.type === "collection") {
+        const currentProfile = normalizeLearningProfile(editor.value?.learningProfile);
+        const learningProfile = normalizeLearningProfile({
           ...currentProfile,
           targetLanguage: fields.targetLanguage,
           sourceLanguage: getSupportedLanguage(fields.sourceLanguage)?.name ?? currentProfile.sourceLanguage,
-        }),
-        questionSettings: editor.value?.questionSettings,
-      };
-      action = { type: editor.value ? "updateCollection" : "createCollection", collection };
-    } else if (editor.type === "unit") {
-      const unit: Unit = {
-        id: editor.value?.id ?? makeId("unit"),
-        collectionId: editor.value?.collectionId ?? editor.collectionId,
-        name: fields.name.trim(),
-        description: fields.description.trim(),
-        instructionOverride: fields.instructionOverride.trim(),
-      };
-      action = { type: editor.value ? "updateUnit" : "createUnit", unit };
-    } else if (editor.type === "document") {
-      const content = fields.content.trim();
-      const document: Document = {
-        id: editor.value?.id ?? makeId("document"),
-        unitId: editor.value?.unitId ?? editor.unitId,
-        title: fields.title.trim(),
-        type: fields.documentType.trim(),
-        body: fields.body.trim(),
-        ...(content ? { content } : {}),
-        updatedAt: "Just now",
-      };
-      action = { type: editor.value ? "updateDocument" : "createDocument", document };
-    } else {
-      const item: StudyItem = {
-        id: editor.value?.id ?? makeId(editor.kind),
-        unitId: editor.value?.unitId ?? editor.unitId,
-        kind: editor.value?.kind ?? editor.kind,
-        text: fields.text.trim(),
-        translation: fields.translation.trim(),
-        notes: fields.notes.trim(),
-        updatedAt: "Just now",
-      };
-      action = { type: editor.value ? "updateStudyItem" : "createStudyItem", item };
+        });
+        if (editor.value) {
+          await api.patch(`/v1/collections/${encodeURIComponent(editor.value.id)}`, {
+            name: fields.name.trim(),
+            description: editor.value.description ?? "",
+            expectedRevision: editorExpectedRevision ?? editor.value.revision ?? 1,
+          });
+          await Promise.all([
+            saveCollectionSetting(editor.value.id, "appearance", {
+              icon: fields.icon.trim(),
+              accent: fields.accent,
+            }),
+            saveCollectionSetting(editor.value.id, "learningProfile", learningProfile),
+          ]);
+        } else {
+          const response = await api.post<{ id: string }>("/v1/collections", {
+            name: fields.name.trim(),
+            description: "",
+          }, crypto.randomUUID());
+          await Promise.all([
+            saveCollectionSetting(response.data.id, "appearance", {
+              icon: fields.icon.trim(),
+              accent: fields.accent,
+            }),
+            saveCollectionSetting(response.data.id, "learningProfile", learningProfile),
+          ]);
+        }
+      } else if (editor.type === "unit") {
+        const collectionId = editor.value?.collectionId ?? editor.collectionId;
+        const collection = state.collections[collectionId];
+        const targetLanguage = normalizeLearningProfile(collection?.learningProfile).targetLanguage;
+        const languageCode = getSupportedLanguage(targetLanguage)?.locale.split("-")[0] ?? "und";
+        if (editor.value) {
+          await api.patch(`/v1/units/${encodeURIComponent(editor.value.id)}`, {
+            name: fields.name.trim(),
+            description: fields.description.trim(),
+            instructionOverride: fields.instructionOverride.trim(),
+            languageCode,
+            expectedRevision: editorExpectedRevision ?? editor.value.revision ?? 1,
+            ...serializeUnitContent(state, editor.value.id),
+          });
+        } else {
+          await api.post(`/v1/collections/${encodeURIComponent(collectionId)}/units`, {
+            name: fields.name.trim(),
+            description: fields.description.trim(),
+            instructionOverride: fields.instructionOverride.trim(),
+            languageCode,
+            words: [],
+            phrases: [],
+            sentences: [],
+            documents: [],
+          }, crypto.randomUUID());
+        }
+      } else {
+        let action: WorkspaceAction;
+        const unitId = editor.value?.unitId ?? editor.unitId;
+        if (editor.type === "document") {
+          const rawContent = fields.content.trim();
+          const content = rawContent
+            ? await prepareLexicalDocumentForStorage(
+              api,
+              rawContent,
+              state.units[unitId].collectionId,
+              (assetId) => uploadedAssetIds.push(assetId),
+            )
+            : "";
+          const document: Document = {
+            id: editor.value?.id ?? makeId("document"),
+            unitId,
+            sourceIndex: editor.value?.sourceIndex,
+            title: fields.title.trim(),
+            type: fields.documentType.trim(),
+            body: fields.body.trim(),
+            ...(content ? { content } : {}),
+            updatedAt: "Just now",
+          };
+          action = { type: editor.value ? "updateDocument" : "createDocument", document };
+        } else {
+          const item: StudyItem = {
+            id: editor.value?.id ?? makeId(editor.kind),
+            unitId,
+            sourceIndex: editor.value?.sourceIndex,
+            kind: editor.value?.kind ?? editor.kind,
+            text: fields.text.trim(),
+            translation: fields.translation.trim(),
+            notes: fields.notes.trim(),
+            updatedAt: "Just now",
+          };
+          action = { type: editor.value ? "updateStudyItem" : "createStudyItem", item };
+        }
+        const nextState = workspaceReducer(state, action);
+        const unit = state.units[unitId];
+        await api.patch(`/v1/units/${encodeURIComponent(unitId)}`, {
+          name: unit.name,
+          description: unit.description,
+          instructionOverride: unit.instructionOverride ?? "",
+          languageCode: unit.languageCode ?? "und",
+          expectedRevision: editorExpectedRevision ?? unit.revision ?? 1,
+          ...serializeUnitContent(nextState, unitId),
+        });
+      }
+      await refreshWorkspace();
+      closeEditor();
+      return null;
+    } catch (error) {
+      await Promise.allSettled(uploadedAssetIds.map((assetId) => (
+        api.delete(`/v1/files/${encodeURIComponent(assetId)}`)
+      )));
+      if (error instanceof ApiError && error.code === "REVISION_CONFLICT") {
+        await refreshWorkspace();
+        return "Another teacher changed this resource. Saving this stale draft is blocked so it cannot overwrite a different JSON item. Copy your entered changes, close the editor, reopen the latest item, and merge them there.";
+      }
+      return apiErrorMessage(error);
     }
-    const saveResult = saveWorkspace(workspaceReducer(state, action), window.localStorage);
-    if (!saveResult.ok) return saveResult.message;
+  }
+
+  async function deleteCollection(collection: Collection) {
+    if (!api) return;
+    try {
+      await api.delete(`/v1/collections/${encodeURIComponent(collection.id)}`, {
+        expectedRevision: collection.revision ?? 1,
+      });
+      await refreshWorkspace();
+    } catch (error) {
+      setWorkspaceError(apiErrorMessage(error));
+    }
+  }
+
+  async function deleteUnit(unit: Unit) {
+    if (!api) return;
+    try {
+      await api.delete(`/v1/units/${encodeURIComponent(unit.id)}`, {
+        expectedRevision: unit.revision ?? 1,
+      });
+      await refreshWorkspace();
+    } catch (error) {
+      setWorkspaceError(apiErrorMessage(error));
+    }
+  }
+
+  async function updateUnitContent(action: WorkspaceAction, unitId: string) {
+    if (!api) return;
+    const unit = state.units[unitId];
+    if (!unit) return;
+    try {
+      const nextState = workspaceReducer(state, action);
+      await api.patch(`/v1/units/${encodeURIComponent(unitId)}`, {
+        name: unit.name,
+        description: unit.description,
+        instructionOverride: unit.instructionOverride ?? "",
+        languageCode: unit.languageCode ?? "und",
+        expectedRevision: unit.revision ?? 1,
+        ...serializeUnitContent(nextState, unitId),
+      });
+      await refreshWorkspace();
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "REVISION_CONFLICT") {
+        await refreshWorkspace();
+        setWorkspaceError("This unit changed on another device. The latest revision has been loaded.");
+      } else {
+        setWorkspaceError(apiErrorMessage(error));
+      }
+    }
+  }
+
+  async function updateCollectionProfile(collection: Collection, learningProfile: Collection["learningProfile"]) {
+    dispatch({ type: "updateCollection", collection: { ...collection, learningProfile } });
+    try {
+      await saveCollectionSetting(collection.id, "learningProfile", learningProfile);
+    } catch (error) {
+      setWorkspaceError(apiErrorMessage(error));
+      await refreshWorkspace();
+    }
+  }
+
+  async function persistTheme(theme: typeof state.theme) {
+    const normalized = reconcileThemeSelection(theme);
+    dispatch({ type: "applyTheme", theme: normalized });
+    try {
+      await saveUserSetting("theme", normalized);
+    } catch (error) {
+      setWorkspaceError(apiErrorMessage(error));
+    }
+  }
+
+  async function persistUnitOrder(id: string, targetId: string, placement: "before" | "after") {
+    const action = { type: "moveUnit", id, targetId, placement } as const;
+    const nextState = workspaceReducer(state, action);
     dispatch(action);
-    closeEditor();
-    return null;
+    if (!activeCollection) return;
+    try {
+      const order = nextState.unitOrder.filter((unitId) => nextState.units[unitId]?.collectionId === activeCollection.id);
+      if (api) {
+        await upsertSetting(
+          api,
+          { scope: "collection_user", collectionId: activeCollection.id },
+          "unitOrder",
+          order,
+        );
+      }
+    } catch (error) {
+      setWorkspaceError(apiErrorMessage(error));
+      await refreshWorkspace();
+    }
   }
 
   function closeMobileNavigation() {
@@ -212,6 +466,68 @@ export function App() {
     setPendingAppearanceDraft(null);
   }
 
+  const inviteAcceptanceModal = pendingInviteToken && api ? (
+    <InviteAcceptanceModal
+      key={pendingInviteToken}
+      api={api}
+      token={pendingInviteToken}
+      turnstileSiteKey={auth.turnstileSiteKey}
+      onClose={() => setPendingInviteToken(null)}
+      onAccepted={async (collection) => {
+        await refreshWorkspace();
+        dispatch({ type: "selectCollection", id: collection.id });
+        setPendingInviteToken(null);
+      }}
+    />
+  ) : null;
+
+  if (workspaceLoading) {
+    return (
+      <main className="cloud-workspace-status" role="status">
+        <span className="cloud-workspace-spinner" />
+        <h1>Loading your workspace</h1>
+        <p>Meoing is fetching the latest collections and units.</p>
+      </main>
+    );
+  }
+
+  if (!activeCollection) {
+    return (
+      <main className="cloud-workspace-status">
+        <div className="auth-brand" aria-hidden="true">M</div>
+        <h1>{workspaceError ? "Workspace unavailable" : "Create your first collection"}</h1>
+        <p>{workspaceError ?? "Collections keep your units, roles and learning progress together."}</p>
+        {workspaceError ? (
+          <button className="auth-primary" type="button" onClick={() => void refreshWorkspace()}>Try again</button>
+        ) : (
+          <button className="auth-primary" type="button" onClick={() => openEditor({ type: "collection" })}>New collection</button>
+        )}
+        {deletedCollections.length > 0 && api ? (
+          <button className="auth-secondary" type="button" onClick={() => setDeletedCollectionsOpen(true)}>
+            Restore deleted collections ({deletedCollections.length})
+          </button>
+        ) : null}
+        <button className="auth-secondary" type="button" onClick={() => void auth.signOut()}>Sign out</button>
+        <EntityEditorModal
+          editor={editor}
+          onClose={closeEditor}
+          onSubmit={submitEditor}
+          onAccentPreview={setCollectionAccentPreview}
+          targetLanguage="English"
+        />
+        {deletedCollectionsOpen && api ? (
+          <DeletedCollectionsModal
+            api={api}
+            collections={deletedCollections}
+            onClose={() => setDeletedCollectionsOpen(false)}
+            onRestored={refreshWorkspace}
+          />
+        ) : null}
+        {inviteAcceptanceModal}
+      </main>
+    );
+  }
+
   const sidebarWidth = sidebarWidthDraft ?? state.sidebarWidth;
   const activeTheme = themeDraft ?? pendingThemeDraft ?? pendingAppearanceDraft ?? appearanceDraft ?? state.theme;
   const shellStyle = {
@@ -222,6 +538,13 @@ export function App() {
 
   return (
     <div className="app-shell" style={shellStyle}>
+      {workspaceError ? (
+        <div className="workspace-sync-error" role="alert">
+          <span>{workspaceError}</span>
+          <button type="button" onClick={() => setWorkspaceError(null)}>Dismiss</button>
+        </div>
+      ) : null}
+      <AccountMenu />
       <CollectionRail
         collections={collections}
         activeId={activeCollection.id}
@@ -234,8 +557,12 @@ export function App() {
           closeMobileNavigation();
         }}
         onCreate={() => openEditor({ type: "collection" })}
+        canEdit={(collection) => hasPermission(collection, "manage_collection")}
+        canDelete={(collection) => hasPermission(collection, "manage_collection")}
         onEdit={(collection) => openEditor({ type: "collection", value: collection })}
-        onDelete={(collection) => confirmDelete(collection.name, () => dispatch({ type: "deleteCollection", id: collection.id }))}
+        onDelete={(collection) => confirmDelete(collection.name, () => deleteCollection(collection))}
+        deletedCollectionCount={deletedCollections.length}
+        onOpenDeletedCollections={() => setDeletedCollectionsOpen(true)}
       />
       <WorkspaceSidebar
         collection={activeCollection}
@@ -266,13 +593,32 @@ export function App() {
           setQuestionSettingsCollection(activeCollection);
           closeMobileNavigation();
         }}
-        onDeleteUnit={(unit) => confirmDelete(cleanUnitName(unit.name), () => dispatch({ type: "deleteUnit", id: unit.id }))}
-        onMoveUnit={(id, targetId, placement) => dispatch({ type: "moveUnit", id, targetId, placement })}
+        onDeleteUnit={(unit) => confirmDelete(cleanUnitName(unit.name), () => deleteUnit(unit))}
+        onOpenUnitRevisions={(unit) => {
+          setUnitRevisionsUnit(unit);
+          closeMobileNavigation();
+        }}
+        onMoveUnit={(id, targetId, placement) => void persistUnitOrder(id, targetId, placement)}
         onOpenAppearance={() => setAppearanceDraft(cloneTheme(state.theme))}
+        onOpenCollectionAdmin={() => {
+          setCollectionAdminOpen(true);
+          closeMobileNavigation();
+        }}
+        onOpenDeletedUnits={() => {
+          setDeletedUnitsOpen(true);
+          closeMobileNavigation();
+        }}
+        profileDisplayName={auth.currentUser?.profile.displayName}
+        profileUsername={auth.currentUser?.profile.username}
+        canCreateUnit={canCreateContent}
+        canEditUnit={canEditContent}
+        canDeleteUnit={canDeleteContent}
+        canManageCollection={canManageCollection}
         onSidebarResize={setSidebarWidthDraft}
         onSidebarResizeEnd={(width) => {
           dispatch({ type: "setSidebarWidth", width });
           setSidebarWidthDraft(null);
+          void saveUserSetting("sidebarWidth", width).catch((error) => setWorkspaceError(apiErrorMessage(error)));
         }}
       />
       <button
@@ -294,10 +640,19 @@ export function App() {
         onOpenMobileNavigation={() => setMobileNavigationOpen(true)}
         onSelectKind={(kind) => dispatch({ type: "selectKind", kind })}
         onCreate={createContent}
+        canCreate={canCreateContent}
+        canEdit={canEditContent}
+        canDelete={canDeleteContent}
         onEditDocument={(document) => openEditor({ type: "document", value: document, unitId: document.unitId })}
-        onDeleteDocument={(document) => confirmDelete(document.title, () => dispatch({ type: "deleteDocument", id: document.id }))}
+        onDeleteDocument={(document) => confirmDelete(
+          document.title,
+          () => updateUnitContent({ type: "deleteDocument", id: document.id }, document.unitId),
+        )}
         onEditStudyItem={(item) => openEditor({ type: "studyItem", value: item, unitId: item.unitId, kind: item.kind as StudyKind })}
-        onDeleteStudyItem={(item) => confirmDelete(item.text, () => dispatch({ type: "deleteStudyItem", id: item.id }))}
+        onDeleteStudyItem={(item) => confirmDelete(
+          item.text,
+          () => updateUnitContent({ type: "deleteStudyItem", id: item.id }, item.unitId),
+        )}
         mode={workspaceMode}
         onModeChange={setWorkspaceMode}
       />
@@ -308,19 +663,23 @@ export function App() {
           unit={activeUnit}
           documents={documents}
           studyItems={unitStudyItems}
+          api={api ?? undefined}
+          userId={auth.currentUser?.profile.id}
           mode={workspaceMode}
           onModeChange={setWorkspaceMode}
           onOpenMobileNavigation={() => setMobileNavigationOpen(true)}
-          onUpdateProfile={(learningProfile) => dispatch({
-            type: "updateCollection",
-            collection: { ...activeCollection, learningProfile },
-          })}
+          onUpdateProfile={(learningProfile) => void updateCollectionProfile(activeCollection, learningProfile)}
+          canCreateLessons={canCreateLessons}
+          canDeleteContent={canDeleteContent}
+          canManageCollectionProfile={canManageCollection}
         />
       ) : (
         <LettersWorkspace
           collection={activeCollection}
           units={units}
           studyItems={collectionStudyItems}
+          api={api ?? undefined}
+          userId={auth.currentUser?.profile.id}
           mode={workspaceMode}
           onModeChange={setWorkspaceMode}
           onOpenMobileNavigation={() => setMobileNavigationOpen(true)}
@@ -346,8 +705,55 @@ export function App() {
             collection: { ...currentCollection, questionSettings },
           });
           setQuestionSettingsCollection(null);
+          void saveCollectionSetting(currentCollection.id, "questionSettings", questionSettings)
+            .catch((error) => {
+              setWorkspaceError(apiErrorMessage(error));
+              void refreshWorkspace();
+            });
         }}
       />
+      {collectionAdminOpen && api ? (
+        <CollectionAdminModal
+          collection={activeCollection}
+          api={api}
+          currentUserId={auth.currentUser?.profile.id ?? ""}
+          effectivePermissions={activeCollection.effectivePermissions ?? []}
+          onClose={() => setCollectionAdminOpen(false)}
+          onChanged={refreshWorkspace}
+        />
+      ) : null}
+      {unitRevisionsUnit && api ? (
+        <UnitRevisionsModal
+          api={api}
+          unit={unitRevisionsUnit}
+          canRestore={canEditContent}
+          onClose={() => setUnitRevisionsUnit(null)}
+          onRestored={refreshWorkspace}
+        />
+      ) : null}
+      {deletedCollectionsOpen && api ? (
+        <DeletedCollectionsModal
+          api={api}
+          collections={deletedCollections}
+          onClose={() => setDeletedCollectionsOpen(false)}
+          onRestored={refreshWorkspace}
+        />
+      ) : null}
+      {deletedUnitsOpen && api ? (
+        <DeletedUnitsModal
+          key={activeCollection.id}
+          api={api}
+          collection={activeCollection}
+          onClose={() => setDeletedUnitsOpen(false)}
+          onRestored={async (unit) => {
+            await refreshWorkspace();
+            dispatch({ type: "selectCollection", id: unit.collectionId });
+            dispatch({ type: "selectUnit", id: unit.id });
+            setWorkspaceMode("library");
+          }}
+        />
+      ) : null}
+      {inviteAcceptanceModal}
       <AppearanceModal
         open={Boolean(appearanceDraft)}
         draft={appearanceDraft}
@@ -355,7 +761,7 @@ export function App() {
         onExited={finishAppearanceExit}
         onChange={setAppearanceDraft}
         onApply={(theme) => {
-          dispatch({ type: "applyTheme", theme: reconcileThemeSelection(theme) });
+          void persistTheme(theme);
           setPendingThemeDraft(null);
           setAppearanceDraft(null);
         }}
@@ -371,7 +777,7 @@ export function App() {
         onBack={returnThemeCustomizerToAppearance}
         onApply={() => {
           if (!themeDraft) return;
-          dispatch({ type: "applyTheme", theme: reconcileThemeSelection(themeDraft) });
+          void persistTheme(themeDraft);
           setPendingAppearanceDraft(null);
           setThemeDraft(null);
         }}

@@ -1,0 +1,5 @@
+# Copy this file to .dev.vars for the API Worker.
+R2_ACCESS_KEY_ID=
+R2_SECRET_ACCESS_KEY=
+INVITE_TOKEN_SECRET=
+TURNSTILE_SECRET_KEY=

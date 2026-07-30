@@ -1,0 +1,53 @@
+{
+  "name": "meoing-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "acceptance:check": "node --check scripts/acceptance-helpers.mjs && node --check scripts/staging-smoke.mjs && node --check scripts/load-gate.mjs && node --check scripts/db-concurrency.mjs",
+    "acceptance:load": "node scripts/load-gate.mjs",
+    "acceptance:staging": "node scripts/staging-smoke.mjs",
+    "auth:key:local": "node scripts/setup-local-auth.mjs",
+    "build": "wrangler deploy --dry-run --config wrangler.api.jsonc --env=\"\" --outdir .wrangler-dry-run/api && wrangler deploy --dry-run --config wrangler.maintenance.jsonc --env=\"\" --outdir .wrangler-dry-run/maintenance",
+    "check": "npm run typecheck && npm run lint && npm run test && npm run build",
+    "db:start": "npm run auth:key:local && supabase start",
+    "db:reset": "supabase db reset",
+    "db:concurrency": "node scripts/db-concurrency.mjs",
+    "db:test": "supabase test db",
+    "db:stop": "supabase stop",
+    "dev": "wrangler dev --config wrangler.api.jsonc",
+    "dev:maintenance": "wrangler dev --config wrangler.maintenance.jsonc --env-file .dev.vars.maintenance --test-scheduled",
+    "lint": "oxlint --deny-warnings src test",
+    "openapi:export": "esbuild ./scripts/export-openapi.ts --bundle --platform=node --format=esm --outfile=.wrangler/openapi-export.mjs && node .wrangler/openapi-export.mjs",
+    "openapi:types": "npm run openapi:export && openapi-typescript openapi.json -o ../frontend/src/api/generated.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "types": "wrangler types --config wrangler.api.jsonc --env-file .dev.vars.example --env-interface ApiEnv worker-configuration.d.ts && wrangler types --config wrangler.maintenance.jsonc --env-file .dev.vars.maintenance.example --env-interface MaintenanceEnv --include-runtime=false worker-maintenance-configuration.d.ts"
+  },
+  "dependencies": {
+    "@hono/zod-openapi": "1.5.1",
+    "aws4fetch": "1.0.20",
+    "hono": "4.12.32",
+    "jose": "6.2.5",
+    "pg": "8.22.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.19.0",
+    "@types/pg": "8.20.0",
+    "openapi-typescript": "7.13.0",
+    "oxlint": "1.76.0",
+    "supabase": "2.110.0",
+    "typescript": "5.9.3",
+    "vitest": "4.1.10",
+    "wrangler": "4.115.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "workerd@1.20260722.1": true
+  }
+}

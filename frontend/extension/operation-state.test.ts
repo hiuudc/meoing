@@ -7,6 +7,7 @@ import {
   expiredActiveOperationIds,
   failOperationsForTabState,
   hasLegacyTransientState,
+  latestUnitOperation,
   pruneTerminalStates,
   publicOperationState,
   removeQueuedOperation,
@@ -143,6 +144,39 @@ describe("session extension operation state", () => {
       result: undefined,
       error: undefined,
     });
+  });
+
+  it("finds the latest active or unacknowledged operation for one unit and kind", () => {
+    const oldLesson = {
+      ...state("completed", "lesson-old", "unit-1"),
+      updatedAt: "2026-07-17T00:01:00.000Z",
+      operation: { ...operation("lesson-old", "unit-1"), kind: "create_lesson" as const },
+    };
+    const currentLesson = {
+      ...state("awaiting_response", "lesson-current", "unit-1"),
+      updatedAt: "2026-07-17T00:02:00.000Z",
+      operation: { ...operation("lesson-current", "unit-1"), kind: "create_lesson" as const },
+    };
+    const newerCoaching = {
+      ...state("completed", "coach-newer", "unit-1"),
+      updatedAt: "2026-07-17T00:03:00.000Z",
+      operation: { ...operation("coach-newer", "unit-1"), kind: "coaching" as const },
+    };
+    const otherUnit = {
+      ...state("completed", "lesson-other", "unit-2"),
+      updatedAt: "2026-07-17T00:04:00.000Z",
+      operation: { ...operation("lesson-other", "unit-2"), kind: "create_lesson" as const },
+    };
+    const states = {
+      "lesson-old": oldLesson,
+      "lesson-current": currentLesson,
+      "coach-newer": newerCoaching,
+      "lesson-other": otherUnit,
+    };
+
+    expect(latestUnitOperation(states, "unit-1")?.operationId).toBe("coach-newer");
+    expect(latestUnitOperation(states, "unit-1", "create_lesson")?.operationId).toBe("lesson-current");
+    expect(latestUnitOperation(states, "missing-unit", "create_lesson")).toBeUndefined();
   });
 
   it("expires active work by deadline and prunes only stale terminal results", () => {

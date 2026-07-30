@@ -22,7 +22,6 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { gradeAnswer, isAnswerComplete } from "./grader";
 import { GlossaryText } from "./GlossaryText";
-import { shouldFlushProgress } from "./progress";
 import { answerActivationSpeechText, questionSpeechText } from "./questionContent";
 import {
   isForbiddenLessonShortcut,
@@ -34,7 +33,6 @@ import {
   loadLessonPlayerPreference,
   pauseListening,
   resetLessonPlayerPreference,
-  saveLessonPlayerPreference,
   type LessonPlayerPreference,
 } from "./playerPreferences";
 import { getQuestionFormatDefinition } from "./questionRegistry";
@@ -45,7 +43,6 @@ import {
   languageTagForSpeech,
   loadSpeechPreference,
   resolveSpeechVoice,
-  saveSpeechPreference,
   speechTextForLanguage,
   type BrowserSpeechPreference,
   voicePreviewSample,
@@ -77,7 +74,12 @@ interface LessonPlayerProps {
   lesson: PlayableLesson;
   coachingAvailable: boolean;
   variant?: "standard" | "lettersPractice";
-  onEvaluate?: (question: LessonQuestion, answer: QuestionAnswer, speaking?: SpeakingSubmission | null) => Promise<Evaluation>;
+  onEvaluate?: (
+    question: LessonQuestion,
+    answer: QuestionAnswer,
+    speaking?: SpeakingSubmission | null,
+    progressQuestionId?: string,
+  ) => Promise<Evaluation>;
   onProgressBatch?: (attempts: AttemptRecord[], snapshot: LessonProgressSnapshot) => void | Promise<void>;
   onAskCoach?: (
     question: LessonQuestion,
@@ -156,6 +158,16 @@ function isEditableTarget(target: HTMLElement | null): boolean {
   return Boolean(target?.closest("input, textarea, select, [contenteditable='true']"));
 }
 
+function createAttemptId(): string {
+  if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  globalThis.crypto.getRandomValues(bytes);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 function isTextEditingTarget(target: HTMLElement | null): boolean {
   const editable = target?.closest<HTMLElement>("input, textarea, select, [contenteditable='true']");
   if (!editable) return false;
@@ -219,8 +231,8 @@ export function LessonPlayer({
   const [theoryOpen, setTheoryOpen] = useState(false);
   const [speechOpen, setSpeechOpen] = useState(false);
   const [speechPosition, setSpeechPosition] = useState({ top: 0, left: 0 });
-  const [speechPreference, setSpeechPreference] = useState<BrowserSpeechPreference>(() => loadSpeechPreference(window.localStorage));
-  const [playerPreference, setPlayerPreference] = useState<LessonPlayerPreference>(() => loadLessonPlayerPreference(window.localStorage));
+  const [speechPreference, setSpeechPreference] = useState<BrowserSpeechPreference>(() => loadSpeechPreference());
+  const [playerPreference, setPlayerPreference] = useState<LessonPlayerPreference>(() => loadLessonPlayerPreference());
   const [answerInputModeOverride, setAnswerInputModeOverride] = useState<AnswerInputMode | null>(null);
   const [voicePreviewStatus, setVoicePreviewStatus] = useState("");
   const [now, setNow] = useState(() => Date.now());
@@ -234,6 +246,11 @@ export function LessonPlayer({
   const [recordingSkipShortcut, setRecordingSkipShortcut] = useState(false);
   const [shortcutStatus, setShortcutStatus] = useState("");
   const pendingAttemptsRef = useRef<AttemptRecord[]>([]);
+  const pendingProgressSnapshotRef = useRef<LessonProgressSnapshot | null>(null);
+  const progressFlushQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const submittedAnswerRef = useRef<QuestionAnswer>("");
+  const submittedTranscriptRef = useRef<string | null>(null);
+  const evaluationSourceRef = useRef<AttemptRecord["evaluationSource"]>("server_rule");
   const retryStateRef = useRef(retryState);
   const progressHandlerRef = useRef(onProgressBatch);
   const lessonRef = useRef(lesson);
@@ -282,6 +299,9 @@ export function LessonPlayer({
     setAnswer(nextQuestion ? initialAnswer(nextQuestion) : "");
     setSpeaking(null);
     setEvaluation(null);
+    submittedAnswerRef.current = "";
+    submittedTranscriptRef.current = null;
+    evaluationSourceRef.current = "server_rule";
     setSubmitting(false);
     submittingRef.current = false;
     setError("");
@@ -306,6 +326,9 @@ export function LessonPlayer({
     setAnswer(first ? initialAnswer(first) : "");
     setSpeaking(null);
     setEvaluation(null);
+    submittedAnswerRef.current = "";
+    submittedTranscriptRef.current = null;
+    evaluationSourceRef.current = "server_rule";
     setSubmitting(false);
     submittingRef.current = false;
     continuingRef.current = false;
@@ -321,22 +344,19 @@ export function LessonPlayer({
     setRecordingSkipShortcut(false);
     setShortcutStatus("");
     pendingAttemptsRef.current = [];
+    pendingProgressSnapshotRef.current = null;
   }, [lesson]);
 
   useEffect(() => {
     function flushWhenHidden() {
       if (document.visibilityState !== "hidden" || !pendingAttemptsRef.current.length) return;
-      const pending = [...pendingAttemptsRef.current];
-      pendingAttemptsRef.current = [];
-      void progressHandlerRef.current?.(pending, buildSnapshot(lessonRef.current, retryStateRef.current));
+      void flushPendingProgress().catch(() => undefined);
     }
     document.addEventListener("visibilitychange", flushWhenHidden);
     return () => {
       document.removeEventListener("visibilitychange", flushWhenHidden);
       if (!pendingAttemptsRef.current.length) return;
-      const pending = [...pendingAttemptsRef.current];
-      pendingAttemptsRef.current = [];
-      void progressHandlerRef.current?.(pending, buildSnapshot(lessonRef.current, retryStateRef.current));
+      void flushPendingProgress().catch(() => undefined);
     };
   }, []);
 
@@ -415,14 +435,6 @@ export function LessonPlayer({
   }, []);
 
   useEffect(() => {
-    saveSpeechPreference(speechPreference, window.localStorage);
-  }, [speechPreference]);
-
-  useEffect(() => {
-    saveLessonPlayerPreference(playerPreference, window.localStorage);
-  }, [playerPreference]);
-
-  useEffect(() => {
     setNow(Date.now());
     if (playerPreference.listeningDisabledUntil <= Date.now()) return;
     const interval = window.setInterval(() => {
@@ -487,11 +499,33 @@ export function LessonPlayer({
     };
   }, [speechOpen]);
 
-  async function flushPendingProgress() {
-    if (!pendingAttemptsRef.current.length) return;
-    const pending = [...pendingAttemptsRef.current];
-    pendingAttemptsRef.current = [];
-    await progressHandlerRef.current?.(pending, buildSnapshot(lessonRef.current, retryStateRef.current));
+  function flushPendingProgress(snapshotState?: RetryState): Promise<void> {
+    if (snapshotState || !pendingProgressSnapshotRef.current) {
+      pendingProgressSnapshotRef.current = buildSnapshot(
+        lessonRef.current,
+        snapshotState ?? retryStateRef.current,
+      );
+    }
+    const operation = progressFlushQueueRef.current.then(async () => {
+      if (!pendingAttemptsRef.current.length) return;
+      const handler = progressHandlerRef.current;
+      if (!handler) {
+        pendingAttemptsRef.current = [];
+        pendingProgressSnapshotRef.current = null;
+        return;
+      }
+      const pending = [...pendingAttemptsRef.current];
+      const snapshot = pendingProgressSnapshotRef.current
+        ?? buildSnapshot(lessonRef.current, retryStateRef.current);
+      await handler(pending, snapshot);
+      const persistedAttemptIds = new Set(pending.map((attempt) => attempt.attemptId));
+      pendingAttemptsRef.current = pendingAttemptsRef.current.filter(
+        (attempt) => !persistedAttemptIds.has(attempt.attemptId),
+      );
+      if (!pendingAttemptsRef.current.length) pendingProgressSnapshotRef.current = null;
+    });
+    progressFlushQueueRef.current = operation.catch(() => undefined);
+    return operation;
   }
 
   async function requestExit() {
@@ -501,6 +535,8 @@ export function LessonPlayer({
     try {
       await flushPendingProgress();
       onExit();
+    } catch {
+      setError("Progress could not be saved on this device. Keep this lesson open and try again.");
     } finally {
       setExiting(false);
     }
@@ -715,16 +751,24 @@ export function LessonPlayer({
     setError("");
     submittingRef.current = true;
     setSubmitting(true);
+    submittedAnswerRef.current = (
+      typeof candidateAnswer === "string"
+      && !candidateAnswer.trim()
+      && speaking?.transcript?.trim()
+    ) ? speaking.transcript.trim() : candidateAnswer;
+    submittedTranscriptRef.current = speaking?.transcript?.trim() || null;
     try {
       const local = gradeAnswer(currentQuestion, candidateAnswer, { inputMode: answerInputMode });
       if (!local.requiresAi) {
+        evaluationSourceRef.current = "server_rule";
         setEvaluation(local);
       } else if (currentQuestion.type === "characterTracing") {
         setError("Character tracing could not be graded locally.");
       } else if (!onEvaluate) {
         setError("This question needs ChatGPT evaluation and is unavailable in local-only mode.");
       } else {
-        setEvaluation(await onEvaluate(currentQuestion, candidateAnswer, speaking));
+        evaluationSourceRef.current = "client_extension";
+        setEvaluation(await onEvaluate(currentQuestion, candidateAnswer, speaking, currentSlotId));
       }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The answer could not be evaluated right now.");
@@ -734,29 +778,38 @@ export function LessonPlayer({
     }
   }
 
-  function continueLesson() {
+  async function continueLesson() {
     if (!currentQuestion || !currentSlotId || !evaluation || continuingRef.current) return;
     continuingRef.current = true;
     window.speechSynthesis?.cancel();
     const attemptNumber = (retryState.attemptsByQuestion[currentSlotId] ?? 0) + 1;
     const nextState = applyAttempt(retryState, currentSlotId, evaluation.status);
-    const record: AttemptRecord = {
-      questionId: currentSlotId,
-      attemptNumber,
-      status: evaluation.status,
-      score: evaluation.score,
-      firstTry: attemptNumber === 1,
-      answeredAt: new Date().toISOString(),
-    };
-    const pending = [...pendingAttemptsRef.current, record];
-    pendingAttemptsRef.current = pending;
-    const lessonComplete = nextState.queue.length === 0;
-    if (shouldFlushProgress({ pending, lessonComplete, pageHidden: document.visibilityState === "hidden" })) {
-      pendingAttemptsRef.current = [];
-      void onProgressBatch?.(pending, buildSnapshot(lesson, nextState));
+    const alreadyPending = pendingAttemptsRef.current.some(
+      (attempt) => attempt.questionId === currentSlotId && attempt.attemptNumber === attemptNumber,
+    );
+    if (!alreadyPending) {
+      pendingAttemptsRef.current = [...pendingAttemptsRef.current, {
+        attemptId: createAttemptId(),
+        questionId: currentSlotId,
+        attemptNumber,
+        answer: submittedAnswerRef.current,
+        evaluationSource: evaluationSourceRef.current,
+        status: evaluation.status,
+        outcome: evaluation.status === "correct" ? "correct" : "incorrect",
+        transcript: submittedTranscriptRef.current,
+        score: evaluation.score,
+        firstTry: attemptNumber === 1,
+        answeredAt: new Date().toISOString(),
+      }];
     }
-    showRetryState(nextState);
-    setNotice("");
+    try {
+      await flushPendingProgress(nextState);
+      showRetryState(nextState);
+      setNotice("");
+    } catch {
+      continuingRef.current = false;
+      setError("Progress could not be saved on this device. Keep this lesson open and try Continue again.");
+    }
   }
 
   function skipCurrentQuestion() {

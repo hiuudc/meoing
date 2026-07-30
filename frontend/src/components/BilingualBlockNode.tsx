@@ -43,7 +43,7 @@ function supportsSpeech(): boolean {
 
 function speakText(text: string, language: string) {
   if (!supportsSpeech() || !text.trim()) return;
-  const preference = loadSpeechPreference(window.localStorage);
+  const preference = loadSpeechPreference();
   const utterance = new SpeechSynthesisUtterance(speechTextForLanguage(text, language));
   utterance.lang = languageTagForSpeech(language);
   utterance.rate = preference.rate;

@@ -25,7 +25,7 @@ export type EditorState =
 interface EntityEditorModalProps {
   editor: EditorState | null;
   onClose: () => void;
-  onSubmit: (value: Record<string, string>) => string | null;
+  onSubmit: (value: Record<string, string>) => string | null | Promise<string | null>;
   onAccentPreview: (accent: string | null) => void;
   targetLanguage: string;
 }
@@ -48,6 +48,7 @@ export function EntityEditorModal({
   const [accentPickerOpen, setAccentPickerOpen] = useState(false);
   const [accentPickerPosition, setAccentPickerPosition] = useState({ top: 0, left: 0 });
   const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
   const accentPickerButtonRef = useRef<HTMLButtonElement>(null);
   const accentPickerRef = useRef<HTMLDivElement>(null);
   const documentValueRef = useRef({ content: "", plainText: "" });
@@ -190,7 +191,7 @@ export function EntityEditorModal({
     }
   }
 
-  function submit(event: React.FormEvent<HTMLFormElement>) {
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!activeEditor) return;
     const required =
@@ -206,14 +207,19 @@ export function EntityEditorModal({
       return;
     }
     setAccentPickerOpen(false);
-    const saveError = onSubmit(activeEditor.type === "document"
-      ? {
-        ...fields,
-        body: documentValueRef.current.plainText,
-        content: documentValueRef.current.content,
-      }
-      : fields);
-    if (saveError) setError(saveError);
+    setSaving(true);
+    try {
+      const saveError = await onSubmit(activeEditor.type === "document"
+        ? {
+          ...fields,
+          body: documentValueRef.current.plainText,
+          content: documentValueRef.current.content,
+        }
+        : fields);
+      if (saveError) setError(saveError);
+    } finally {
+      setSaving(false);
+    }
   }
 
   if (!activeEditor) return null;
@@ -236,7 +242,7 @@ export function EntityEditorModal({
         </header>
         <form
           className={activeEditor.type === "document" ? "document-editor-form" : undefined}
-          onSubmit={submit}
+          onSubmit={(event) => void submit(event)}
         >
           {activeEditor.type === "collection" ? (
             <>
@@ -337,8 +343,10 @@ export function EntityEditorModal({
           ) : null}
           {error ? <p className="form-error">{error}</p> : null}
           <footer className="modal-actions">
-            <button className="secondary-button" type="button" onClick={onClose}>Cancel</button>
-            <button className="primary-button" type="submit">Save changes</button>
+            <button className="secondary-button" type="button" onClick={onClose} disabled={saving}>Cancel</button>
+            <button className="primary-button" type="submit" disabled={saving}>
+              {saving ? "Saving…" : "Save changes"}
+            </button>
           </footer>
         </form>
     </AnimatedModal>

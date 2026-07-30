@@ -1,9 +1,11 @@
 import {
+  ArchiveRestore,
   BookOpenText,
   ChevronDown,
   ChevronRight,
   FileText,
   GraduationCap,
+  History,
   MessageSquareQuote,
   MoreHorizontal,
   Palette,
@@ -45,8 +47,17 @@ interface WorkspaceSidebarProps {
   onEditUnit: (unit: Unit) => void;
   onOpenCollectionQuestions: () => void;
   onDeleteUnit: (unit: Unit) => void;
+  onOpenUnitRevisions?: (unit: Unit) => void;
   onMoveUnit: (id: string, targetId: string, placement: "before" | "after") => void;
   onOpenAppearance: () => void;
+  onOpenCollectionAdmin?: () => void;
+  onOpenDeletedUnits?: () => void;
+  profileDisplayName?: string | null;
+  profileUsername?: string | null;
+  canCreateUnit?: boolean;
+  canEditUnit?: boolean;
+  canDeleteUnit?: boolean;
+  canManageCollection?: boolean;
   onSidebarResize: (width: number) => void;
   onSidebarResizeEnd: (width: number) => void;
 }
@@ -88,8 +99,17 @@ export function WorkspaceSidebar({
   onEditUnit,
   onOpenCollectionQuestions,
   onDeleteUnit,
+  onOpenUnitRevisions,
   onMoveUnit,
   onOpenAppearance,
+  onOpenCollectionAdmin,
+  onOpenDeletedUnits,
+  profileDisplayName,
+  profileUsername,
+  canCreateUnit = true,
+  canEditUnit = true,
+  canDeleteUnit = true,
+  canManageCollection = true,
   onSidebarResize,
   onSidebarResizeEnd,
 }: WorkspaceSidebarProps) {
@@ -258,6 +278,7 @@ export function WorkspaceSidebar({
   }
 
   function openUnitMenuFromKeyboard(event: React.KeyboardEvent<HTMLButtonElement>, unit: Unit) {
+    if (!canEditUnit && !canDeleteUnit && !onOpenUnitRevisions) return;
     if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
     event.preventDefault();
     const rect = event.currentTarget.getBoundingClientRect();
@@ -279,14 +300,14 @@ export function WorkspaceSidebar({
       <div className="sidebar-heading">
         <span>{collection.name}</span>
         <ChevronDown size={16} />
-        <button
+        {canManageCollection ? <button
           className="collection-question-settings-button"
           type="button"
           aria-label={`Open question settings for ${collection.name}`}
           onClick={onOpenCollectionQuestions}
         >
           <Settings size={15} />
-        </button>
+        </button> : null}
         <button className="mobile-sidebar-close" type="button" onClick={onCloseMobile} aria-label="Close navigation">
           <X size={18} />
         </button>
@@ -315,15 +336,16 @@ export function WorkspaceSidebar({
 
         <div className="sidebar-section-heading">
           <p className="sidebar-section-label">Units</p>
-          <button type="button" aria-label="Add unit" onClick={onCreateUnit}>
+          {canCreateUnit ? <button type="button" aria-label="Add unit" onClick={onCreateUnit}>
             <Plus size={15} />
-          </button>
+          </button> : null}
         </div>
         <div className="unit-list">
           {units.length ? (
             units.map((unit, index) => {
               const cleanName = cleanUnitName(unit.name);
               const expanded = expandedUnitIds.has(unit.id);
+              const hasUnitActions = canEditUnit || canDeleteUnit || Boolean(onOpenUnitRevisions);
               const subnavId = `unit-subnav-${encodeURIComponent(unit.id)}`;
               const dropClass =
                 dragState?.targetId === unit.id && dragState.placement
@@ -338,6 +360,7 @@ export function WorkspaceSidebar({
                   <div
                     className={`unit-row-wrap ${activeUnitId === unit.id ? "is-current" : ""}${expanded ? " is-expanded" : ""}${unitMenu?.unit.id === unit.id ? " is-menu-open" : ""}`}
                     onContextMenu={(event) => {
+                      if (!hasUnitActions) return;
                       event.preventDefault();
                       openUnitMenu(unit, event.clientX, event.clientY, event.currentTarget.querySelector<HTMLButtonElement>(".unit-row"));
                     }}
@@ -381,7 +404,7 @@ export function WorkspaceSidebar({
                     >
                       <span>{cleanName}</span>
                     </button>
-                    <button
+                    {hasUnitActions ? <button
                       className="unit-overflow-button"
                       type="button"
                       aria-label={`Open actions for ${cleanName}`}
@@ -394,7 +417,7 @@ export function WorkspaceSidebar({
                       }}
                     >
                       <MoreHorizontal size={16} />
-                    </button>
+                    </button> : null}
                   </div>
                   {expanded ? (
                     <div className="unit-subnav" id={subnavId}>
@@ -432,15 +455,29 @@ export function WorkspaceSidebar({
       </nav>
 
       <div className="sidebar-footer">
-        <button className="sidebar-nav-row" type="button" onClick={onOpenAppearance}>
+        {canEditUnit && onOpenDeletedUnits ? (
+          <button className="sidebar-nav-row" type="button" onClick={onOpenDeletedUnits}>
+            <ArchiveRestore size={16} />
+            <span>Recently deleted units</span>
+          </button>
+        ) : null}
+        {onOpenCollectionAdmin ? (
+          <button className="sidebar-nav-row" type="button" onClick={onOpenCollectionAdmin}>
+            <Settings size={16} />
+            <span>Collection settings</span>
+          </button>
+        ) : null}
+        {canManageCollection ? <button className="sidebar-nav-row" type="button" onClick={onOpenAppearance}>
           <Palette size={16} />
           <span>Appearance</span>
-        </button>
+        </button> : null}
         <div className="profile-row">
-          <span className="profile-avatar">M</span>
+          <span className="profile-avatar">
+            {(profileDisplayName || profileUsername || "M").trim().charAt(0).toUpperCase()}
+          </span>
           <span>
-            <strong>Mina</strong>
-            <small>Focused learner</small>
+            <strong>{profileDisplayName || profileUsername || "Meoing learner"}</strong>
+            <small>{profileUsername ? `@${profileUsername}` : "Signed in"}</small>
           </span>
         </div>
       </div>
@@ -470,8 +507,24 @@ export function WorkspaceSidebar({
           returnFocus={unitMenu.returnFocus}
           onClose={() => setUnitMenu(null)}
           items={[
-            { label: "Edit unit", icon: Pencil, onSelect: () => onEditUnit(unitMenu.unit) },
-            { label: "Delete unit", icon: Trash2, destructive: true, onSelect: () => onDeleteUnit(unitMenu.unit) },
+            ...(onOpenUnitRevisions
+              ? [{
+                label: "Revision history",
+                icon: History,
+                onSelect: () => onOpenUnitRevisions(unitMenu.unit),
+              }]
+              : []),
+            ...(canEditUnit
+              ? [{ label: "Edit unit", icon: Pencil, onSelect: () => onEditUnit(unitMenu.unit) }]
+              : []),
+            ...(canDeleteUnit
+              ? [{
+                label: "Delete unit",
+                icon: Trash2,
+                destructive: true,
+                onSelect: () => onDeleteUnit(unitMenu.unit),
+              }]
+              : []),
           ]}
         />
       ) : null}

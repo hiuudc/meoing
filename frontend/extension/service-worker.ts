@@ -2,6 +2,7 @@ import {
   MEOI_EXTENSION_PROTOCOL_VERSION,
   MEOI_PAGE_SOURCE,
   MEOI_PROMPT_MAX_BYTES,
+  type ChatOperationKind,
   type ChatOperationState,
   type ExtensionError,
   type ExtensionRequest,
@@ -9,6 +10,7 @@ import {
   type OperationDispatchReceipt,
   type OperationExpectation,
   type SendOperationPayload,
+  type UnitOperationLookup,
 } from "../src/integration/protocol";
 import { LESSON_QUESTION_FORMATS, type QuestionFormat } from "../src/learning/types";
 import { isAllowedMeoiOrigin } from "./integration-policy";
@@ -30,6 +32,7 @@ import {
   failOperationsForTabState,
   hasLegacyTransientState,
   isTerminalPhase,
+  latestUnitOperation,
   pruneTerminalStates,
   publicOperationState,
   recoverOpeningOperations,
@@ -169,13 +172,19 @@ function validatePageRequest(value: unknown): ExtensionRequest<Record<string, un
     || typeof value.requestId !== "string"
     || !validOperationId(value.requestId)
     || typeof value.command !== "string"
-    || !["SEND_OPERATION", "OPEN_VOICE", "GET_INTEGRATION_STATUS", "GET_OPERATION_STATE", "RETRY_OPERATION", "ACK_OPERATION_RESULT", "RESET_UNIT_CHAT"].includes(value.command)
+    || !["SEND_OPERATION", "OPEN_VOICE", "GET_INTEGRATION_STATUS", "GET_UNIT_OPERATION", "GET_OPERATION_STATE", "RETRY_OPERATION", "ACK_OPERATION_RESULT", "RESET_UNIT_CHAT"].includes(value.command)
     || !isRecord(value.payload)) {
     throw new RequestFailure(extensionError("INVALID_COMMAND", "The page request is invalid."));
   }
   if (value.command === "SEND_OPERATION") validateSendPayload(value.payload);
   if (["OPEN_VOICE", "RESET_UNIT_CHAT"].includes(value.command) && !validId(value.payload.unitId)) {
     throw new RequestFailure(extensionError("INVALID_COMMAND", `${value.command} requires a valid unit ID.`));
+  }
+  if (value.command === "GET_UNIT_OPERATION"
+    && (!validId(value.payload.unitId)
+      || (value.payload.kind !== undefined
+        && !["create_lesson", "evaluate_answer", "coaching"].includes(String(value.payload.kind))))) {
+    throw new RequestFailure(extensionError("INVALID_COMMAND", "GET_UNIT_OPERATION requires a valid unit ID and operation kind."));
   }
   if (["GET_OPERATION_STATE", "RETRY_OPERATION", "ACK_OPERATION_RESULT"].includes(value.command)
     && !validOperationId(value.payload.operationId)) {
@@ -712,6 +721,19 @@ async function handlePageRequest(request: ExtensionRequest<Record<string, unknow
       return state
         ? { ok: true, data: publicOperationState(state) }
         : { ok: false, error: extensionError("OPERATION_STATE_NOT_FOUND", "The requested extension operation state was not found.") };
+    }
+    case "GET_UNIT_OPERATION": {
+      const states = await getSession<OperationStateMap>(STORAGE_KEYS.operationStates, {});
+      const kind = typeof payload.kind === "string"
+        ? payload.kind as ChatOperationKind
+        : undefined;
+      const state = latestUnitOperation(states, String(payload.unitId), kind);
+      return {
+        ok: true,
+        data: {
+          operation: state ? publicOperationState(state) : null,
+        } satisfies UnitOperationLookup,
+      };
     }
     case "RETRY_OPERATION":
       return { ok: true, data: await retryOperation(String(payload.operationId)) };

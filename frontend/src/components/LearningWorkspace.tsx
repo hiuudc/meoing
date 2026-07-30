@@ -18,6 +18,15 @@ import {
   Upload,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { ApiClient, ApiSuccess } from "../api/client";
+import {
+  buildProgressBatch,
+  discardProgressOutboxIssues,
+  enqueueProgressBatch,
+  flushProgressOutbox,
+  retryProgressOutboxIssues,
+  type ProgressBatchPayload,
+} from "../api/progressOutbox";
 import { createLocalPreviewLesson } from "../learning/demoLesson";
 import { LessonPlayer, type CoachChatMessage } from "../learning/LessonPlayer";
 import { normalizeLearningProfile } from "../learning/profile";
@@ -35,6 +44,7 @@ import type {
   LessonProgressSnapshot,
   LessonQuestion,
   QuestionAnswer,
+  Lesson,
   SpeakingSubmission,
 } from "../learning/types";
 import {
@@ -50,21 +60,20 @@ import {
   type LearningSessionState,
 } from "../integration/learningSession";
 import {
-  loadLocalLearningCache,
+  createLocalLearningCache,
   putStoredLesson,
   putStoredLessonProgress,
   removeStoredLesson,
-  saveLocalLearningCache,
   type LocalLearningCache,
   type StoredLessonEntry,
 } from "../integration/learningStorage";
 import {
-  loadPendingLearningOperations,
+  createPendingLearningOperationStore,
   pendingLearningOperationForUnit,
   putPendingLearningOperation,
   removePendingLearningOperation,
-  savePendingLearningOperations,
   type PendingLearningOperation,
+  type PendingLearningOperationStore,
 } from "../integration/pendingLearningOperations";
 import {
   buildOperationPrompt,
@@ -93,6 +102,11 @@ interface LearningWorkspaceProps {
   onModeChange: (mode: WorkspaceMode) => void;
   onOpenMobileNavigation: () => void;
   onUpdateProfile: (profile: LearningProfile) => void;
+  api?: ApiClient;
+  userId?: string;
+  canCreateLessons?: boolean;
+  canDeleteContent?: boolean;
+  canManageCollectionProfile?: boolean;
 }
 
 interface RetryAttempt {
@@ -121,9 +135,12 @@ interface SavedLessonChooserProps {
   onCreateNew: () => void;
   onDelete: (entry: StoredLessonEntry) => void;
   onReview: (entry: StoredLessonEntry) => void;
+  canCreate: boolean;
+  currentUserId?: string;
+  canDeleteContent: boolean;
 }
 
-const INITIAL_STATUS = "Meoi keeps up to five validated lessons per unit in this browser. ChatGPT requests still use this unit's linked conversation.";
+const INITIAL_STATUS = "Meoing syncs validated lessons and progress through its secure API. ChatGPT requests still use this unit's linked conversation.";
 const LESSON_DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
   year: "numeric",
   month: "short",
@@ -131,6 +148,153 @@ const LESSON_DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
   hour: "2-digit",
   minute: "2-digit",
 });
+
+interface WireLesson {
+  id: string;
+  unitId: string;
+  ownerId?: string;
+  status?: "draft" | "published";
+  revision?: number;
+  payload?: unknown;
+  createdAt?: string;
+}
+
+interface WireProgressSession {
+  id: string;
+}
+
+interface WireProgressAttempt {
+  questionId?: string;
+  attemptNumber?: number;
+  status?: string;
+}
+
+interface WireProgressHistory {
+  id: string;
+  lessonId: string;
+  attempts?: WireProgressAttempt[];
+  startedAt?: string;
+  updatedAt?: string;
+}
+
+type PendingEvaluationAcks = Map<string, string[]>;
+
+interface ProgressPersistenceDependencies {
+  enqueue: typeof enqueueProgressBatch;
+  acknowledge: (operationId: string) => Promise<boolean>;
+}
+
+export async function persistProgressBeforeEvaluationAck(
+  userId: string,
+  progressId: string,
+  payload: ProgressBatchPayload,
+  attempts: AttemptRecord[],
+  pendingAcks: PendingEvaluationAcks,
+  dependencies: ProgressPersistenceDependencies = {
+    enqueue: enqueueProgressBatch,
+    acknowledge: (operationId) => extensionBridge.acknowledgeOperation(operationId),
+  },
+): Promise<number> {
+  await dependencies.enqueue(userId, progressId, payload);
+  let failedAcks = 0;
+  const attemptedOperationIds = new Set<string>();
+  for (const attempt of attempts) {
+    const queue = pendingAcks.get(attempt.questionId);
+    const operationId = queue?.[0];
+    if (!queue?.length || !operationId || attemptedOperationIds.has(operationId)) continue;
+    attemptedOperationIds.add(operationId);
+    const acknowledged = await dependencies.acknowledge(operationId).catch(() => false);
+    if (!acknowledged) {
+      failedAcks += 1;
+      continue;
+    }
+    queue.shift();
+    if (!queue.length) pendingAcks.delete(attempt.questionId);
+  }
+  return failedAcks;
+}
+
+async function fetchCursorPages<T>(
+  api: ApiClient,
+  path: string,
+  signal: AbortSignal,
+  maxItems = 500,
+): Promise<T[]> {
+  const items: T[] = [];
+  const seenCursors = new Set<string>();
+  let cursor: string | null = null;
+  do {
+    const separator = path.includes("?") ? "&" : "?";
+    const cursorQuery: string = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
+    const response: ApiSuccess<{ items: T[]; nextCursor?: string | null }> = await api.get(
+      `${path}${separator}limit=100${cursorQuery}`,
+      signal,
+    );
+    items.push(...response.data.items);
+    const next: unknown = response.data.nextCursor ?? response.meta?.nextCursor;
+    cursor = typeof next === "string" && next && !seenCursors.has(next) ? next : null;
+    if (cursor) seenCursors.add(cursor);
+  } while (cursor && items.length < maxItems && !signal.aborted);
+  return items.slice(0, maxItems);
+}
+
+export function progressSnapshotFromWire(
+  lesson: Lesson,
+  progress: WireProgressHistory | undefined,
+): LessonProgressSnapshot | undefined {
+  if (!progress) return undefined;
+  const questionIds = new Set(lesson.questions.map((question) => question.id));
+  const attemptsByQuestion: Record<string, number> = {};
+  const completed = new Set<string>();
+  const firstTryCorrect = new Set<string>();
+  for (const attempt of progress.attempts ?? []) {
+    if (!attempt.questionId || !questionIds.has(attempt.questionId)) continue;
+    const attemptNumber = Number.isInteger(attempt.attemptNumber) && (attempt.attemptNumber ?? 0) > 0
+      ? attempt.attemptNumber!
+      : (attemptsByQuestion[attempt.questionId] ?? 0) + 1;
+    attemptsByQuestion[attempt.questionId] = Math.max(
+      attemptsByQuestion[attempt.questionId] ?? 0,
+      attemptNumber,
+    );
+    if (attempt.status === "correct") {
+      completed.add(attempt.questionId);
+      if (attemptNumber === 1) firstTryCorrect.add(attempt.questionId);
+    }
+  }
+  return {
+    lessonId: lesson.id,
+    completedQuestionIds: [...completed],
+    attemptsByQuestion,
+    firstTryCorrect: firstTryCorrect.size,
+    totalQuestions: lesson.questions.length,
+    masteryPercent: lesson.questions.length
+      ? Math.round((completed.size / lesson.questions.length) * 100)
+      : 0,
+    updatedAt: progress.updatedAt ?? progress.startedAt ?? new Date(0).toISOString(),
+  };
+}
+
+function lessonFromWire(value: WireLesson): Lesson {
+  const parsed = parseLesson(value.payload);
+  return {
+    ...parsed,
+    id: value.id,
+    ownerId: value.ownerId,
+    status: value.status,
+    revision: value.revision,
+    unitId: value.unitId || parsed.unitId,
+    createdAt: value.createdAt ?? parsed.createdAt,
+  };
+}
+
+export function canDeleteStoredLesson(
+  lesson: Pick<Lesson, "ownerId" | "status">,
+  currentUserId: string | undefined,
+  canDeleteContent: boolean,
+): boolean {
+  return canDeleteContent
+    || Boolean(currentUserId && lesson.status === "draft" && lesson.ownerId === currentUserId);
+}
 
 function defaultLearningView(unitId: string | undefined, cache: LocalLearningCache): LearningView {
   return unitId && cache.lessonsByUnit[unitId]?.length ? "choose" : "new";
@@ -186,25 +350,34 @@ function speakingMetadata(speaking?: SpeakingSubmission | null) {
   };
 }
 
-function SavedLessonChooser({ entries, onCreateNew, onDelete, onReview }: SavedLessonChooserProps) {
+function SavedLessonChooser({
+  entries,
+  onCreateNew,
+  onDelete,
+  onReview,
+  canCreate,
+  currentUserId,
+  canDeleteContent,
+}: SavedLessonChooserProps) {
   return (
     <section className="saved-lessons" aria-labelledby="saved-lessons-title">
       <div className="saved-lessons-heading">
         <div>
-          <p className="section-kicker">Local lesson history</p>
+          <p className="section-kicker">Synced lesson history</p>
           <h2 id="saved-lessons-title">Start a new lesson or review an older one</h2>
-          <p>These validated lessons are stored only in this browser. Reviewing always starts again from question one.</p>
+          <p>These validated lessons are synced securely. Reviewing creates a fresh progress session.</p>
         </div>
-        <button className="primary-button" type="button" onClick={onCreateNew}>
+        {canCreate ? <button className="primary-button" type="button" onClick={onCreateNew}>
           <Sparkles size={16} /> New lesson
-        </button>
+        </button> : null}
       </div>
       <ul className="saved-lesson-grid">
-        {entries.map((entry) => (
-          <li key={entry.lesson.id}>
+        {entries.map((entry) => {
+          const canDelete = canDeleteStoredLesson(entry.lesson, currentUserId, canDeleteContent);
+          return <li key={entry.lesson.id}>
             <article className="saved-lesson-card">
               <div className="saved-lesson-card-topline">
-                <span><BookOpen size={14} /> Saved locally</span>
+                <span><BookOpen size={14} /> Synced</span>
                 <time dateTime={entry.savedAt}>{formatLessonDate(entry.savedAt)}</time>
               </div>
               <h3>{entry.lesson.title}</h3>
@@ -224,7 +397,7 @@ function SavedLessonChooser({ entries, onCreateNew, onDelete, onReview }: SavedL
                 <button className="secondary-button" type="button" onClick={() => onReview(entry)}>
                   <Play size={15} /> Review from the start
                 </button>
-                <button
+                {canDelete ? <button
                   className="saved-lesson-delete-button"
                   type="button"
                   aria-label={`Delete saved lesson ${entry.lesson.title}`}
@@ -232,11 +405,11 @@ function SavedLessonChooser({ entries, onCreateNew, onDelete, onReview }: SavedL
                   onClick={() => onDelete(entry)}
                 >
                   <Trash2 size={16} />
-                </button>
+                </button> : null}
               </div>
             </article>
-          </li>
-        ))}
+          </li>;
+        })}
       </ul>
     </section>
   );
@@ -251,10 +424,15 @@ export function LearningWorkspace({
   onModeChange,
   onOpenMobileNavigation,
   onUpdateProfile,
+  api,
+  userId,
+  canCreateLessons = true,
+  canDeleteContent = false,
+  canManageCollectionProfile = true,
 }: LearningWorkspaceProps) {
   const profile = useMemo(() => normalizeLearningProfile(collection.learningProfile), [collection.learningProfile]);
   const [session, setSession] = useState<LearningSessionState>(() => createLearningSession());
-  const [learningCache, setLearningCache] = useState<LocalLearningCache>(() => loadLocalLearningCache(window.localStorage));
+  const [learningCache, setLearningCache] = useState<LocalLearningCache>(createLocalLearningCache);
   const [unitView, setUnitView] = useState<UnitLearningView>({
     view: "new",
     playerRunId: "inactive",
@@ -264,6 +442,7 @@ export function LearningWorkspace({
   const [status, setStatus] = useState(INITIAL_STATUS);
   const [error, setError] = useState("");
   const [warning, setWarning] = useState("");
+  const [outboxIssueCount, setOutboxIssueCount] = useState(0);
   const [customRequest, setCustomRequest] = useState("");
   const [youtubeUrl, setYoutubeUrl] = useState("");
   const [transcript, setTranscript] = useState("");
@@ -273,6 +452,9 @@ export function LearningWorkspace({
   const recoveryAbortRef = useRef<AbortController | null>(null);
   const retryAttemptsRef = useRef<Partial<Record<ChatOperationKind, RetryAttempt>>>({});
   const learningCacheRef = useRef(learningCache);
+  const pendingOperationsRef = useRef<PendingLearningOperationStore>(createPendingLearningOperationStore());
+  const pendingEvaluationAcksRef = useRef<PendingEvaluationAcks>(new Map());
+  const progressSessionIdRef = useRef<string | null>(null);
   const learningScrollRef = useRef<HTMLDivElement>(null);
 
   const lesson = unit ? session.lessonsByUnit[unit.id] : undefined;
@@ -293,8 +475,10 @@ export function LearningWorkspace({
   useEffect(() => {
     activeAbortRef.current?.abort();
     recoveryAbortRef.current?.abort();
+    progressSessionIdRef.current = null;
     learningScrollRef.current?.scrollTo({ top: 0 });
     retryAttemptsRef.current = {};
+    pendingEvaluationAcksRef.current.clear();
     setBusy(false);
     setStatus(INITIAL_STATUS);
     setCustomRequest("");
@@ -316,16 +500,127 @@ export function LearningWorkspace({
   }, [unit?.id]);
 
   useEffect(() => {
+    if (!api || !unit) {
+      const empty = createLocalLearningCache();
+      learningCacheRef.current = empty;
+      setLearningCache(empty);
+      return;
+    }
+    const controller = new AbortController();
+    void Promise.all([
+      fetchCursorPages<WireLesson>(
+        api,
+        `/v1/lessons?unitId=${encodeURIComponent(unit.id)}`,
+        controller.signal,
+      ),
+      fetchCursorPages<WireProgressHistory>(
+        api,
+        `/v1/progress?collectionId=${encodeURIComponent(collection.id)}`,
+        controller.signal,
+      ),
+    ])
+      .then(async ([lessonItems, progressItems]) => {
+        const wireLessons = await Promise.all(lessonItems.map(async (item) => {
+          if (item.payload) return item;
+          const full = await api.get<WireLesson>(`/v1/lessons/${encodeURIComponent(item.id)}`, controller.signal);
+          return full.data;
+        }));
+        if (controller.signal.aborted) return;
+        const latestProgressSummaries = new Map<string, WireProgressHistory>();
+        for (const progress of progressItems) {
+          if (progress.id && progress.lessonId && !latestProgressSummaries.has(progress.lessonId)) {
+            latestProgressSummaries.set(progress.lessonId, progress);
+          }
+        }
+        const detailedProgress = await Promise.all(
+          [...latestProgressSummaries.values()].map(async (progress) => {
+            const detail = await api.get<WireProgressHistory>(
+              `/v1/progress/${encodeURIComponent(progress.id)}`,
+              controller.signal,
+            );
+            return { ...progress, ...detail.data };
+          }),
+        );
+        if (controller.signal.aborted) return;
+        const latestProgressByLesson = new Map(
+          detailedProgress.map((progress) => [progress.lessonId, progress]),
+        );
+        const entries = wireLessons
+          .map((wireLesson) => {
+            const parsedLesson = lessonFromWire(wireLesson);
+            return {
+              lesson: parsedLesson,
+              progress: progressSnapshotFromWire(parsedLesson, latestProgressByLesson.get(parsedLesson.id)),
+              savedAt: wireLesson.createdAt ?? new Date().toISOString(),
+            };
+          })
+          .sort((left, right) => right.savedAt.localeCompare(left.savedAt));
+        const next: LocalLearningCache = {
+          ...createLocalLearningCache(),
+          lessonsByUnit: entries.length ? { [unit.id]: entries } : {},
+        };
+        learningCacheRef.current = next;
+        setLearningCache(next);
+      })
+      .catch((caught) => {
+        if (!controller.signal.aborted) setError(publicError(caught));
+      });
+    return () => controller.abort();
+  }, [api, collection.id, unit?.id]);
+
+  useEffect(() => {
+    if (!api || !userId) return;
+    const flush = () => {
+      void flushProgressOutbox(api, userId)
+        .then((result) => {
+          setOutboxIssueCount(result.quarantined);
+          if (result.retryableFailures) {
+            setWarning("Progress is saved in the sync outbox and will retry when the connection recovers.");
+          }
+        })
+        .catch(() => {
+          setWarning("Progress is saved in the sync outbox and will retry when the connection recovers.");
+        });
+    };
+    flush();
+    window.addEventListener("online", flush);
+    return () => window.removeEventListener("online", flush);
+  }, [api, userId]);
+
+  useEffect(() => {
     if (bridgeGate.state !== "ready" || !unit) return;
-    const pending = pendingLearningOperationForUnit(
-      loadPendingLearningOperations(window.localStorage),
-      unit.id,
-    );
-    if (!pending) return;
     const controller = new AbortController();
     recoveryAbortRef.current?.abort();
     recoveryAbortRef.current = controller;
-    void recoverPendingLesson(pending, controller.signal);
+    void (async () => {
+      const remembered = pendingLearningOperationForUnit(
+        pendingOperationsRef.current,
+        unit.id,
+      );
+      if (remembered) {
+        await recoverPendingLesson(remembered, controller.signal);
+        return;
+      }
+      try {
+        const operationState = await extensionBridge.getLatestUnitOperation(unit.id, "create_lesson");
+        if (controller.signal.aborted || !operationState) return;
+        if (operationState.unitId !== unit.id) {
+          throw new Error("Meoi Bridge returned a pending lesson operation for a different unit.");
+        }
+        const recovered: PendingLearningOperation = {
+          operationId: operationState.operationId,
+          unitId: operationState.unitId,
+          kind: "create_lesson",
+          createdAt: operationState.updatedAt,
+        };
+        rememberPendingOperation(recovered);
+        await recoverPendingLesson(recovered, controller.signal, operationState);
+      } catch (caught) {
+        if (isAbortError(caught) || controller.signal.aborted) return;
+        setError(publicError(caught));
+        setStatus("Meoi could not inspect the extension for a pending lesson operation.");
+      }
+    })();
     return () => {
       controller.abort();
       if (recoveryAbortRef.current === controller) recoveryAbortRef.current = null;
@@ -340,7 +635,7 @@ export function LearningWorkspace({
       const compatibility = await extensionBridge.detectCompatibility(unit?.id);
       setBridgeGate(compatibility);
       if (compatibility.state === "ready") {
-        setStatus("Meoi Bridge v8 is ready. It uses ChatGPT Web directly, with no API, MCP, OAuth, Worker, or database.");
+        setStatus("Meoi Bridge v8 is ready. ChatGPT Web performs AI work; Meoing’s Worker stores only validated results.");
       }
     } catch (caught) {
       setBridgeGate({ state: "unavailable" });
@@ -351,33 +646,27 @@ export function LearningWorkspace({
   }
 
   function commitLearningCache(next: LocalLearningCache): boolean {
-    const saved = saveLocalLearningCache(next, window.localStorage);
-    if (saved) {
-      learningCacheRef.current = next;
-      setLearningCache(next);
-    }
-    return saved;
+    learningCacheRef.current = next;
+    setLearningCache(next);
+    return true;
   }
 
   function pendingOperationForUnit(unitId: string): PendingLearningOperation | undefined {
-    return pendingLearningOperationForUnit(
-      loadPendingLearningOperations(window.localStorage),
-      unitId,
-    );
+    return pendingLearningOperationForUnit(pendingOperationsRef.current, unitId);
   }
 
   function rememberPendingOperation(operation: PendingLearningOperation): boolean {
-    const current = loadPendingLearningOperations(window.localStorage);
-    return savePendingLearningOperations(
-      putPendingLearningOperation(current, operation),
-      window.localStorage,
-    );
+    pendingOperationsRef.current = putPendingLearningOperation(pendingOperationsRef.current, operation);
+    return true;
   }
 
   function forgetPendingOperation(operation: PendingLearningOperation): boolean {
-    const current = loadPendingLearningOperations(window.localStorage);
-    const next = removePendingLearningOperation(current, operation.unitId, operation.operationId);
-    return next === current || savePendingLearningOperations(next, window.localStorage);
+    pendingOperationsRef.current = removePendingLearningOperation(
+      pendingOperationsRef.current,
+      operation.unitId,
+      operation.operationId,
+    );
+    return true;
   }
 
   async function acknowledgeAndForgetPending(operation: PendingLearningOperation): Promise<boolean> {
@@ -428,19 +717,47 @@ export function LearningWorkspace({
       return false;
     }
 
-    const nextCache = putStoredLesson(learningCacheRef.current, preparedLesson);
-    if (!commitLearningCache(nextCache)) {
+    if (!api) {
       setPendingLessonState("save_failed");
-      setError("The lesson is ready in Meoi Bridge, but this browser could not save it to localStorage.");
-      setWarning("The Bridge result was kept. Free browser storage if needed, then choose Retry local save.");
-      setStatus("Lesson received but not acknowledged because local saving failed.");
+      setError("The lesson is ready in Meoi Bridge, but the secure API is unavailable.");
+      setWarning("The Bridge result was kept. Reconnect to the API, then retry saving.");
+      setStatus("Lesson received but not acknowledged because cloud saving failed.");
       return false;
     }
 
-    startLesson(preparedLesson, "Lesson received from ChatGPT and saved locally in this browser.");
+    try {
+      const saved = await api.post<WireLesson>("/v1/lessons", {
+        collectionId: collection.id,
+        unitId: unit.id,
+        unitRevision: unit.revision ?? 1,
+        status: "draft",
+        schemaVersion: 8,
+        title: preparedLesson.title,
+        languageCode: unit.languageCode ?? preparedLesson.targetLanguage,
+        payload: preparedLesson,
+      }, operation.operationId);
+      preparedLesson = saved.data.payload
+        ? lessonFromWire(saved.data)
+        : {
+            ...preparedLesson,
+            id: saved.data.id,
+            ownerId: saved.data.ownerId,
+            status: saved.data.status,
+            revision: saved.data.revision,
+          };
+    } catch (caught) {
+      setPendingLessonState("save_failed");
+      setError(`The lesson is ready in Meoi Bridge, but the API could not save it: ${publicError(caught)}`);
+      setWarning("The Bridge result remains unacknowledged so you can retry safely.");
+      setStatus("Lesson received but cloud saving failed.");
+      return false;
+    }
+
+    commitLearningCache(putStoredLesson(learningCacheRef.current, preparedLesson));
+    await startLesson(preparedLesson, "Lesson received from ChatGPT and synced to Meoing.");
     setPendingLessonState("idle");
     if (!await acknowledgeAndForgetPending(operation)) {
-      setWarning("The lesson is saved locally, but Meoi Bridge could not clear its retained result. Meoi will retry recovery when this unit is opened again.");
+      setWarning("The lesson is synced, but Meoi Bridge could not clear its retained result in this tab.");
     }
     return true;
   }
@@ -448,6 +765,7 @@ export function LearningWorkspace({
   async function recoverPendingLesson(
     operation: PendingLearningOperation,
     signal?: AbortSignal,
+    initialState?: ChatOperationState,
   ): Promise<void> {
     if (!unit || operation.unitId !== unit.id) return;
     setBusy(true);
@@ -456,8 +774,11 @@ export function LearningWorkspace({
     setPendingLessonState("recovering");
     setStatus("Reconnecting to the pending lesson operation in Meoi Bridge...");
     try {
-      let state = await extensionBridge.getOperationState(operation.operationId);
+      let state = initialState ?? await extensionBridge.getOperationState(operation.operationId);
       if (signal?.aborted) throw signal.reason ?? new DOMException("Operation aborted", "AbortError");
+      if (state.operationId !== operation.operationId || state.unitId !== operation.unitId) {
+        throw new Error("Meoi Bridge returned a different pending lesson operation.");
+      }
       if (state.phase === "failed") {
         showPendingFailure(state.error?.message ?? "Meoi Bridge could not create a valid lesson.");
         return;
@@ -507,8 +828,31 @@ export function LearningWorkspace({
     setUnitView(nextView);
   }
 
-  function startLesson(nextLesson: StoredLessonEntry["lesson"], nextStatus: string) {
+  async function startLesson(
+    nextLesson: StoredLessonEntry["lesson"],
+    nextStatus: string,
+    persistProgress = true,
+  ) {
     if (!unit || nextLesson.unitId !== unit.id) return;
+    if (persistProgress) {
+      if (!api) {
+        setError("The secure API is unavailable, so this lesson cannot start.");
+        return;
+      }
+      try {
+        const response = await api.post<WireProgressSession>(
+          `/v1/lessons/${encodeURIComponent(nextLesson.id)}/progress`,
+          {},
+          crypto.randomUUID(),
+        );
+        progressSessionIdRef.current = response.data.id;
+      } catch (caught) {
+        setError(`The lesson session could not start: ${publicError(caught)}`);
+        return;
+      }
+    } else {
+      progressSessionIdRef.current = null;
+    }
     setSession((current) => putSessionLesson(current, nextLesson));
     setLearningView({ unitId: unit.id, view: "lesson", playerRunId: crypto.randomUUID() });
     resetLessonPanels();
@@ -516,7 +860,7 @@ export function LearningWorkspace({
   }
 
   function openNewLesson() {
-    if (!unit) return;
+    if (!unit || !canCreateLessons) return;
     setLearningView({ unitId: unit.id, view: "new", playerRunId: unitView.playerRunId });
     setCustomRequest("");
     setYoutubeUrl("");
@@ -534,28 +878,41 @@ export function LearningWorkspace({
   }
 
   function reviewStoredLesson(entry: StoredLessonEntry) {
-    startLesson(entry.lesson, `Reviewing “${entry.lesson.title}” from question one. Saved progress is shown only as a summary.`);
+    void startLesson(entry.lesson, `Reviewing “${entry.lesson.title}” from question one. Progress will sync as a new session.`);
   }
 
-  function deleteStoredLesson(entry: StoredLessonEntry) {
-    if (!unit || entry.lesson.unitId !== unit.id) return;
-    if (!window.confirm(`Delete saved lesson "${entry.lesson.title}"? This cannot be undone.`)) return;
+  async function deleteStoredLesson(entry: StoredLessonEntry) {
+    if (
+      !unit
+      || entry.lesson.unitId !== unit.id
+      || !canDeleteStoredLesson(entry.lesson, userId, canDeleteContent)
+    ) return;
+    if (!window.confirm(`Delete saved lesson "${entry.lesson.title}"?`)) return;
 
     setError("");
     setWarning("");
-    const nextCache = removeStoredLesson(learningCacheRef.current, unit.id, entry.lesson.id);
-    if (nextCache === learningCacheRef.current) return;
-    if (!commitLearningCache(nextCache)) {
-      setError("The browser could not delete this saved lesson. Its local history was left unchanged.");
+    if (!api) {
+      setError("The secure API is unavailable.");
       return;
     }
+    try {
+      await api.delete(`/v1/lessons/${encodeURIComponent(entry.lesson.id)}`, {
+        expectedRevision: entry.lesson.revision ?? 1,
+      });
+    } catch (caught) {
+      setError(publicError(caught));
+      return;
+    }
+    const nextCache = removeStoredLesson(learningCacheRef.current, unit.id, entry.lesson.id);
+    if (nextCache === learningCacheRef.current) return;
+    commitLearningCache(nextCache);
 
     setSession((current) => removeSessionLesson(current, unit.id, entry.lesson.id));
     const remaining = nextCache.lessonsByUnit[unit.id] ?? [];
     if (!remaining.length) {
       setLearningView({ unitId: unit.id, view: "new", playerRunId: unitView.playerRunId });
     }
-    setStatus(`Deleted saved lesson "${entry.lesson.title}".`);
+    setStatus(`Deleted lesson "${entry.lesson.title}".`);
   }
 
   function currentUnitContext() {
@@ -643,7 +1000,7 @@ export function LearningWorkspace({
   }
 
   async function createLesson() {
-    if (!unit) return;
+    if (!unit || !canCreateLessons) return;
     const questionSettingsErrors = validateCollectionQuestionSettings(
       getEffectiveCollectionQuestionSettings(collection.questionSettings, profile),
       profile,
@@ -697,7 +1054,7 @@ export function LearningWorkspace({
           };
           if (!rememberPendingOperation(pendingOperation)) {
             pendingOperation = undefined;
-            throw new Error("The browser could not record the pending lesson operation. Nothing was sent.");
+            throw new Error("The page could not retain the pending lesson operation. Nothing was sent.");
           }
           setPendingLessonState("recovering");
         },
@@ -723,7 +1080,12 @@ export function LearningWorkspace({
     }
   }
 
-  async function evaluateAnswer(question: LessonQuestion, answer: QuestionAnswer, speaking?: SpeakingSubmission | null): Promise<Evaluation> {
+  async function evaluateAnswer(
+    question: LessonQuestion,
+    answer: QuestionAnswer,
+    speaking?: SpeakingSubmission | null,
+    progressQuestionId = question.id,
+  ): Promise<Evaluation> {
     if (!unit || !lesson) throw new Error("No active lesson was found.");
     const metadata = speakingMetadata(speaking);
     setWarning(speaking?.audio ? "Audio remains in this browser. Meoi sends only the transcript and timing metadata for content feedback." : "");
@@ -751,20 +1113,74 @@ export function LearningWorkspace({
     const normalized = metadata && !metadata.pronunciationAvailable
       ? { ...evaluation, pronunciationAssessed: false }
       : evaluation;
-    await extensionBridge.acknowledgeOperation(result.operationId).catch(() => false);
-    setStatus("Evaluation received from ChatGPT and loaded in Meoi.");
+    const pendingAcks = pendingEvaluationAcksRef.current.get(progressQuestionId) ?? [];
+    pendingEvaluationAcksRef.current.set(progressQuestionId, [...pendingAcks, result.operationId]);
+    setStatus("Evaluation received from ChatGPT. It will be released by Meoi Bridge after progress is safely queued.");
     return normalized;
   }
 
   async function saveProgress(attempts: AttemptRecord[], snapshot: LessonProgressSnapshot) {
-    void attempts;
     setSession((current) => putSessionProgress(current, snapshot));
     if (!unit) return;
     const nextCache = putStoredLessonProgress(learningCacheRef.current, unit.id, snapshot);
-    if (nextCache === learningCacheRef.current) return;
-    if (!commitLearningCache(nextCache)) {
-      setWarning("Your latest progress is available in this tab, but the browser could not update its local lesson history.");
+    if (nextCache !== learningCacheRef.current) commitLearningCache(nextCache);
+    const progressId = progressSessionIdRef.current;
+    if (!progressId || !api || !userId || !attempts.length) {
+      if (attempts.length && lesson?.id !== "preview") {
+        setWarning("Progress could not be saved because no server session is available. Keep this lesson open and try again.");
+        throw new Error("No server progress session is available.");
+      }
+      return;
     }
+    try {
+      const payload = buildProgressBatch(attempts, snapshot);
+      const failedAcks = await persistProgressBeforeEvaluationAck(
+        userId,
+        progressId,
+        payload,
+        attempts,
+        pendingEvaluationAcksRef.current,
+      );
+      if (failedAcks) {
+        setWarning("Progress is safely queued, but Meoi Bridge could not clear one retained evaluation result.");
+      }
+    } catch (caught) {
+      setWarning("Progress could not be saved to this device. Keep this lesson open and try Continue again.");
+      throw caught;
+    }
+    void flushProgressOutbox(api, userId)
+      .then((result) => {
+        setOutboxIssueCount(result.quarantined);
+        if (result.retryableFailures) {
+          setWarning("Progress is saved in the IndexedDB sync outbox and will retry automatically.");
+        } else if (!result.quarantined) {
+          setWarning("");
+        }
+      })
+      .catch(() => {
+        setWarning("Progress is saved in the IndexedDB sync outbox and will retry automatically.");
+      });
+  }
+
+  async function retryRejectedProgress() {
+    if (!api || !userId) return;
+    await retryProgressOutboxIssues(userId);
+    const result = await flushProgressOutbox(api, userId);
+    setOutboxIssueCount(result.quarantined);
+    setWarning(result.retryableFailures
+      ? "Progress is still waiting for the connection to recover."
+      : result.quarantined
+        ? "The server still rejects this progress. You can retry later or discard it."
+        : "");
+  }
+
+  async function discardRejectedProgress() {
+    if (!userId || !window.confirm(
+      `Discard ${outboxIssueCount} rejected progress ${outboxIssueCount === 1 ? "batch" : "batches"}? This cannot be undone.`,
+    )) return;
+    await discardProgressOutboxIssues(userId);
+    setOutboxIssueCount(0);
+    setWarning("");
   }
 
   async function askCoach(
@@ -818,9 +1234,10 @@ export function LearningWorkspace({
 
   function usePreviewLesson() {
     if (!unit) return;
-    startLesson(
+    void startLesson(
       createLocalPreviewLesson(unit.id, cleanUnitName(unit.name), profile),
-      "Local player demo loaded. It is not part of this unit's saved lesson history.",
+      "Temporary player preview loaded. Its progress is not synced.",
+      false,
     );
   }
 
@@ -887,7 +1304,7 @@ export function LearningWorkspace({
             <div>
               <p className="section-kicker">ChatGPT lesson studio</p>
               <h1>{unit ? cleanUnitName(unit.name) : "Select a unit"}</h1>
-              <p>Meoi Bridge sends this unit's learning material to ChatGPT Web and stores up to five validated lessons locally in this browser. It does not use an API, MCP, OAuth, Worker, or database.</p>
+              <p>Meoi Bridge sends this unit's learning material to ChatGPT Web. Validated lessons and progress are then synced through Meoing’s Worker; audio and coaching text are not stored.</p>
             </div>
             <div className="learn-hero-actions">
               {savedLessons.length && learningView !== "choose" ? (
@@ -895,7 +1312,7 @@ export function LearningWorkspace({
                   <History size={16} /> Saved lessons
                 </button>
               ) : null}
-              {learningView === "lesson" ? (
+              {learningView === "lesson" && canCreateLessons ? (
                 <button className="primary-button" type="button" onClick={openNewLesson} disabled={!unit || busy}>
                   <Sparkles size={16} /> New lesson
                 </button>
@@ -915,7 +1332,16 @@ export function LearningWorkspace({
               onCreateNew={openNewLesson}
               onDelete={deleteStoredLesson}
               onReview={reviewStoredLesson}
+              canCreate={canCreateLessons}
+              currentUserId={userId}
+              canDeleteContent={canDeleteContent}
             />
+          ) : learningView === "new" && !canCreateLessons ? (
+            <section className="learning-empty-state">
+              <span><ShieldCheck size={28} /></span>
+              <h2>Lesson creation is read-only</h2>
+              <p>Your collection role can review available lessons but cannot create a new one.</p>
+            </section>
           ) : learningView === "new" ? (
           <section className="lesson-request-card" aria-labelledby="lesson-request-title">
             <div className="card-heading-row">
@@ -962,7 +1388,7 @@ export function LearningWorkspace({
                   }}
                   disabled={busy}
                 >
-                  <RefreshCw size={16} /> Retry local save
+                  <RefreshCw size={16} /> Retry cloud save
                 </button>
               ) : null}
               <button
@@ -984,6 +1410,20 @@ export function LearningWorkspace({
 
           {error ? <div className="learning-alert is-error" role="alert">{error}</div> : null}
           {warning ? <div className="learning-alert is-warning" role="status">{warning}</div> : null}
+          {outboxIssueCount ? (
+            <div className="learning-alert is-warning" role="alert">
+              <span>
+                {outboxIssueCount} progress {outboxIssueCount === 1 ? "batch was" : "batches were"} rejected by the server.
+                It no longer blocks newer progress.
+              </span>
+              <button className="secondary-button" type="button" onClick={() => void retryRejectedProgress()}>
+                Retry
+              </button>
+              <button className="secondary-button" type="button" onClick={() => void discardRejectedProgress()}>
+                Discard
+              </button>
+            </div>
+          ) : null}
           <div className="learning-alert" aria-live="polite">{busy ? <LoaderCircle className="spin" size={16} /> : <CheckCircle2 size={16} />} {status}</div>
 
           {learningView === "lesson" && lesson ? (
@@ -1000,7 +1440,7 @@ export function LearningWorkspace({
                   view: savedLessons.length ? "choose" : "new",
                   playerRunId,
                 });
-                setStatus("Lesson closed after saving the latest local progress.");
+                setStatus("Lesson closed after queueing the latest progress for sync.");
               }}
             />
           ) : learningView === "lesson" ? (
@@ -1031,17 +1471,17 @@ export function LearningWorkspace({
         <section className="control-section">
           <h3><ShieldCheck size={15} /> Local bridge status</h3>
           <ul className="integration-checklist">
-            <li data-ready="true"><span /> Website · 127.0.0.1</li>
+            <li data-ready="true"><span /> Website · authenticated</li>
             <li data-ready={extensionConnected ? "true" : "false"}><span /> Extension · {bridgeLabel}</li>
-            <li data-ready="true"><span /> API / MCP / OAuth · not used</li>
-            <li data-ready="true"><span /> Database · no writes</li>
+            <li data-ready={api ? "true" : "false"}><span /> Worker API · {api ? "ready" : "unavailable"}</li>
+            <li data-ready="true"><span /> PostgreSQL · server-authorized</li>
           </ul>
-          <p className="quota-note">The extension keeps queued prompts and validated results in browser session storage and removes each result after use. Meoi stores only validated lessons and their latest progress in this site's local storage.</p>
+          <p className="quota-note">The extension keeps queued prompts and validated results in extension session storage and removes each result after use. The website uses IndexedDB only as a temporary progress outbox, deleting batches after server acknowledgement.</p>
         </section>
 
         {bridgeGate.state === "ready" ? (
           <>
-            <ProfileEditor profile={profile} onChange={onUpdateProfile} />
+            {canManageCollectionProfile ? <ProfileEditor profile={profile} onChange={onUpdateProfile} /> : null}
             <section className="control-section voice-controls">
               <h3><Mic size={15} /> Live speaking</h3>
               <button className="secondary-button wide-button" type="button" disabled={!unit} onClick={() => void extensionBridge.send("OPEN_VOICE", { unitId: unit?.id })}><Mic size={15} /> Open Voice for this unit</button>

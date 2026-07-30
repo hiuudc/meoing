@@ -1,7 +1,7 @@
 import type { Evaluation, LearningProfile, Lesson, LessonQuestionFormat } from "../learning/types";
 
 export const MEOI_EXTENSION_PROTOCOL_VERSION = 8;
-export const MEOI_EXTENSION_MIN_VERSION = "8.0.4";
+export const MEOI_EXTENSION_MIN_VERSION = "8.0.5";
 export const MEOI_PAGE_SOURCE = "meoi-page";
 export const MEOI_EXTENSION_SOURCE = "meoi-extension";
 export const MEOI_CHAT_RESULT_TYPE = "meoi.operation.result";
@@ -71,6 +71,7 @@ export type ExtensionCommand =
   | "SEND_OPERATION"
   | "OPEN_VOICE"
   | "GET_INTEGRATION_STATUS"
+  | "GET_UNIT_OPERATION"
   | "GET_OPERATION_STATE"
   | "RETRY_OPERATION"
   | "ACK_OPERATION_RESULT"
@@ -108,6 +109,14 @@ export interface IntegrationStatus {
 
 export interface UnitCommandPayload {
   unitId: string;
+}
+
+export interface UnitOperationPayload extends UnitCommandPayload {
+  kind?: ChatOperationKind;
+}
+
+export interface UnitOperationLookup {
+  operation: ChatOperationState | null;
 }
 
 export interface OperationExpectation {
@@ -176,7 +185,7 @@ const QUESTION_CONTRACT = `Question format appendix (use these exact field names
 - audioMatching: pairs[{audioId,audioText,matchId,label}] (2-8)
 - soundDiscrimination: audioText, options[{id,label}] (2-8), correctOptionId
 - flashcardRecall: cue, acceptedAnswers[], optional match
-Every question also has id, type, prompt, explanation, evaluationMode (local or ai), glossaryTargets[], optional targetPrompt, and optional hint, supplementalHint, sourceReferenceIds. prompt must contain only the learner instruction in sourceLanguage. When a question presents a visible target-language stimulus, put that stimulus in targetPrompt on its own, without source-language instructions; targetPrompt must be fully covered by glossaryTargets and glossary. Do not use targetPrompt where it would reveal a recall answer. fillBlank templates contain exactly one {{blank}} or {{blank:<id>}} marker. multiCloze templates contain every declared blank exactly once as {{blank:<id>}}. Written formats fillBlank, multiCloze, translation, shortAnswer, errorCorrection, sentenceTransformation, dictation, and freeWriting must include answerBank:{tokens[{id,label}],separator:"space"|"none",defaultMode:"keyboard"|"bank"} with 2-30 unique token IDs. Use defaultMode "keyboard" for shortAnswer and freeWriting; use "bank" for every other written format. Every answer-bank label must be one word, particle, or short grammatical chunk containing no more than two lexical units, without sentence-ending punctuation; fillBlank and multiCloze may use a longer token only when it exactly equals one declared blank answer. Never place a complete sentence answer in one token. Translation, shortAnswer, errorCorrection, sentenceTransformation, and sentence-sized dictation answers must be reconstructable exactly, in order, from multiple answer-bank tokens. glossaryTargets must list every exact visible target-language string in targetPrompt, source text, choices, labels, audio text, and answer bank; never include interface-language instructions. For Japanese, Chinese, and Korean, split glossary coverage into words and grammatical particles, including native or romanized pronunciation for every target-language segment. A whole-sentence glossary entry may supplement those entries but must never replace or mask them. Never return presentation settings, HTML, scripts, arbitrary renderer/grader fields, templateId, or blueprint metadata. A match object may contain caseSensitive, ignoreDiacritics, and ignorePunctuation.`;
+Every question also has id, type, prompt, explanation, evaluationMode (local or ai), glossaryTargets[], tracking:{encountered:{words:[],phrases:[],sentences:[]},assessed:{words:[],phrases:[],sentences:[]}}, optional targetPrompt, and optional hint, supplementalHint, sourceReferenceIds. Every tracking object and nested array is required, even when an array is empty. Tracking values must be exact normalized surface strings from the supplied unit revision: encountered lists targets presented by the question, assessed lists the encountered targets whose knowledge affects the grade, and every assessed value must also appear in encountered under the same kind. Never invent a tracking value or classify an interface instruction as learning content. prompt must contain only the learner instruction in sourceLanguage. When a question presents a visible target-language stimulus, put that stimulus in targetPrompt on its own, without source-language instructions; targetPrompt must be fully covered by glossaryTargets and glossary. Do not use targetPrompt where it would reveal a recall answer. fillBlank templates contain exactly one {{blank}} or {{blank:<id>}} marker. multiCloze templates contain every declared blank exactly once as {{blank:<id>}}. Written formats fillBlank, multiCloze, translation, shortAnswer, errorCorrection, sentenceTransformation, dictation, and freeWriting must include answerBank:{tokens[{id,label}],separator:"space"|"none",defaultMode:"keyboard"|"bank"} with 2-30 unique token IDs. Use defaultMode "keyboard" for shortAnswer and freeWriting; use "bank" for every other written format. Every answer-bank label must be one word, particle, or short grammatical chunk containing no more than two lexical units, without sentence-ending punctuation; fillBlank and multiCloze may use a longer token only when it exactly equals one declared blank answer. Never place a complete sentence answer in one token. Translation, shortAnswer, errorCorrection, sentenceTransformation, and sentence-sized dictation answers must be reconstructable exactly, in order, from multiple answer-bank tokens. glossaryTargets must list every exact visible target-language string in targetPrompt, source text, choices, labels, audio text, and answer bank; never include interface-language instructions. For Japanese, Chinese, and Korean, split glossary coverage into words and grammatical particles, including native or romanized pronunciation for every target-language segment. A whole-sentence glossary entry may supplement those entries but must never replace or mask them. Never return presentation settings, HTML, scripts, arbitrary renderer/grader fields, templateId, or blueprint metadata. A match object may contain caseSensitive, ignoreDiacritics, and ignorePunctuation.`;
 
 function completedEnvelope(operation: OperationPromptInput): string {
   const result = operation.kind === "create_lesson"
@@ -197,7 +206,7 @@ function taskInstructions(operation: OperationPromptInput): string {
 - Use only these enabled formats: ${allowedFormats}.
 - For every primary question, create exactly one entry in questionAlternates as {questionId,question}. The alternate must teach the same objective, use a different enabled format, have a globally unique id, omit presentation, and follow the evaluation mode required by its format. An alternate for dictation, listenSelect, audioMatching, or soundDiscrimination must not use any of those listening formats.
 - Include at least one locally graded question and at least one AI-graded question.${operation.expectation.speaking && speakingFormatAllowed ? " Include at least one speakingRepeat or speakingRoleplay question." : ""}
-- The strict Lesson fields are: schemaVersion:7, id, unitId, title, summary, targetLanguage, sourceLanguage, level, objectives[], theory[{id,kind,title,body}], examples[{id,source,translation?,note?}], glossary[{term,meaning,otherMeanings?,forms?,aliases?,pronunciation?:{native?,romanized?},example?}], sourceReferences[{id,kind,title,url?,excerpt?}], questions[], questionAlternates[], createdAt (ISO date-time).
+- The strict Lesson fields are: schemaVersion:8, id, unitId, title, summary, targetLanguage, sourceLanguage, level, objectives[], theory[{id,kind,title,body}], examples[{id,source,translation?,note?}], glossary[{term,meaning,otherMeanings?,forms?,aliases?,pronunciation?:{native?,romanized?},example?}], sourceReferences[{id,kind,title,url?,excerpt?}], questions[], questionAlternates[], createdAt (ISO date-time).
 - Glossary must cover every letter/number-bearing part of every glossaryTargets string in primary and alternate questions. Put the contextual meaning in meaning, additional valid senses in otherMeanings, inflected or written variants in forms, equivalent labels in aliases, and include native and romanized readings when the target language uses logographic or syllabic writing. For CJK content, create lexical entries for each word and grammatical particle rather than relying on one whole-sentence entry.
 - theory.kind is concept, grammar, pronunciation, culture, or tip. sourceReferences.kind is unit, document, youtube, transcript, or note. Use unique IDs and include answer keys for local questions.
 - If the requested source cannot be understood from the supplied transcript or notes, return outcome needs_source with result exactly {"sourceRequest":"what is needed"}; do not invent source content.
@@ -230,7 +239,7 @@ export function buildOperationPrompt(operation: OperationPromptInput): string {
   const material = JSON.stringify(operation.input, null, 2);
   const boundary = operation.operationId;
   const prompt = [
-    "You are completing a browser-local learning task for Meoi.",
+    "You are completing a client-side learning task for Meoing.",
     "",
     "Task",
     taskInstructions(operation),
@@ -271,6 +280,7 @@ export function buildResultRepairPrompt(
         "- Every answerBank must contain 2-30 unique tokens.",
         "- Answer-bank labels must be atomic lexical tokens without sentence-ending punctuation; Translation and Short Answer banks must reconstruct referenceAnswer in order and must not contain the whole answer as one token.",
         "- Every targetPrompt and every visible target-language string must have complete glossaryTargets and glossary coverage.",
+        "- Every question must have strict encountered/assessed tracking for words, phrases, and sentences copied exactly from the supplied unit revision; assessed targets must also be encountered.",
         "- Japanese, Chinese, and Korean glossary coverage must use word- and particle-level entries; one whole-sentence entry is not sufficient.",
       ]
     : [];

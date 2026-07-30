@@ -1,4 +1,4 @@
-import { Compass, FolderPlus, LibraryBig, Pencil, Plus, Trash2 } from "lucide-react";
+import { ArchiveRestore, Compass, FolderPlus, LibraryBig, Pencil, Plus, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { contrastTextColor } from "../theme";
 import type { Collection } from "../types";
@@ -13,8 +13,12 @@ interface CollectionRailProps {
   };
   onSelect: (id: string) => void;
   onCreate: () => void;
+  canEdit?: (collection: Collection) => boolean;
+  canDelete?: (collection: Collection) => boolean;
   onEdit: (collection: Collection) => void;
   onDelete: (collection: Collection) => void;
+  deletedCollectionCount?: number;
+  onOpenDeletedCollections?: () => void;
 }
 
 interface CollectionMenuState {
@@ -43,8 +47,12 @@ export function CollectionRail({
   accentPreview,
   onSelect,
   onCreate,
+  canEdit = () => true,
+  canDelete = () => true,
   onEdit,
   onDelete,
+  deletedCollectionCount = 0,
+  onOpenDeletedCollections,
 }: CollectionRailProps) {
   const [collectionMenu, setCollectionMenu] = useState<CollectionMenuState | null>(null);
   const longPressRef = useRef<CollectionLongPress | null>(null);
@@ -120,6 +128,7 @@ export function CollectionRail({
           const accent = accentPreview?.collectionId === collection.id
             ? accentPreview.accent
             : collection.accent;
+          const hasActions = canEdit(collection) || canDelete(collection);
           return <div className="rail-item-wrap" key={collection.id}>
             <button
               className={`collection-button ${activeId === collection.id ? "is-active" : ""}`}
@@ -136,16 +145,21 @@ export function CollectionRail({
                 onSelect(collection.id);
               }}
               onContextMenu={(event) => {
+                if (!hasActions) return;
                 event.preventDefault();
                 openCollectionMenu(collection, event.clientX, event.clientY, event.currentTarget);
               }}
-              onKeyDown={(event) => openCollectionMenuFromKeyboard(event, collection)}
-              onPointerDown={(event) => startLongPress(event, collection)}
+              onKeyDown={(event) => {
+                if (hasActions) openCollectionMenuFromKeyboard(event, collection);
+              }}
+              onPointerDown={(event) => {
+                if (hasActions) startLongPress(event, collection);
+              }}
               onPointerMove={updateLongPress}
               onPointerUp={clearLongPress}
               onPointerCancel={clearLongPress}
               aria-label={collection.name}
-              aria-haspopup="menu"
+              aria-haspopup={hasActions ? "menu" : undefined}
               aria-expanded={collectionMenu?.collection.id === collection.id}
             >
               <span>{collection.icon}</span>
@@ -154,6 +168,16 @@ export function CollectionRail({
         })}
       </div>
       <div className="rail-bottom-actions">
+        {deletedCollectionCount > 0 && onOpenDeletedCollections ? (
+          <button
+            className="rail-action"
+            type="button"
+            aria-label={`Recently deleted collections (${deletedCollectionCount})`}
+            onClick={onOpenDeletedCollections}
+          >
+            <ArchiveRestore size={19} />
+          </button>
+        ) : null}
         <button className="rail-action" type="button" aria-label="Add collection" onClick={onCreate}>
           <Plus size={20} />
         </button>
@@ -172,8 +196,17 @@ export function CollectionRail({
           returnFocus={collectionMenu.returnFocus}
           onClose={() => setCollectionMenu(null)}
           items={[
-            { label: "Edit collection", icon: Pencil, onSelect: () => onEdit(collectionMenu.collection) },
-            { label: "Delete collection", icon: Trash2, destructive: true, onSelect: () => onDelete(collectionMenu.collection) },
+            ...(canEdit(collectionMenu.collection)
+              ? [{ label: "Edit collection", icon: Pencil, onSelect: () => onEdit(collectionMenu.collection) }]
+              : []),
+            ...(canDelete(collectionMenu.collection)
+              ? [{
+                label: "Delete collection",
+                icon: Trash2,
+                destructive: true,
+                onSelect: () => onDelete(collectionMenu.collection),
+              }]
+              : []),
           ]}
         />
       ) : null}

@@ -57,6 +57,10 @@ const common = {
   explanation: "Giải thích ngắn.",
   hint: "Gợi ý.",
   evaluationMode: "local" as const,
+  tracking: {
+    encountered: { words: [], phrases: [], sentences: [] },
+    assessed: { words: [], phrases: [], sentences: [] },
+  },
 };
 
 const questions: LessonQuestion[] = [
@@ -192,7 +196,7 @@ describe("lesson schema", () => {
     lessonQuestionCount: 15,
   });
 
-  it("accepts only strict schema v7 lessons", () => {
+  it("accepts only strict schema v8 lessons", () => {
     expect(lessonSchema.parse(lesson).questions).toHaveLength(23);
     expect(jsonByteLength(lesson)).toBeGreaterThan(100);
     expect(() => lessonSchema.parse({ ...lesson, schemaVersion: 6 })).toThrow();
@@ -202,9 +206,29 @@ describe("lesson schema", () => {
         index === 0 ? { ...question, templateId: "removed-blueprint" } : question
       )),
     })).toThrow();
+    expect(() => lessonSchema.parse({
+      ...lesson,
+      questions: lesson.questions.map((question, index) => {
+        if (index !== 0) return question;
+        const { tracking: _tracking, ...withoutTracking } = question;
+        return withoutTracking;
+      }),
+    })).toThrow();
+    expect(() => lessonSchema.parse({
+      ...lesson,
+      questions: lesson.questions.map((question, index) => index === 0
+        ? {
+            ...question,
+            tracking: {
+              encountered: { words: [], phrases: [], sentences: [] },
+              assessed: { words: ["not-encountered"], phrases: [], sentences: [] },
+            },
+          }
+        : question),
+    })).toThrow();
   });
 
-  it("matches the v7 lesson expectation without blueprint fields", () => {
+  it("matches the v8 lesson expectation without blueprint fields", () => {
     const generatedLesson = {
       ...lesson,
       questions: lesson.questions.map(({ presentation: _presentation, ...question }) => question),
@@ -545,8 +569,11 @@ describe("profile and progress normalization", () => {
 
   it("batches after five, completion, or hidden tab", () => {
     const attempts: AttemptRecord[] = Array.from({ length: 5 }, (_, index) => ({
+      attemptId: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
       questionId: `q${index}`,
       attemptNumber: 1,
+      answer: index < 4 ? "correct" : "incorrect",
+      evaluationSource: "server_rule",
       status: index < 4 ? "correct" : "incorrect",
       score: index < 4 ? 1 : 0,
       firstTry: true,
@@ -601,7 +628,7 @@ describe("collection question settings", () => {
       speakingEnabled: false,
     });
     const decorated = decorateLessonPresentation(lesson, settings, DEFAULT_LEARNING_PROFILE);
-    expect(decorated.schemaVersion).toBe(7);
+    expect(decorated.schemaVersion).toBe(8);
     expect(decorated.questions[0].presentation).toEqual({ readQuestion: false, readAnswers: false, wordTooltips: true });
   });
 });
@@ -823,13 +850,13 @@ describe("glossary and speech preferences", () => {
     });
   });
 
-  it("builds a schema-v7 language-pair demo with every active format and one alternate per slot", () => {
+  it("builds a schema-v8 language-pair demo with every active format and one alternate per slot", () => {
     const demo = createLocalPreviewLesson("unit-demo", "Demo", {
       ...DEFAULT_LEARNING_PROFILE,
       sourceLanguage: "Vietnamese",
       targetLanguage: "Japanese",
     });
-    expect(demo.schemaVersion).toBe(7);
+    expect(demo.schemaVersion).toBe(8);
     expect(demo.sourceLanguage).toBe("Vietnamese");
     expect(demo.targetLanguage).toBe("Japanese");
     expect(demo.title).toContain("Bài học mẫu");

@@ -19,14 +19,14 @@ const expectation: OperationExpectation = {
 };
 
 describe("extension protocol v8 prompts", () => {
-  it("uses a readable browser-local contract without tools or persistence", () => {
+  it("uses a readable client-side contract without tools or persistence", () => {
     const prompt = buildOperationPrompt({
       operationId: "operation-1",
       kind: "coaching",
       expectation,
       input: { message: "Explain this mistake" },
     });
-    expect(prompt).toContain("You are completing a browser-local learning task for Meoi.");
+    expect(prompt).toContain("You are completing a client-side learning task for Meoing.");
     expect(prompt).toContain('Coach the learner in "Vietnamese"');
     expect(prompt).toContain('learning examples, expected answers, and target-language exercise content in "Japanese"');
     expect(prompt).toContain('"protocolVersion":8');
@@ -48,7 +48,9 @@ describe("extension protocol v8 prompts", () => {
     expect(prompt).toContain("at least one speakingRepeat or speakingRoleplay question");
     expect(prompt).not.toContain("required custom blueprint");
     expect(prompt).not.toContain("matching blueprint guidance");
-    expect(prompt).toContain("schemaVersion:7");
+    expect(prompt).toContain("schemaVersion:8");
+    expect(prompt).toContain("tracking:{encountered:{words:[],phrases:[],sentences:[]},assessed:{words:[],phrases:[],sentences:[]}}");
+    expect(prompt).toContain("assessed value must also appear in encountered");
     expect(prompt).toContain("exactly one entry in questionAlternates");
     expect(prompt).toContain('answerBank:{tokens[{id,label}],separator:"space"|"none",defaultMode:"keyboard"|"bank"}');
     expect(prompt).toContain("short grammatical chunk containing no more than two lexical units");
