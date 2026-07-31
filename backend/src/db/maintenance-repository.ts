@@ -1,6 +1,7 @@
 import { Client } from "pg";
 import { mapDatabaseError } from "../http/errors";
 import { asJsonObject, type JsonObject } from "../types";
+import type { DatabaseIdentity } from "./repository";
 
 export interface MaintenanceRepository {
   cleanup(input: JsonObject): Promise<JsonObject>;
@@ -10,9 +11,11 @@ export interface MaintenanceRepository {
 
 export class PostgresMaintenanceRepository implements MaintenanceRepository {
   readonly #connectionString: string;
+  readonly #expectedIdentity: DatabaseIdentity;
 
-  constructor(connectionString: string) {
+  constructor(connectionString: string, expectedIdentity: DatabaseIdentity) {
     this.#connectionString = connectionString;
+    this.#expectedIdentity = expectedIdentity;
   }
 
   async #call(
@@ -31,6 +34,13 @@ export class PostgresMaintenanceRepository implements MaintenanceRepository {
       await client.connect();
       await client.query("begin");
       await client.query("set local role meoing_maintenance");
+      await client.query(
+        "select private.assert_database_identity($1, $2)",
+        [
+          this.#expectedIdentity.environment,
+          this.#expectedIdentity.supabaseProjectRef,
+        ],
+      );
       const result = await client.query<{ data: unknown }>(
         `select private.${functionName}($1::jsonb) as data`,
         [JSON.stringify(input)],

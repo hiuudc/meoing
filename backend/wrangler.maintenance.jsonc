@@ -4,6 +4,9 @@
   "main": "src/maintenance-worker.ts",
   "compatibility_date": "2026-07-30",
   "compatibility_flags": ["nodejs_compat"],
+  "secrets": {
+    "required": ["SUPABASE_SECRET_KEY"]
+  },
   "placement": {
     "mode": "smart"
   },
@@ -12,7 +15,7 @@
     "logs": {
       "enabled": true,
       "head_sampling_rate": 1,
-      "invocation_logs": true
+      "invocation_logs": false
     },
     "traces": {
       "enabled": true,
@@ -40,14 +43,24 @@
   },
   "env": {
     "staging": {
+      "account_id": "29e80074abc5eb106165d2349db7ca56",
+      "workers_dev": false,
+      "preview_urls": false,
+      "secrets": {
+        "required": ["SUPABASE_SECRET_KEY"]
+      },
+      "placement": {
+        "region": "aws:ap-northeast-1"
+      },
+      "routes": [],
       "vars": {
         "APP_ENV": "staging",
-        "SUPABASE_URL": "https://STAGING_PROJECT_REF.supabase.co"
+        "SUPABASE_URL": "https://sdwuwmyrbdaarxokxmsf.supabase.co"
       },
       "hyperdrive": [
         {
           "binding": "HYPERDRIVE",
-          "id": "00000000000000000000000000000000"
+          "id": "e376733cca0441279f5707d7e28b18a3"
         }
       ],
       "r2_buckets": [
@@ -61,6 +74,11 @@
       }
     },
     "production": {
+      "workers_dev": false,
+      "preview_urls": false,
+      "secrets": {
+        "required": ["SUPABASE_SECRET_KEY"]
+      },
       "vars": {
         "APP_ENV": "production",
         "SUPABASE_URL": "https://PRODUCTION_PROJECT_REF.supabase.co"

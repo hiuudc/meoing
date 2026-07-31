@@ -10,6 +10,7 @@ interface LogEvent {
   readonly databaseDurationMs?: number;
   readonly queryCount?: number;
   readonly errorCode?: string;
+  readonly databaseCode?: string;
   readonly errorMessage?: string;
   readonly errorName?: string;
   readonly environment?: string;
@@ -43,11 +44,11 @@ interface LogEvent {
 }
 
 export function log(level: LogLevel, data: LogEvent): void {
-  const entry = JSON.stringify({
+  const entry = {
     level,
     timestamp: new Date().toISOString(),
     ...data,
-  });
+  };
 
   if (level === "error") {
     console.error(entry);

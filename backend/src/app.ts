@@ -4,7 +4,7 @@ import { cors } from "hono/cors";
 import { verifyTurnstile } from "./abuse/turnstile";
 import type { AppBindings } from "./app-types";
 import { verifySupabaseJwt } from "./auth/jwt";
-import type { RepositoryFactory } from "./db/repository";
+import type { DatabaseIdentity, RepositoryFactory } from "./db/repository";
 import { ApiError, errorResponse } from "./http/errors";
 import {
   ErrorSchema,
@@ -191,6 +191,7 @@ export function createApiApp(dependencies: ApiDependencies): OpenAPIHono<AppBind
     c.json({
       data: {
         environment: c.env.APP_ENV,
+        supabaseProjectRef: new URL(c.env.SUPABASE_URL).hostname.split(".")[0] ?? "",
         status: "ok",
       },
       meta: { requestId: c.get("requestState").requestId },
@@ -201,13 +202,31 @@ export function createApiApp(dependencies: ApiDependencies): OpenAPIHono<AppBind
     const requestState = c.get("requestState");
     requestState.queryCount += 1;
     const startedAt = performance.now();
+    let databaseIdentity: DatabaseIdentity;
     try {
-      await repository.checkHealth();
+      databaseIdentity = await repository.checkHealth();
     } finally {
       requestState.databaseDurationMs += performance.now() - startedAt;
     }
+    const expectedProjectRef = c.env.APP_ENV === "local"
+      ? "local"
+      : new URL(c.env.SUPABASE_URL).hostname.split(".")[0] ?? "";
+    if (
+      databaseIdentity.environment !== c.env.APP_ENV ||
+      databaseIdentity.supabaseProjectRef !== expectedProjectRef
+    ) {
+      throw new ApiError(
+        503,
+        "INTERNAL_ERROR",
+        "The database identity does not match the Worker environment",
+      );
+    }
     return c.json({
-      data: { status: "ready" },
+      data: {
+        databaseEnvironment: databaseIdentity.environment,
+        databaseProjectRef: databaseIdentity.supabaseProjectRef,
+        status: "ready",
+      },
       meta: { requestId: c.get("requestState").requestId },
     });
   });
@@ -289,6 +308,7 @@ export function createApiApp(dependencies: ApiDependencies): OpenAPIHono<AppBind
     }
 
     log(apiError.status >= 500 ? "error" : "warn", {
+      databaseCode: apiError.internalCode,
       environment: c.env.APP_ENV,
       errorCode: apiError.code,
       errorMessage:

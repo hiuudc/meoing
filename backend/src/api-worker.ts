@@ -1,8 +1,20 @@
 import { createApiApp } from "./app";
 import { PostgresDomainRepository } from "./db/repository";
 
+function expectedDatabaseProjectRef(env: ApiEnv): string {
+  if (env.APP_ENV === "local") return "local";
+  return new URL(env.SUPABASE_URL).hostname.split(".")[0] ?? "";
+}
+
 const app = createApiApp({
-  repositoryFactory: (env) => new PostgresDomainRepository(env.HYPERDRIVE.connectionString),
+  repositoryFactory: (env) =>
+    new PostgresDomainRepository(
+      env.HYPERDRIVE.connectionString,
+      {
+        environment: env.APP_ENV,
+        supabaseProjectRef: expectedDatabaseProjectRef(env),
+      },
+    ),
 });
 
 export default {

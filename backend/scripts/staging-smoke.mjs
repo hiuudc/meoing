@@ -10,6 +10,7 @@ import {
   resolveUrl,
   writeJsonSummary,
 } from "./acceptance-helpers.mjs";
+import { requireStagingProvisioningTargets } from "./provision-staging-guard.mjs";
 
 const HELP = `
 Meoing staging smoke acceptance
@@ -17,6 +18,7 @@ Meoing staging smoke acceptance
 Required:
   MEOING_ACCEPTANCE_API_URL
   MEOING_ACCEPTANCE_SUPABASE_URL
+  MEOING_ACCEPTANCE_EXPECTED_SUPABASE_PROJECT_REF
   MEOING_ACCEPTANCE_SUPABASE_PUBLISHABLE_KEY
   MEOING_ACCEPTANCE_ALLOWED_ORIGIN
   MEOING_ACCEPTANCE_ACCESS_TOKEN
@@ -43,6 +45,9 @@ const supabaseUrl = normalizedBaseUrl(
   requiredEnvironment("MEOING_ACCEPTANCE_SUPABASE_URL"),
   "MEOING_ACCEPTANCE_SUPABASE_URL",
 );
+const expectedSupabaseProjectRef = requiredEnvironment(
+  "MEOING_ACCEPTANCE_EXPECTED_SUPABASE_PROJECT_REF",
+);
 const publishableKey = requiredEnvironment("MEOING_ACCEPTANCE_SUPABASE_PUBLISHABLE_KEY");
 const allowedOrigin = requiredEnvironment("MEOING_ACCEPTANCE_ALLOWED_ORIGIN");
 const outputPath = optionalEnvironment("MEOING_ACCEPTANCE_OUTPUT");
@@ -65,6 +70,13 @@ async function resolveToken() {
     supabaseUrl,
   });
 }
+
+await requireStagingProvisioningTargets({
+  apiUrl,
+  expectedProjectRef: expectedSupabaseProjectRef,
+  supabaseUrl,
+});
+console.log("Staging API and Supabase project identity confirmed; starting smoke acceptance");
 
 const accessToken = await resolveToken();
 const memberAccessToken = !extended
@@ -530,6 +542,14 @@ try {
           updatedAt: timestamp,
         },
       };
+      const globalStatsBefore = await request("/v1/stats?languageCode=en");
+      const globalEncounterCountBefore =
+        globalStatsBefore.payload?.data?.words?.acceptance?.encounterCount ?? 0;
+      assert(
+        Number.isInteger(globalEncounterCountBefore),
+        "Global encounter count before progress was invalid",
+      );
+
       const submitted = await request(
         `/v1/progress/${encodeURIComponent(progressId)}/batches`,
         { method: "POST", body: progressBatch },
@@ -538,6 +558,14 @@ try {
         submitted.payload?.data?.acceptedEvents === 1,
         "Progress batch did not accept exactly one event",
       );
+      const globalStatsAfterSubmit = await request("/v1/stats?languageCode=en");
+      const globalEncounterCountAfterSubmit =
+        globalStatsAfterSubmit.payload?.data?.words?.acceptance?.encounterCount;
+      assert(
+        globalEncounterCountAfterSubmit === globalEncounterCountBefore + 1,
+        "First progress submission did not increment the global encounter count once",
+      );
+
       const retried = await request(
         `/v1/progress/${encodeURIComponent(progressId)}/batches`,
         { method: "POST", body: progressBatch },
@@ -554,7 +582,8 @@ try {
       );
       const globalStats = await request("/v1/stats?languageCode=en");
       assert(
-        globalStats.payload?.data?.words?.acceptance?.encounterCount === 1,
+        globalStats.payload?.data?.words?.acceptance?.encounterCount ===
+          globalEncounterCountAfterSubmit,
         "Exact progress retry changed the global encounter count",
       );
 

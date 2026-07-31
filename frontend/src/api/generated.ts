@@ -808,10 +808,13 @@ export interface components {
     schemas: {
         LiveHealth: {
             environment: string;
+            supabaseProjectRef: string;
             /** @enum {string} */
             status: "ok";
         };
         ReadyHealth: {
+            databaseEnvironment: string;
+            databaseProjectRef: string;
             /** @enum {string} */
             status: "ready";
         };

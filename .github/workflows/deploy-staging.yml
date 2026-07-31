@@ -36,6 +36,28 @@ jobs:
             frontend/package-lock.json
       - run: npm ci
         working-directory: backend
+      - name: Verify staging database target before migrations
+        run: npm run db:target:verify
+        working-directory: backend
+        env:
+          MEOING_DATABASE_ENVIRONMENT: staging
+          MEOING_EXPECTED_SUPABASE_PROJECT_REF: sdwuwmyrbdaarxokxmsf
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+      - name: Verify maintenance secret binding
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler secret list \
+            --config wrangler.maintenance.jsonc \
+            --env staging \
+            --format json |
+            jq -e 'any(.[]; .name == "SUPABASE_SECRET_KEY" and .type == "secret_text")' \
+              >/dev/null ||
+            {
+              echo "The staging maintenance Worker is missing SUPABASE_SECRET_KEY." >&2
+              exit 1
+            }
+        working-directory: backend
       - run: npm ci
         working-directory: frontend
       - name: Link staging database
@@ -46,11 +68,18 @@ jobs:
       - name: Apply staging migrations
         run: npx supabase db push --linked --include-all
         working-directory: backend
-      - name: Deploy maintenance Worker
-        run: npx wrangler deploy --config wrangler.maintenance.jsonc --env staging
+      - name: Configure and verify staging database identity
+        run: npm run db:identity:configure
         working-directory: backend
+        env:
+          MEOING_DATABASE_ENVIRONMENT: staging
+          MEOING_EXPECTED_SUPABASE_PROJECT_REF: sdwuwmyrbdaarxokxmsf
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
       - name: Deploy API Worker
         run: npx wrangler deploy --config wrangler.api.jsonc --env staging
+        working-directory: backend
+      - name: Deploy maintenance Worker
+        run: npx wrangler deploy --config wrangler.maintenance.jsonc --env staging
         working-directory: backend
       - name: Build web application and staging extension
         run: npm run build
@@ -75,8 +104,31 @@ jobs:
         env:
           CLOUDFLARE_PAGES_PROJECT: ${{ vars.CLOUDFLARE_PAGES_PROJECT }}
       - name: Smoke test
+        shell: bash
         run: |
-          curl --fail --retry 5 --retry-delay 5 "${MEOI_API_URL}/health/live"
-          curl --fail --retry 5 --retry-delay 5 "${MEOI_API_URL}/health/ready"
+          set -euo pipefail
+          live_payload="$(
+            curl --silent --show-error --fail --retry 5 --retry-delay 5 \
+              "${MEOI_API_URL}/health/live"
+          )"
+          ready_payload="$(
+            curl --silent --show-error --fail --retry 5 --retry-delay 5 \
+              "${MEOI_API_URL}/health/ready"
+          )"
+          jq -e \
+            --arg environment "staging" \
+            --arg project_ref "$EXPECTED_SUPABASE_PROJECT_REF" \
+            '.data.status == "ok"
+             and .data.environment == $environment
+             and .data.supabaseProjectRef == $project_ref' \
+            <<<"$live_payload" >/dev/null
+          jq -e \
+            --arg environment "staging" \
+            --arg project_ref "$EXPECTED_SUPABASE_PROJECT_REF" \
+            '.data.status == "ready"
+             and .data.databaseEnvironment == $environment
+             and .data.databaseProjectRef == $project_ref' \
+            <<<"$ready_payload" >/dev/null
         env:
           MEOI_API_URL: ${{ vars.MEOI_API_URL }}
+          EXPECTED_SUPABASE_PROJECT_REF: sdwuwmyrbdaarxokxmsf

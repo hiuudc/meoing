@@ -7,6 +7,12 @@ request ID, route, status, duration, PostgreSQL duration and query count. It
 does not log authorization headers, email, answers, lesson payloads or unit
 content.
 
+Cloudflare invocation logs are disabled in Wrangler because their automatic
+request metadata can include request-header fields. Keep custom Workers Logs
+enabled for the bounded events above; do not enable invocation logs for an
+authenticated API without first proving that sensitive headers are removed
+before storage.
+
 The hourly maintenance Worker writes:
 
 - `maintenance_complete` with cleanup/finalization counts only;
@@ -15,6 +21,12 @@ The hourly maintenance Worker writes:
 - `maintenance_observation_failed` when observation fails without preventing
   retention/deletion work;
 - `maintenance_failed` when the retention/deletion operation itself fails.
+
+Each run first makes a read-only Supabase Auth Admin canary request with the
+encrypted `SUPABASE_SECRET_KEY`. A missing, legacy-format, revoked or
+under-scoped key therefore emits `maintenance_failed` before any database or R2
+cleanup. Treat the first `maintenance_complete` after a deploy or key rotation
+as the rollout canary.
 
 Stats size fields are the combined PostgreSQL storage size of `aggregate`,
 `words`, `phrases` and `sentences`. The function samples 5% of table blocks,
@@ -51,8 +63,8 @@ Supabase database dashboard before changing schema or query behavior.
 
 ## Provider quota alerts
 
-Repository code cannot create or verify billing/quota alarms for Cloudflare,
-Supabase or Brevo. Configure the following in their dashboards or in the
+Repository code cannot create or verify billing/quota alarms for Cloudflare or
+Supabase. Configure the following in their dashboards or in the
 organization's external monitoring system, and record the alert IDs in the
 private operations inventory:
 
@@ -62,7 +74,8 @@ private operations inventory:
 | Supabase database size | 70% | 85% |
 | Supabase MAU and egress | 70% | 85% |
 | R2 storage and billable operations | 70% | 85% |
-| Brevo daily email allowance | 70% | 85% |
+| Cloudflare Email Sending monthly allowance and current daily quota | 70% | 85% |
+| Cloudflare Email Sending bounce/spam rejection rate | provider warning | provider critical |
 
 Route warning and critical alerts to different severities. Test each
 notification channel with a provider test event and retain evidence with the

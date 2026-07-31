@@ -94,11 +94,15 @@ npx wrangler secret put TURNSTILE_SECRET_KEY --config wrangler.api.jsonc --env s
 Set only the Auth administration secret on the maintenance Worker:
 
 ```powershell
-npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY --config wrangler.maintenance.jsonc --env staging
+npx wrangler secret put SUPABASE_SECRET_KEY --config wrangler.maintenance.jsonc --env staging
 ```
 
-Repeat with `--env production`. The API Worker must never receive the Supabase service-role
-key.
+Repeat with `--env production`. Use a dedicated `sb_secret_...` key for each environment.
+The maintenance Wrangler configuration declares this binding as required, so deploy fails
+closed when it is absent. Every scheduled run also checks the `sb_secret_` format and makes
+a read-only Supabase Auth Admin canary request before cleanup. Confirm a
+`maintenance_complete` event after secret rotation before revoking the previous key. The API
+Worker must never receive a Supabase secret key.
 
 Apply [config/r2-cors.example.json](config/r2-cors.example.json) to each R2 bucket after
 replacing its origins. Uploads must use the exact `content-length`, `content-type`, and
@@ -107,8 +111,12 @@ of the R2 PUT signature so changing the declared byte length invalidates the URL
 
 Configure Turnstile in Supabase Auth for signup/password recovery. The API additionally
 requires `x-turnstile-token` for invite preview and acceptance. Configure Google OAuth,
-email confirmation, Brevo SMTP, redirect URLs, SPF, DKIM, and DMARC in the Supabase
-dashboard; none of those secrets belong in this package.
+email confirmation, redirect URLs, and Cloudflare Email Sending SMTP in the Supabase
+dashboard. Onboard the sending subdomain in Cloudflare first, then use
+`smtp.mx.cloudflare.net:465`, username `api_token`, and an account-owned API token scoped
+only to `Email Sending: Edit`. Keep that token only in Supabase Auth; none of those
+credentials belong in this package. Cloudflare manages the sending subdomain's SPF,
+DKIM, bounce MX, and DMARC records.
 
 The Hyperdrive origin login role must be granted `meoing_runtime`; the maintenance origin
 login must be granted `meoing_maintenance`. Neither capability role may own tables or have
@@ -124,8 +132,11 @@ npm run db:start
 npm run db:reset
 npm run db:test
 npm run db:concurrency
+npm run db:target:verify
+npm run db:identity:configure
 npm run db:stop
 npm run acceptance:check
+npm run acceptance:provision
 npm run acceptance:staging
 npm run acceptance:load
 npm run typecheck
@@ -135,6 +146,13 @@ npm run build
 npm run check
 npm run openapi:types
 ```
+
+`db:target:verify` requires `MEOING_DATABASE_ENVIRONMENT`,
+`MEOING_EXPECTED_SUPABASE_PROJECT_REF`, and `SUPABASE_PROJECT_REF`. Run it
+before `supabase link` or `db push`; it makes no network request and fails
+unless the independently pinned ref and deployment target match exactly.
+`db:identity:configure` requires the same three values plus
+`SUPABASE_ACCESS_TOKEN`.
 
 `db:concurrency` requires `DATABASE_URL`. It opens two independent runtime
 transactions against one `maxUses=1` invite and fails unless exactly one
@@ -171,8 +189,10 @@ frontend.
   retries.
 
 `/health/live` checks Worker execution. `/health/ready` opens a fresh Hyperdrive connection
-and runs `select 1`; it should be monitored at a modest frequency so health checks do not
-consume connection capacity.
+and verifies the private database environment/project marker. The same assertion runs
+inside every API and maintenance transaction before its business RPC, so a drifted
+Hyperdrive origin fails closed. Monitor readiness at a modest frequency so health checks do
+not consume connection capacity.
 
 Credentialed staging smoke and the configurable 100-user/10-minute load gate are described
 in [`../docs/runbooks/acceptance.md`](../docs/runbooks/acceptance.md). They require real

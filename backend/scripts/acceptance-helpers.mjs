@@ -116,6 +116,62 @@ export function latencySummary(values) {
   };
 }
 
+export function loadPhaseOffsetMilliseconds(index, concurrency, requestIntervalMilliseconds) {
+  if (!Number.isInteger(concurrency) || concurrency < 1) {
+    throw new Error("Load concurrency must be a positive integer");
+  }
+  if (!Number.isInteger(index) || index < 0 || index >= concurrency) {
+    throw new Error("Load user index must be within the configured concurrency");
+  }
+  if (!Number.isFinite(requestIntervalMilliseconds) || requestIntervalMilliseconds <= 0) {
+    throw new Error("Load request interval must be positive");
+  }
+  return (index * requestIntervalMilliseconds) / concurrency;
+}
+
+export function expectedLoadRequestCount(
+  concurrency,
+  durationMilliseconds,
+  requestIntervalMilliseconds,
+) {
+  if (!Number.isFinite(durationMilliseconds) || durationMilliseconds <= 0) {
+    throw new Error("Load duration must be positive");
+  }
+  let expected = 0;
+  for (let index = 0; index < concurrency; index += 1) {
+    const phaseOffset = loadPhaseOffsetMilliseconds(
+      index,
+      concurrency,
+      requestIntervalMilliseconds,
+    );
+    expected += Math.max(
+      0,
+      Math.ceil((durationMilliseconds - phaseOffset) / requestIntervalMilliseconds),
+    );
+  }
+  return expected;
+}
+
+export function missedLoadScheduleSlots(
+  nextTargetMilliseconds,
+  nowMilliseconds,
+  requestIntervalMilliseconds,
+) {
+  if (
+    !Number.isFinite(nextTargetMilliseconds) ||
+    !Number.isFinite(nowMilliseconds)
+  ) {
+    throw new Error("Load schedule timestamps must be finite");
+  }
+  if (!Number.isFinite(requestIntervalMilliseconds) || requestIntervalMilliseconds <= 0) {
+    throw new Error("Load request interval must be positive");
+  }
+  if (nextTargetMilliseconds > nowMilliseconds) return 0;
+  return Math.floor(
+    (nowMilliseconds - nextTargetMilliseconds) / requestIntervalMilliseconds,
+  ) + 1;
+}
+
 export function sleep(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }

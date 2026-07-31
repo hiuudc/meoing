@@ -26,6 +26,10 @@
             "type": "string",
             "minLength": 1
           },
+          "supabaseProjectRef": {
+            "type": "string",
+            "minLength": 1
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -35,12 +39,21 @@
         },
         "required": [
           "environment",
+          "supabaseProjectRef",
           "status"
         ]
       },
       "ReadyHealth": {
         "type": "object",
         "properties": {
+          "databaseEnvironment": {
+            "type": "string",
+            "minLength": 1
+          },
+          "databaseProjectRef": {
+            "type": "string",
+            "minLength": 1
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -49,6 +62,8 @@
           }
         },
         "required": [
+          "databaseEnvironment",
+          "databaseProjectRef",
           "status"
         ]
       },

@@ -7,8 +7,9 @@
     "node": ">=22"
   },
   "scripts": {
-    "acceptance:check": "node --check scripts/acceptance-helpers.mjs && node --check scripts/staging-smoke.mjs && node --check scripts/load-gate.mjs && node --check scripts/db-concurrency.mjs",
+    "acceptance:check": "node --check scripts/acceptance-helpers.mjs && node --check scripts/acceptance-auth.mjs && node --check scripts/database-identity.mjs && node --check scripts/configure-database-identity.mjs && node --check scripts/verify-database-target.mjs && node --check scripts/provision-staging-guard.mjs && node --check scripts/provision-staging-users.mjs && node --check scripts/staging-smoke.mjs && node --check scripts/load-gate.mjs && node --check scripts/db-concurrency.mjs && node --test scripts/acceptance-helpers.test.mjs scripts/acceptance-auth.test.mjs scripts/database-identity.test.mjs scripts/provision-staging-guard.test.mjs",
     "acceptance:load": "node scripts/load-gate.mjs",
+    "acceptance:provision": "node scripts/provision-staging-users.mjs",
     "acceptance:staging": "node scripts/staging-smoke.mjs",
     "auth:key:local": "node scripts/setup-local-auth.mjs",
     "build": "wrangler deploy --dry-run --config wrangler.api.jsonc --env=\"\" --outdir .wrangler-dry-run/api && wrangler deploy --dry-run --config wrangler.maintenance.jsonc --env=\"\" --outdir .wrangler-dry-run/maintenance",
@@ -16,11 +17,13 @@
     "db:start": "npm run auth:key:local && supabase start",
     "db:reset": "supabase db reset",
     "db:concurrency": "node scripts/db-concurrency.mjs",
+    "db:identity:configure": "node scripts/configure-database-identity.mjs",
+    "db:target:verify": "node scripts/verify-database-target.mjs",
     "db:test": "supabase test db",
     "db:stop": "supabase stop",
     "dev": "wrangler dev --config wrangler.api.jsonc",
     "dev:maintenance": "wrangler dev --config wrangler.maintenance.jsonc --env-file .dev.vars.maintenance --test-scheduled",
-    "lint": "oxlint --deny-warnings src test",
+    "lint": "oxlint --deny-warnings src test scripts",
     "openapi:export": "esbuild ./scripts/export-openapi.ts --bundle --platform=node --format=esm --outfile=.wrangler/openapi-export.mjs && node .wrangler/openapi-export.mjs",
     "openapi:types": "npm run openapi:export && openapi-typescript openapi.json -o ../frontend/src/api/generated.ts",
     "test": "vitest run",
@@ -43,6 +46,7 @@
     "oxlint": "1.76.0",
     "supabase": "2.110.0",
     "typescript": "5.9.3",
+    "undici": "7.28.0",
     "vitest": "4.1.10",
     "wrangler": "4.115.0"
   },

@@ -2,7 +2,325 @@ begin;
 
 set local search_path = public, extensions, app, private;
 
-select plan(76);
+-- pgTAP is installed in the extensions schema. These grants exist only inside
+-- this test transaction and let assertions continue to run after SET ROLE.
+grant meoing_runtime to current_user with set true;
+grant usage on schema extensions to meoing_runtime;
+grant execute on all functions in schema extensions to meoing_runtime;
+
+select plan(137);
+
+select ok(
+  case
+    when to_regprocedure('public.rls_auto_enable()') is null then true
+    else not has_function_privilege(
+      'anon',
+      to_regprocedure('public.rls_auto_enable()'),
+      'execute'
+    )
+  end,
+  'anon cannot execute the Supabase RLS event-trigger helper'
+);
+
+select ok(
+  case
+    when to_regprocedure('public.rls_auto_enable()') is null then true
+    else not has_function_privilege(
+      'authenticated',
+      to_regprocedure('public.rls_auto_enable()'),
+      'execute'
+    )
+  end,
+  'authenticated cannot execute the Supabase RLS event-trigger helper'
+);
+
+select is(
+  (
+    select array_agg(policy.cmd order by policy.cmd)
+    from pg_policies as policy
+    where policy.schemaname = 'app'
+      and policy.tablename = 'collection_user_language_stats'
+      and policy.roles @> array['meoing_runtime']::name[]
+  ),
+  array['DELETE', 'INSERT', 'SELECT', 'UPDATE']::text[],
+  'collection language stats have one permissive policy per command'
+);
+
+create table public.meoing_default_acl_probe (
+  id bigint primary key
+);
+create sequence public.meoing_default_acl_probe_sequence;
+
+select ok(
+  not exists (
+    select 1
+    from (
+      values ('anon'), ('authenticated'), ('service_role')
+    ) as role_name(value)
+    cross join (
+      values
+        ('SELECT'),
+        ('INSERT'),
+        ('UPDATE'),
+        ('DELETE'),
+        ('TRUNCATE'),
+        ('REFERENCES'),
+        ('TRIGGER'),
+        ('MAINTAIN')
+    ) as privilege_name(value)
+    where has_table_privilege(
+      role_name.value,
+      'public.meoing_default_acl_probe',
+      privilege_name.value
+    )
+
+    union all
+
+    select 1
+    from (
+      values ('anon'), ('authenticated'), ('service_role')
+    ) as role_name(value)
+    cross join (
+      values ('USAGE'), ('SELECT'), ('UPDATE')
+    ) as privilege_name(value)
+    where has_sequence_privilege(
+      role_name.value,
+      'public.meoing_default_acl_probe_sequence',
+      privilege_name.value
+    )
+  ),
+  'future postgres-created public tables and sequences are fail-closed'
+);
+
+select has_index(
+  'app',
+  'collection_invite_roles',
+  'collection_invite_roles_invite_collection_idx',
+  'the composite invite foreign key has a covering index'
+);
+
+select has_table(
+  'private',
+  'deployment_identity',
+  'the database has a private deployment-identity marker'
+);
+
+select ok(
+  to_regprocedure('private.assert_database_identity(text,text)') is not null,
+  'the database identity assertion function exists'
+);
+
+select ok(
+  not has_table_privilege(
+    'meoing_runtime',
+    'private.deployment_identity',
+    'select'
+  ),
+  'the runtime role cannot read the identity marker directly'
+);
+
+select ok(
+  has_function_privilege(
+    'meoing_runtime',
+    'private.assert_database_identity(text,text)',
+    'execute'
+  ),
+  'the runtime role can execute only the identity assertion function'
+);
+
+select ok(
+  has_function_privilege(
+    'meoing_maintenance',
+    'private.assert_database_identity(text,text)',
+    'execute'
+  ),
+  'the maintenance role can assert the database identity before cleanup'
+);
+
+select ok(
+  not has_function_privilege(
+    'anon',
+    'private.assert_database_identity(text,text)',
+    'execute'
+  ),
+  'anon cannot execute the database identity assertion'
+);
+
+select is(
+  private.assert_database_identity(
+    (select environment from private.deployment_identity where singleton),
+    (select supabase_project_ref from private.deployment_identity where singleton)
+  ) ->> 'environment',
+  (select environment from private.deployment_identity where singleton),
+  'the configured database marker reports its environment'
+);
+
+select is(
+  private.assert_database_identity(
+    (select environment from private.deployment_identity where singleton),
+    (select supabase_project_ref from private.deployment_identity where singleton)
+  ) ->> 'supabaseProjectRef',
+  (select supabase_project_ref from private.deployment_identity where singleton),
+  'the configured database marker reports its project identity'
+);
+
+select throws_ok(
+  $$select private.assert_database_identity('production', 'aaaaaaaaaaaaaaaaaaaa')$$,
+  '57P03',
+  'DATABASE_IDENTITY_MISMATCH',
+  'a Worker targeting a different environment fails closed'
+);
+
+create temporary table test_saved_deployment_identity
+on commit drop
+as
+select *
+from private.deployment_identity;
+
+delete from private.deployment_identity;
+
+create temporary table test_deployment_identity_results (
+  attempt text not null,
+  identity jsonb not null
+) on commit drop;
+
+with configured as (
+  insert into private.deployment_identity as identity (
+    singleton,
+    environment,
+    supabase_project_ref
+  )
+  values (true, 'staging', 'aaaaaaaaaaaaaaaaaaaa')
+  on conflict (singleton) do update
+  set configured_at = identity.configured_at
+  where identity.environment = excluded.environment
+    and identity.supabase_project_ref = excluded.supabase_project_ref
+  returning jsonb_build_object(
+    'environment', environment,
+    'supabaseProjectRef', supabase_project_ref
+  ) as identity
+)
+insert into test_deployment_identity_results (attempt, identity)
+select 'fresh', identity
+from configured;
+
+select is(
+  (
+    select count(*)
+    from test_deployment_identity_results
+    where attempt = 'fresh'
+  ),
+  1::bigint,
+  'a fresh hosted database accepts its first deployment marker'
+);
+
+select is(
+  private.assert_database_identity(
+    'staging',
+    'aaaaaaaaaaaaaaaaaaaa'
+  ) ->> 'supabaseProjectRef',
+  'aaaaaaaaaaaaaaaaaaaa',
+  'a separate post-commit-style statement sees the fresh deployment marker'
+);
+
+with configured as (
+  insert into private.deployment_identity as identity (
+    singleton,
+    environment,
+    supabase_project_ref
+  )
+  values (true, 'staging', 'aaaaaaaaaaaaaaaaaaaa')
+  on conflict (singleton) do update
+  set configured_at = identity.configured_at
+  where identity.environment = excluded.environment
+    and identity.supabase_project_ref = excluded.supabase_project_ref
+  returning jsonb_build_object(
+    'environment', environment,
+    'supabaseProjectRef', supabase_project_ref
+  ) as identity
+)
+insert into test_deployment_identity_results (attempt, identity)
+select 'same', identity
+from configured;
+
+select is(
+  (
+    select count(*)
+    from test_deployment_identity_results
+    where attempt = 'same'
+  ),
+  1::bigint,
+  'reconfiguring the same deployment marker is idempotent'
+);
+
+with configured as (
+  insert into private.deployment_identity as identity (
+    singleton,
+    environment,
+    supabase_project_ref
+  )
+  values (true, 'production', 'bbbbbbbbbbbbbbbbbbbb')
+  on conflict (singleton) do update
+  set configured_at = identity.configured_at
+  where identity.environment = excluded.environment
+    and identity.supabase_project_ref = excluded.supabase_project_ref
+  returning jsonb_build_object(
+    'environment', environment,
+    'supabaseProjectRef', supabase_project_ref
+  ) as identity
+)
+insert into test_deployment_identity_results (attempt, identity)
+select 'conflict', identity
+from configured;
+
+select is(
+  (
+    select count(*)
+    from test_deployment_identity_results
+    where attempt = 'conflict'
+  ),
+  0::bigint,
+  'a conflicting deployment marker returns no row'
+);
+
+select is(
+  (
+    select environment || '/' || supabase_project_ref
+    from private.deployment_identity
+    where singleton
+  ),
+  'staging/aaaaaaaaaaaaaaaaaaaa',
+  'a conflicting deployment marker cannot replace the existing identity'
+);
+
+select throws_ok(
+  $$select private.assert_database_identity('production', 'bbbbbbbbbbbbbbbbbbbb')$$,
+  '57P03',
+  'DATABASE_IDENTITY_MISMATCH',
+  'the post-configuration assertion rejects a different deployment identity'
+);
+
+delete from private.deployment_identity;
+insert into private.deployment_identity (
+  singleton,
+  environment,
+  supabase_project_ref,
+  configured_at
+)
+select
+  singleton,
+  environment,
+  supabase_project_ref,
+  configured_at
+from test_saved_deployment_identity;
+
+insert into app.username_reservations (
+  username,
+  reservation_type,
+  reason
+)
+values ('admin', 'permanent', 'pgTAP fixture')
+on conflict (username) do nothing;
 
 insert into auth.users (
   id,
@@ -55,9 +373,17 @@ values
   );
 
 select is(
-  (select count(*)::integer from app.profiles),
+  (
+    select count(*)::integer
+    from app.profiles
+    where user_id in (
+      '10000000-0000-0000-0000-000000000001',
+      '10000000-0000-0000-0000-000000000002',
+      '10000000-0000-0000-0000-000000000003'
+    )
+  ),
   3,
-  'auth trigger creates one application profile per user'
+  'auth trigger creates one application profile per fixture user'
 );
 
 select set_config(
@@ -1145,6 +1471,1388 @@ select throws_ok(
   '23505',
   'IDEMPOTENCY_KEY_REUSED',
   'reusing a progress batch id with a different payload is rejected'
+);
+
+insert into test_ids (key, value)
+select
+  'lesson_private',
+  (
+    private.api_lesson_create(
+      jsonb_build_object(
+        'collectionId', (select value from test_ids where key = 'collection_one'),
+        'unitId', (select value from test_ids where key = 'unit_one'),
+        'unitRevision', 2,
+        'title', 'Owner private draft',
+        'languageCode', 'en',
+        'payload', jsonb_build_object(
+          'schemaVersion', 8,
+          'questions',
+          jsonb_build_array(
+            jsonb_build_object(
+              'questionId', 'q-private',
+              'tracking', jsonb_build_object(
+                'encountered', jsonb_build_object(
+                  'words', jsonb_build_array('go'),
+                  'phrases', '[]'::jsonb,
+                  'sentences', '[]'::jsonb
+                ),
+                'assessed', jsonb_build_object(
+                  'words', jsonb_build_array('go'),
+                  'phrases', '[]'::jsonb,
+                  'sentences', '[]'::jsonb
+                )
+              )
+            )
+          )
+        )
+      )
+    ) ->> 'id'
+  )::uuid;
+
+select private.api_lesson_publish(
+  jsonb_build_object(
+    'lessonId', (select value from test_ids where key = 'lesson_one'),
+    'expectedRevision', 1
+  )
+);
+
+select private.api_character_progress_upsert(
+  jsonb_build_object(
+    'languageCode', 'en',
+    'characters', '{"g":{"encounterCount":1}}'::jsonb,
+    'expectedRevision', 0
+  )
+);
+
+insert into app.settings (scope_type, user_id, collection_id, key, value)
+values
+  (
+    'user',
+    '10000000-0000-0000-0000-000000000001',
+    null,
+    'owner.private',
+    '{"theme":"owner"}'
+  ),
+  (
+    'collection',
+    null,
+    (select value from test_ids where key = 'collection_one'),
+    'collection.shared',
+    '{"locale":"en"}'
+  ),
+  (
+    'collection_user',
+    '10000000-0000-0000-0000-000000000001',
+    (select value from test_ids where key = 'collection_one'),
+    'owner.collection-user',
+    '{"notifications":true}'
+  );
+
+insert into app.file_assets (
+  id,
+  owner_id,
+  r2_key,
+  original_filename,
+  mime_type,
+  expected_size_bytes,
+  expected_sha256,
+  size_bytes,
+  sha256,
+  etag,
+  uploaded_at,
+  status,
+  ready_at
+)
+values (
+  '50000000-0000-4000-8000-000000000003',
+  '10000000-0000-0000-0000-000000000001',
+  'test/private/owner-asset',
+  'owner-private.txt',
+  'text/plain',
+  8,
+  decode(repeat('ef', 32), 'hex'),
+  8,
+  decode(repeat('ef', 32), 'hex'),
+  'etag-owner-private',
+  now(),
+  'ready',
+  now()
+);
+
+select set_config(
+  'app.user_id',
+  '10000000-0000-0000-0000-000000000002',
+  true
+);
+
+insert into test_ids (key, value)
+select
+  'progress_member',
+  (
+    private.api_progress_start(
+      jsonb_build_object(
+        'lessonId', (select value from test_ids where key = 'lesson_one'),
+        'idempotencyKey', 'progress-start-member-001'
+      )
+    ) ->> 'id'
+  )::uuid;
+
+select private.api_progress_submit_batch(
+  jsonb_build_object(
+    'batchId', '20000000-0000-0000-0000-000000000002',
+    'progressId', (select value from test_ids where key = 'progress_member'),
+    'events', jsonb_build_array(
+      jsonb_build_object(
+        'eventId', '30000000-0000-0000-0000-000000000002',
+        'attemptId', '40000000-0000-0000-0000-000000000002',
+        'questionId', 'q1',
+        'attemptNumber', 1,
+        'answer', 'go',
+        'status', 'correct',
+        'score', 1,
+        'answeredAt', '2000-01-02T00:00:00Z',
+        'evaluationSource', 'client_extension'
+      )
+    )
+  )
+);
+
+select private.api_character_progress_upsert(
+  jsonb_build_object(
+    'languageCode', 'en',
+    'characters', '{"m":{"encounterCount":1}}'::jsonb,
+    'expectedRevision', 0
+  )
+);
+
+insert into app.settings (scope_type, user_id, collection_id, key, value)
+values
+  (
+    'user',
+    '10000000-0000-0000-0000-000000000002',
+    null,
+    'member.private',
+    '{"theme":"member"}'
+  ),
+  (
+    'collection_user',
+    '10000000-0000-0000-0000-000000000002',
+    (select value from test_ids where key = 'collection_one'),
+    'member.collection-user',
+    '{"notifications":false}'
+  );
+
+select set_config(
+  'app.user_id',
+  '10000000-0000-0000-0000-000000000003',
+  true
+);
+
+insert into test_ids (key, value)
+select
+  'outsider_role',
+  (
+    private.api_role_create(
+      jsonb_build_object(
+        'collectionId', (select value from test_ids where key = 'collection_two'),
+        'name', 'Outsider teacher',
+        'permissions', jsonb_build_array('create_content', 'create_lessons'),
+        'securityRank', 5
+      )
+    ) ->> 'id'
+  )::uuid;
+
+insert into test_ids (key, value)
+select
+  'invite_two',
+  (
+    private.api_invite_create(
+      jsonb_build_object(
+        'collectionId', (select value from test_ids where key = 'collection_two'),
+        'tokenHash', encode(digest('invite-two', 'sha256'), 'hex'),
+        'tokenHint', 'efgh',
+        'maxUses', 2,
+        'roleIds', jsonb_build_array(
+          (select value from test_ids where key = 'outsider_role')
+        )
+      )
+    ) ->> 'id'
+  )::uuid;
+
+insert into test_ids (key, value)
+select
+  'unit_two',
+  (
+    private.api_unit_create(
+      jsonb_build_object(
+        'collectionId', (select value from test_ids where key = 'collection_two'),
+        'name', 'Outsider unit',
+        'languageCode', 'en',
+        'words', '["outside"]'::jsonb,
+        'phrases', '[]'::jsonb,
+        'sentences', '[]'::jsonb,
+        'documents', '[]'::jsonb
+      )
+    ) ->> 'id'
+  )::uuid;
+
+insert into test_ids (key, value)
+select
+  'lesson_two',
+  (
+    private.api_lesson_create(
+      jsonb_build_object(
+        'collectionId', (select value from test_ids where key = 'collection_two'),
+        'unitId', (select value from test_ids where key = 'unit_two'),
+        'unitRevision', 1,
+        'title', 'Outsider private draft',
+        'languageCode', 'en',
+        'payload', jsonb_build_object(
+          'schemaVersion', 8,
+          'questions',
+          jsonb_build_array(
+            jsonb_build_object(
+              'questionId', 'q-outside',
+              'tracking', jsonb_build_object(
+                'encountered', jsonb_build_object(
+                  'words', jsonb_build_array('outside'),
+                  'phrases', '[]'::jsonb,
+                  'sentences', '[]'::jsonb
+                ),
+                'assessed', jsonb_build_object(
+                  'words', jsonb_build_array('outside'),
+                  'phrases', '[]'::jsonb,
+                  'sentences', '[]'::jsonb
+                )
+              )
+            )
+          )
+        )
+      )
+    ) ->> 'id'
+  )::uuid;
+
+insert into test_ids (key, value)
+select
+  'progress_outsider',
+  (
+    private.api_progress_start(
+      jsonb_build_object(
+        'lessonId', (select value from test_ids where key = 'lesson_two'),
+        'idempotencyKey', 'progress-start-outsider-01'
+      )
+    ) ->> 'id'
+  )::uuid;
+
+select private.api_progress_submit_batch(
+  jsonb_build_object(
+    'batchId', '20000000-0000-0000-0000-000000000003',
+    'progressId', (select value from test_ids where key = 'progress_outsider'),
+    'events', jsonb_build_array(
+      jsonb_build_object(
+        'eventId', '30000000-0000-0000-0000-000000000003',
+        'attemptId', '40000000-0000-0000-0000-000000000003',
+        'questionId', 'q-outside',
+        'attemptNumber', 1,
+        'answer', 'outside',
+        'status', 'correct',
+        'score', 1,
+        'answeredAt', '2000-01-03T00:00:00Z',
+        'evaluationSource', 'client_extension'
+      )
+    )
+  )
+);
+
+select private.api_character_progress_upsert(
+  jsonb_build_object(
+    'languageCode', 'en',
+    'characters', '{"o":{"encounterCount":1}}'::jsonb,
+    'expectedRevision', 0
+  )
+);
+
+insert into app.settings (scope_type, user_id, collection_id, key, value)
+values
+  (
+    'user',
+    '10000000-0000-0000-0000-000000000003',
+    null,
+    'outsider.private',
+    '{"theme":"outsider"}'
+  ),
+  (
+    'collection',
+    null,
+    (select value from test_ids where key = 'collection_two'),
+    'collection.hidden',
+    '{"locale":"fr"}'
+  );
+
+select set_config(
+  'test.collection_one',
+  (select value::text from test_ids where key = 'collection_one'),
+  true
+);
+select set_config(
+  'test.collection_two',
+  (select value::text from test_ids where key = 'collection_two'),
+  true
+);
+select set_config(
+  'test.unit_one',
+  (select value::text from test_ids where key = 'unit_one'),
+  true
+);
+select set_config(
+  'test.unit_two',
+  (select value::text from test_ids where key = 'unit_two'),
+  true
+);
+select set_config(
+  'test.lesson_one',
+  (select value::text from test_ids where key = 'lesson_one'),
+  true
+);
+select set_config(
+  'test.lesson_private',
+  (select value::text from test_ids where key = 'lesson_private'),
+  true
+);
+select set_config(
+  'test.lesson_two',
+  (select value::text from test_ids where key = 'lesson_two'),
+  true
+);
+select set_config(
+  'test.progress_one',
+  (select value::text from test_ids where key = 'progress_one'),
+  true
+);
+select set_config(
+  'test.progress_member',
+  (select value::text from test_ids where key = 'progress_member'),
+  true
+);
+select set_config(
+  'test.progress_outsider',
+  (select value::text from test_ids where key = 'progress_outsider'),
+  true
+);
+
+set local role meoing_runtime;
+
+select ok(
+  (
+    select bool_and(
+      has_table_privilege(
+        'meoing_runtime',
+        format('app.%I', target.table_name),
+        'select'
+      )
+      and not has_table_privilege(
+        'meoing_runtime',
+        format('app.%I', target.table_name),
+        'insert'
+      )
+      and not has_table_privilege(
+        'meoing_runtime',
+        format('app.%I', target.table_name),
+        'update'
+      )
+      and not has_table_privilege(
+        'meoing_runtime',
+        format('app.%I', target.table_name),
+        'delete'
+      )
+    )
+    from (
+      values
+        ('settings'),
+        ('collection_roles'),
+        ('collection_member_roles'),
+        ('collection_invites'),
+        ('collection_invite_roles'),
+        ('units'),
+        ('unit_revisions'),
+        ('lessons'),
+        ('lesson_progress'),
+        ('progress_batches'),
+        ('user_language_stats'),
+        ('collection_user_language_stats'),
+        ('user_character_progress'),
+        ('file_assets')
+    ) as target(table_name)
+  ),
+  'runtime table access is read-only and all mutations remain behind RPCs'
+);
+
+select set_config(
+  'app.user_id',
+  '10000000-0000-0000-0000-000000000002',
+  true
+);
+
+select is(
+  (select array_agg(key order by key) from app.settings),
+  array[
+    'collection.shared',
+    'member.collection-user',
+    'member.private'
+  ]::text[],
+  'member RLS exposes shared, own-user, and own collection-user settings only'
+);
+
+select is(
+  jsonb_build_object(
+    'shared',
+    (
+      select count(*)
+      from app.collection_roles
+      where collection_id = current_setting('test.collection_one')::uuid
+    ),
+    'foreign',
+    (
+      select count(*)
+      from app.collection_roles
+      where collection_id = current_setting('test.collection_two')::uuid
+    )
+  ),
+  '{"shared":4,"foreign":0}'::jsonb,
+  'member RLS exposes roles in the shared collection and hides foreign roles'
+);
+
+select is(
+  jsonb_build_object(
+    'shared',
+    (
+      select count(*)
+      from app.collection_member_roles
+      where collection_id = current_setting('test.collection_one')::uuid
+    ),
+    'foreign',
+    (
+      select count(*)
+      from app.collection_member_roles
+      where collection_id = current_setting('test.collection_two')::uuid
+    )
+  ),
+  '{"shared":3,"foreign":0}'::jsonb,
+  'member RLS exposes shared role assignments without leaking foreign assignments'
+);
+
+select is(
+  jsonb_build_object(
+    'invites', (select count(*) from app.collection_invites),
+    'inviteRoles', (select count(*) from app.collection_invite_roles)
+  ),
+  '{"invites":0,"inviteRoles":0}'::jsonb,
+  'a member without manage-invites cannot inspect invite hashes or invite roles'
+);
+
+select is(
+  jsonb_build_object(
+    'shared',
+    (
+      select count(*)
+      from app.units
+      where id = current_setting('test.unit_one')::uuid
+    ),
+    'foreign',
+    (
+      select count(*)
+      from app.units
+      where id = current_setting('test.unit_two')::uuid
+    )
+  ),
+  '{"shared":1,"foreign":0}'::jsonb,
+  'member RLS exposes shared units and hides foreign units'
+);
+
+select is(
+  jsonb_build_object(
+    'shared',
+    (
+      select count(*)
+      from app.unit_revisions
+      where unit_id = current_setting('test.unit_one')::uuid
+    ),
+    'foreign',
+    (
+      select count(*)
+      from app.unit_revisions
+      where unit_id = current_setting('test.unit_two')::uuid
+    )
+  ),
+  '{"shared":3,"foreign":0}'::jsonb,
+  'member RLS exposes shared revision snapshots and hides foreign snapshots'
+);
+
+select is(
+  jsonb_build_object(
+    'published',
+    (
+      select count(*)
+      from app.lessons
+      where id = current_setting('test.lesson_one')::uuid
+    ),
+    'privateDraft',
+    (
+      select count(*)
+      from app.lessons
+      where id = current_setting('test.lesson_private')::uuid
+    ),
+    'foreign',
+    (
+      select count(*)
+      from app.lessons
+      where id = current_setting('test.lesson_two')::uuid
+    )
+  ),
+  '{"published":1,"privateDraft":0,"foreign":0}'::jsonb,
+  'member RLS exposes published lessons but hides another author draft and foreign lessons'
+);
+
+select is(
+  jsonb_build_object(
+    'own',
+    (
+      select count(*)
+      from app.lesson_progress
+      where id = current_setting('test.progress_member')::uuid
+    ),
+    'owner',
+    (
+      select count(*)
+      from app.lesson_progress
+      where id = current_setting('test.progress_one')::uuid
+    ),
+    'foreign',
+    (
+      select count(*)
+      from app.lesson_progress
+      where id = current_setting('test.progress_outsider')::uuid
+    )
+  ),
+  '{"own":1,"owner":0,"foreign":0}'::jsonb,
+  'lesson progress RLS exposes only the current user sessions'
+);
+
+select is(
+  jsonb_build_object(
+    'own',
+    (
+      select count(*)
+      from app.progress_batches
+      where batch_id = '20000000-0000-0000-0000-000000000002'
+    ),
+    'owner',
+    (
+      select count(*)
+      from app.progress_batches
+      where batch_id = '20000000-0000-0000-0000-000000000001'
+    ),
+    'foreign',
+    (
+      select count(*)
+      from app.progress_batches
+      where batch_id = '20000000-0000-0000-0000-000000000003'
+    )
+  ),
+  '{"own":1,"owner":0,"foreign":0}'::jsonb,
+  'progress batch RLS exposes only the current user idempotency records'
+);
+
+select is(
+  jsonb_build_object(
+    'rows', (select count(*) from app.user_language_stats),
+    'own',
+    (
+      select count(*)
+      from app.user_language_stats
+      where user_id = '10000000-0000-0000-0000-000000000002'
+    ),
+    'owner',
+    (
+      select count(*)
+      from app.user_language_stats
+      where user_id = '10000000-0000-0000-0000-000000000001'
+    ),
+    'foreign',
+    (
+      select count(*)
+      from app.user_language_stats
+      where user_id = '10000000-0000-0000-0000-000000000003'
+    )
+  ),
+  '{"rows":1,"own":1,"owner":0,"foreign":0}'::jsonb,
+  'global language stats remain private even when users share a collection'
+);
+
+select is(
+  jsonb_build_object(
+    'shared',
+    (
+      select count(*)
+      from app.collection_user_language_stats
+      where collection_id = current_setting('test.collection_one')::uuid
+    ),
+    'foreign',
+    (
+      select count(*)
+      from app.collection_user_language_stats
+      where collection_id = current_setting('test.collection_two')::uuid
+    )
+  ),
+  '{"shared":2,"foreign":0}'::jsonb,
+  'view-member-progress exposes collection stats for peers without leaking another collection'
+);
+
+select is(
+  jsonb_build_object(
+    'own',
+    (
+      select count(*)
+      from app.user_character_progress
+      where user_id = '10000000-0000-0000-0000-000000000002'
+    ),
+    'owner',
+    (
+      select count(*)
+      from app.user_character_progress
+      where user_id = '10000000-0000-0000-0000-000000000001'
+    ),
+    'foreign',
+    (
+      select count(*)
+      from app.user_character_progress
+      where user_id = '10000000-0000-0000-0000-000000000003'
+    )
+  ),
+  '{"own":1,"owner":0,"foreign":0}'::jsonb,
+  'character progress RLS remains user-private'
+);
+
+select is(
+  jsonb_build_object(
+    'shared',
+    (
+      select count(*)
+      from app.file_assets
+      where id = '50000000-0000-4000-8000-000000000001'
+    ),
+    'foreign',
+    (
+      select count(*)
+      from app.file_assets
+      where id = '50000000-0000-4000-8000-000000000002'
+    ),
+    'ownerPrivate',
+    (
+      select count(*)
+      from app.file_assets
+      where id = '50000000-0000-4000-8000-000000000003'
+    )
+  ),
+  '{"shared":1,"foreign":0,"ownerPrivate":0}'::jsonb,
+  'asset RLS exposes collection files but hides foreign and another user private files'
+);
+
+select set_config(
+  'app.user_id',
+  '10000000-0000-0000-0000-000000000001',
+  true
+);
+
+select is(
+  (select array_agg(key order by key) from app.settings),
+  array[
+    'collection.shared',
+    'member.collection-user',
+    'owner.collection-user',
+    'owner.private'
+  ]::text[],
+  'owner RLS exposes own settings plus managed collection-user settings'
+);
+
+select is(
+  jsonb_build_object(
+    'shared',
+    (
+      select count(*)
+      from app.collection_roles
+      where collection_id = current_setting('test.collection_one')::uuid
+    ),
+    'foreign',
+    (
+      select count(*)
+      from app.collection_roles
+      where collection_id = current_setting('test.collection_two')::uuid
+    )
+  ),
+  '{"shared":4,"foreign":0}'::jsonb,
+  'owner RLS exposes owned collection roles and hides foreign roles'
+);
+
+select is(
+  jsonb_build_object(
+    'invites',
+    (
+      select count(*)
+      from app.collection_invites
+      where collection_id = current_setting('test.collection_one')::uuid
+    ),
+    'inviteRoles',
+    (
+      select count(*)
+      from app.collection_invite_roles
+      where collection_id = current_setting('test.collection_one')::uuid
+    ),
+    'foreignInvites',
+    (
+      select count(*)
+      from app.collection_invites
+      where collection_id = current_setting('test.collection_two')::uuid
+    )
+  ),
+  '{"invites":1,"inviteRoles":1,"foreignInvites":0}'::jsonb,
+  'owner RLS exposes managed invites and their roles without leaking foreign invites'
+);
+
+select is(
+  jsonb_build_object(
+    'units',
+    (
+      select count(*)
+      from app.units
+      where collection_id = current_setting('test.collection_one')::uuid
+    ),
+    'revisions',
+    (
+      select count(*)
+      from app.unit_revisions
+      where collection_id = current_setting('test.collection_one')::uuid
+    ),
+    'foreignUnits',
+    (
+      select count(*)
+      from app.units
+      where collection_id = current_setting('test.collection_two')::uuid
+    )
+  ),
+  '{"units":1,"revisions":3,"foreignUnits":0}'::jsonb,
+  'owner RLS exposes owned unit content and revisions without leaking foreign content'
+);
+
+select is(
+  jsonb_build_object(
+    'published',
+    (
+      select count(*)
+      from app.lessons
+      where id = current_setting('test.lesson_one')::uuid
+    ),
+    'ownDraft',
+    (
+      select count(*)
+      from app.lessons
+      where id = current_setting('test.lesson_private')::uuid
+    ),
+    'foreign',
+    (
+      select count(*)
+      from app.lessons
+      where id = current_setting('test.lesson_two')::uuid
+    )
+  ),
+  '{"published":1,"ownDraft":1,"foreign":0}'::jsonb,
+  'lesson RLS exposes an author draft and published lesson while hiding a foreign draft'
+);
+
+select is(
+  jsonb_build_object(
+    'own',
+    (
+      select count(*)
+      from app.lesson_progress
+      where id = current_setting('test.progress_one')::uuid
+    ),
+    'member',
+    (
+      select count(*)
+      from app.lesson_progress
+      where id = current_setting('test.progress_member')::uuid
+    ),
+    'foreign',
+    (
+      select count(*)
+      from app.lesson_progress
+      where id = current_setting('test.progress_outsider')::uuid
+    )
+  ),
+  '{"own":1,"member":0,"foreign":0}'::jsonb,
+  'even a collection owner cannot bypass direct lesson-progress RLS'
+);
+
+select is(
+  jsonb_build_object(
+    'rows', (select count(*) from app.user_language_stats),
+    'own',
+    (
+      select count(*)
+      from app.user_language_stats
+      where user_id = '10000000-0000-0000-0000-000000000001'
+    )
+  ),
+  '{"rows":1,"own":1}'::jsonb,
+  'even a collection owner cannot bypass global stats privacy'
+);
+
+select is(
+  jsonb_build_object(
+    'shared',
+    (
+      select count(*)
+      from app.collection_user_language_stats
+      where collection_id = current_setting('test.collection_one')::uuid
+    ),
+    'foreign',
+    (
+      select count(*)
+      from app.collection_user_language_stats
+      where collection_id = current_setting('test.collection_two')::uuid
+    )
+  ),
+  '{"shared":2,"foreign":0}'::jsonb,
+  'owner permission exposes member collection stats only inside the owned collection'
+);
+
+select is(
+  jsonb_build_object(
+    'own',
+    (
+      select count(*)
+      from app.user_character_progress
+      where user_id = '10000000-0000-0000-0000-000000000001'
+    ),
+    'member',
+    (
+      select count(*)
+      from app.user_character_progress
+      where user_id = '10000000-0000-0000-0000-000000000002'
+    )
+  ),
+  '{"own":1,"member":0}'::jsonb,
+  'collection ownership does not expose another user character progress'
+);
+
+select is(
+  jsonb_build_object(
+    'collection',
+    (
+      select count(*)
+      from app.file_assets
+      where id = '50000000-0000-4000-8000-000000000001'
+    ),
+    'private',
+    (
+      select count(*)
+      from app.file_assets
+      where id = '50000000-0000-4000-8000-000000000003'
+    ),
+    'foreign',
+    (
+      select count(*)
+      from app.file_assets
+      where id = '50000000-0000-4000-8000-000000000002'
+    )
+  ),
+  '{"collection":1,"private":1,"foreign":0}'::jsonb,
+  'asset RLS exposes owner and owned-collection files while hiding foreign files'
+);
+
+select set_config(
+  'app.user_id',
+  '10000000-0000-0000-0000-000000000003',
+  true
+);
+
+select is(
+  (select array_agg(key order by key) from app.settings),
+  array['collection.hidden', 'outsider.private']::text[],
+  'outsider RLS exposes only own user settings and owned collection settings'
+);
+
+select is(
+  jsonb_build_object(
+    'own',
+    (
+      select count(*)
+      from app.collection_roles
+      where collection_id = current_setting('test.collection_two')::uuid
+    ),
+    'foreign',
+    (
+      select count(*)
+      from app.collection_roles
+      where collection_id = current_setting('test.collection_one')::uuid
+    )
+  ),
+  '{"own":2,"foreign":0}'::jsonb,
+  'outsider RLS exposes roles only in the collection they own'
+);
+
+select is(
+  jsonb_build_object(
+    'invites',
+    (
+      select count(*)
+      from app.collection_invites
+      where collection_id = current_setting('test.collection_two')::uuid
+    ),
+    'inviteRoles',
+    (
+      select count(*)
+      from app.collection_invite_roles
+      where collection_id = current_setting('test.collection_two')::uuid
+    ),
+    'foreignInvites',
+    (
+      select count(*)
+      from app.collection_invites
+      where collection_id = current_setting('test.collection_one')::uuid
+    )
+  ),
+  '{"invites":1,"inviteRoles":1,"foreignInvites":0}'::jsonb,
+  'outsider owner can inspect own invites and roles but not another collection invites'
+);
+
+select is(
+  jsonb_build_object(
+    'units',
+    (
+      select count(*)
+      from app.units
+      where collection_id = current_setting('test.collection_two')::uuid
+    ),
+    'revisions',
+    (
+      select count(*)
+      from app.unit_revisions
+      where collection_id = current_setting('test.collection_two')::uuid
+    ),
+    'foreignUnits',
+    (
+      select count(*)
+      from app.units
+      where collection_id = current_setting('test.collection_one')::uuid
+    )
+  ),
+  '{"units":1,"revisions":1,"foreignUnits":0}'::jsonb,
+  'outsider RLS exposes own unit and revision while hiding another collection content'
+);
+
+select is(
+  jsonb_build_object(
+    'ownDraft',
+    (
+      select count(*)
+      from app.lessons
+      where id = current_setting('test.lesson_two')::uuid
+    ),
+    'foreign',
+    (
+      select count(*)
+      from app.lessons
+      where collection_id = current_setting('test.collection_one')::uuid
+    )
+  ),
+  '{"ownDraft":1,"foreign":0}'::jsonb,
+  'outsider lesson RLS exposes its own draft and hides all foreign lessons'
+);
+
+select is(
+  jsonb_build_object(
+    'own',
+    (
+      select count(*)
+      from app.lesson_progress
+      where id = current_setting('test.progress_outsider')::uuid
+    ),
+    'foreign',
+    (
+      select count(*)
+      from app.lesson_progress
+      where collection_id = current_setting('test.collection_one')::uuid
+    )
+  ),
+  '{"own":1,"foreign":0}'::jsonb,
+  'outsider lesson-progress RLS exposes only its own session'
+);
+
+select is(
+  jsonb_build_object(
+    'own',
+    (
+      select count(*)
+      from app.progress_batches
+      where batch_id = '20000000-0000-0000-0000-000000000003'
+    ),
+    'foreign',
+    (
+      select count(*)
+      from app.progress_batches
+      where batch_id in (
+        '20000000-0000-0000-0000-000000000001',
+        '20000000-0000-0000-0000-000000000002'
+      )
+    )
+  ),
+  '{"own":1,"foreign":0}'::jsonb,
+  'outsider progress-batch RLS hides every other user idempotency record'
+);
+
+select is(
+  jsonb_build_object(
+    'rows', (select count(*) from app.user_language_stats),
+    'own',
+    (
+      select count(*)
+      from app.user_language_stats
+      where user_id = '10000000-0000-0000-0000-000000000003'
+    )
+  ),
+  '{"rows":1,"own":1}'::jsonb,
+  'outsider global stats RLS exposes only its own aggregate'
+);
+
+select is(
+  jsonb_build_object(
+    'own',
+    (
+      select count(*)
+      from app.collection_user_language_stats
+      where collection_id = current_setting('test.collection_two')::uuid
+    ),
+    'foreign',
+    (
+      select count(*)
+      from app.collection_user_language_stats
+      where collection_id = current_setting('test.collection_one')::uuid
+    )
+  ),
+  '{"own":1,"foreign":0}'::jsonb,
+  'outsider collection stats RLS exposes own aggregate and hides foreign aggregates'
+);
+
+select is(
+  jsonb_build_object(
+    'own',
+    (
+      select count(*)
+      from app.user_character_progress
+      where user_id = '10000000-0000-0000-0000-000000000003'
+    ),
+    'foreign',
+    (
+      select count(*)
+      from app.user_character_progress
+      where user_id <> '10000000-0000-0000-0000-000000000003'
+    )
+  ),
+  '{"own":1,"foreign":0}'::jsonb,
+  'outsider character progress RLS exposes only its own language row'
+);
+
+select is(
+  jsonb_build_object(
+    'own',
+    (
+      select count(*)
+      from app.file_assets
+      where id = '50000000-0000-4000-8000-000000000002'
+    ),
+    'foreignCollection',
+    (
+      select count(*)
+      from app.file_assets
+      where id = '50000000-0000-4000-8000-000000000001'
+    ),
+    'foreignPrivate',
+    (
+      select count(*)
+      from app.file_assets
+      where id = '50000000-0000-4000-8000-000000000003'
+    )
+  ),
+  '{"own":1,"foreignCollection":0,"foreignPrivate":0}'::jsonb,
+  'outsider asset RLS exposes its collection file and hides all foreign files'
+);
+
+select set_config('app.user_id', '', true);
+
+select is(
+  jsonb_build_object(
+    'settings', (select count(*) from app.settings),
+    'roles', (select count(*) from app.collection_roles),
+    'invites', (select count(*) from app.collection_invites),
+    'units', (select count(*) from app.units),
+    'revisions', (select count(*) from app.unit_revisions),
+    'lessons', (select count(*) from app.lessons),
+    'progress', (select count(*) from app.lesson_progress),
+    'batches', (select count(*) from app.progress_batches),
+    'globalStats', (select count(*) from app.user_language_stats),
+    'collectionStats', (select count(*) from app.collection_user_language_stats),
+    'characters', (select count(*) from app.user_character_progress),
+    'assets', (select count(*) from app.file_assets)
+  ),
+  '{
+    "settings": 0,
+    "roles": 0,
+    "invites": 0,
+    "units": 0,
+    "revisions": 0,
+    "lessons": 0,
+    "progress": 0,
+    "batches": 0,
+    "globalStats": 0,
+    "collectionStats": 0,
+    "characters": 0,
+    "assets": 0
+  }'::jsonb,
+  'runtime RLS returns no application rows when the request actor is absent'
+);
+
+reset role;
+select set_config(
+  'app.user_id',
+  '10000000-0000-0000-0000-000000000001',
+  true
+);
+
+select private.api_role_update(
+  jsonb_build_object(
+    'collectionId', (select value from test_ids where key = 'collection_one'),
+    'roleId', (select value from test_ids where key = 'teacher_role'),
+    'name', 'Teacher updated',
+    'permissions', jsonb_build_array(
+      'create_content',
+      'edit_content',
+      'create_lessons',
+      'publish_lessons'
+    ),
+    'securityRank', 11,
+    'expectedRevision', 1
+  )
+);
+
+select private.api_collection_transfer(
+  jsonb_build_object(
+    'collectionId', (select value from test_ids where key = 'collection_one'),
+    'newOwnerId', '10000000-0000-0000-0000-000000000002',
+    'expectedRevision', 1
+  )
+);
+
+select set_config(
+  'app.user_id',
+  '10000000-0000-0000-0000-000000000002',
+  true
+);
+
+select private.api_collection_transfer(
+  jsonb_build_object(
+    'collectionId', (select value from test_ids where key = 'collection_one'),
+    'newOwnerId', '10000000-0000-0000-0000-000000000001',
+    'expectedRevision', 2
+  )
+);
+
+select set_config(
+  'app.user_id',
+  '10000000-0000-0000-0000-000000000001',
+  true
+);
+
+select is(
+  (
+    select jsonb_build_object(
+      'targetId', target_id,
+      'metadata', metadata
+    )
+    from app.collection_audit_logs
+    where collection_id = (select value from test_ids where key = 'collection_one')
+      and action = 'collection_member_roles.insert'
+      and metadata ->> 'roleId' = (
+        select value::text from test_ids where key = 'teacher_role'
+      )
+    order by id desc
+    limit 1
+  ),
+  jsonb_build_object(
+    'targetId', (select value from test_ids where key = 'teacher_role'),
+    'metadata', jsonb_build_object(
+      'schemaVersion', 2,
+      'userId', '10000000-0000-0000-0000-000000000002'::uuid,
+      'roleId', (select value from test_ids where key = 'teacher_role')
+    )
+  ),
+  'member-role audit keeps role target identity and records userId plus roleId'
+);
+
+select is(
+  (
+    select jsonb_build_object(
+      'targetId', audit.target_id,
+      'metadata', audit.metadata
+    )
+    from app.collection_audit_logs as audit
+    where audit.collection_id = (
+        select value from test_ids where key = 'collection_one'
+      )
+      and audit.action = 'collection_invite_roles.insert'
+      and audit.metadata ->> 'roleId' = (
+        select value::text from test_ids where key = 'teacher_role'
+      )
+    order by audit.id desc
+    limit 1
+  ),
+  (
+    select jsonb_build_object(
+      'targetId', (select value from test_ids where key = 'teacher_role'),
+      'metadata', jsonb_build_object(
+        'schemaVersion', 2,
+        'inviteId', invite.id,
+        'roleId', (select value from test_ids where key = 'teacher_role')
+      )
+    )
+    from app.collection_invites as invite
+    where invite.collection_id = (
+      select value from test_ids where key = 'collection_one'
+    )
+    order by invite.id
+    limit 1
+  ),
+  'invite-role audit keeps role target identity and records inviteId plus roleId'
+);
+
+select is(
+  (
+    select metadata
+    from app.collection_audit_logs
+    where collection_id = (select value from test_ids where key = 'collection_one')
+      and action = 'collection_roles.update'
+      and target_id = (select value from test_ids where key = 'teacher_role')
+    order by id desc
+    limit 1
+  ),
+  jsonb_build_object(
+    'schemaVersion', 2,
+    'revision', 2,
+    'old', jsonb_build_object(
+      'name', 'Teacher',
+      'permissions', jsonb_build_array(
+        'create_content',
+        'edit_content',
+        'create_lessons'
+      ),
+      'securityRank', 10
+    ),
+    'new', jsonb_build_object(
+      'name', 'Teacher updated',
+      'permissions', jsonb_build_array(
+        'create_content',
+        'edit_content',
+        'create_lessons',
+        'publish_lessons'
+      ),
+      'securityRank', 11
+    )
+  ),
+  'role audit metadata follows the explicit revision and old/new field allowlist'
+);
+
+select is(
+  (
+    select jsonb_agg(
+      jsonb_build_object(
+        'schemaVersion', metadata -> 'schemaVersion',
+        'oldOwnerId', metadata -> 'oldOwnerId',
+        'newOwnerId', metadata -> 'newOwnerId'
+      )
+      order by id
+    )
+    from app.collection_audit_logs
+    where collection_id = (select value from test_ids where key = 'collection_one')
+      and action = 'collections.update'
+      and metadata ?& array['oldOwnerId', 'newOwnerId']
+  ),
+  jsonb_build_array(
+    jsonb_build_object(
+      'schemaVersion', 2,
+      'oldOwnerId', '10000000-0000-0000-0000-000000000001'::uuid,
+      'newOwnerId', '10000000-0000-0000-0000-000000000002'::uuid
+    ),
+    jsonb_build_object(
+      'schemaVersion', 2,
+      'oldOwnerId', '10000000-0000-0000-0000-000000000002'::uuid,
+      'newOwnerId', '10000000-0000-0000-0000-000000000001'::uuid
+    )
+  ),
+  'ownership audit records the old and new owner IDs for both transfer directions'
+);
+
+select ok(
+  not exists (
+    with recursive audit_nodes(value) as (
+      select metadata
+      from app.collection_audit_logs
+
+      union all
+
+      select child.value
+      from audit_nodes as node
+      cross join lateral (
+        select object_child.value
+        from jsonb_each(
+          case
+            when jsonb_typeof(node.value) = 'object' then node.value
+            else '{}'::jsonb
+          end
+        ) as object_child
+
+        union all
+
+        select array_child.value
+        from jsonb_array_elements(
+          case
+            when jsonb_typeof(node.value) = 'array' then node.value
+            else '[]'::jsonb
+          end
+        ) as array_child
+      ) as child
+    )
+    select 1
+    from audit_nodes as node
+    cross join lateral jsonb_object_keys(
+      case
+        when jsonb_typeof(node.value) = 'object' then node.value
+        else '{}'::jsonb
+      end
+    ) as key_name
+    where lower(key_name) = any(array[
+      'words',
+      'phrases',
+      'sentences',
+      'documents',
+      'payload',
+      'answer',
+      'answers',
+      'transcript',
+      'rawanswer'
+    ])
+  ),
+  'audit metadata recursively excludes content, lesson payload, and answer keys'
 );
 
 select cmp_ok(

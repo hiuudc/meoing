@@ -17,12 +17,14 @@ describe("PostgreSQL application error mapping", () => {
     ["P0001", "USERNAME_CHANGE_COOLDOWN", 409, "USERNAME_COOLDOWN"],
     ["23505", "USERNAME_UNAVAILABLE", 409, "USERNAME_RESERVED"],
     ["42501", "ACCOUNT_LOCKED", 423, "ACCOUNT_DELETION_PENDING"],
+    ["57P03", "DATABASE_IDENTITY_MISMATCH", 503, "INTERNAL_ERROR"],
   ])(
     "maps SQLSTATE %s and %s to HTTP %i",
     (sqlState, message, expectedStatus, expectedCode) => {
       const mapped = mapDatabaseError(databaseError(sqlState, message));
       expect(mapped.status).toBe(expectedStatus);
       expect(mapped.code).toBe(expectedCode);
+      expect(mapped.internalCode).toBe(sqlState);
     },
   );
 
@@ -32,6 +34,18 @@ describe("PostgreSQL application error mapping", () => {
     );
     expect(mapped.status).toBe(500);
     expect(mapped.code).toBe("INTERNAL_ERROR");
+    expect(mapped.internalCode).toBe("P0001");
     expect(mapped.message).not.toContain("sensitive");
+  });
+
+  it("reports connection exhaustion as a temporary service failure", () => {
+    const mapped = mapDatabaseError(
+      databaseError("53300", "too many connections for role"),
+    );
+
+    expect(mapped.status).toBe(503);
+    expect(mapped.code).toBe("INTERNAL_ERROR");
+    expect(mapped.internalCode).toBe("53300");
+    expect(mapped.message).not.toContain("role");
   });
 });
