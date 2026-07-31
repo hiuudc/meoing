@@ -18,6 +18,7 @@ export type ErrorCode =
   | "NOT_FOUND"
   | "RATE_LIMITED"
   | "REVISION_CONFLICT"
+  | "STORAGE_BUDGET_REACHED"
   | "USERNAME_COOLDOWN"
   | "USERNAME_RESERVED"
   | `${string}_FORBIDDEN`
@@ -140,6 +141,14 @@ function applicationError(code: string): ApiError | null {
   }
   if (code === "PROGRESS_TOO_LARGE") {
     return new ApiError(413, "BODY_TOO_LARGE", "The progress record is too large");
+  }
+  if (code === "STORAGE_BUDGET_REACHED") {
+    return new ApiError(
+      429,
+      "STORAGE_BUDGET_REACHED",
+      "The storage budget has been reached; uploads are temporarily disabled",
+      { retryable: false },
+    );
   }
   if (code.endsWith("_NOT_FOUND") || code === "REVISION_NOT_FOUND") {
     return new ApiError(404, code as ErrorCode, "The requested resource was not found");

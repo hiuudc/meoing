@@ -38,6 +38,7 @@ test("paces token requests and retries a 429 without exposing user credentials",
   let nowMilliseconds = 0;
   const requestStartedAt = [];
   const retryEvents = [];
+  const acquiredTokens = [];
   const responses = [
     new Response("{}", {
       status: 429,
@@ -54,6 +55,7 @@ test("paces token requests and retries a 429 without exposing user credentials",
     },
     now: () => nowMilliseconds,
     onRetry: (event) => retryEvents.push(event),
+    onTokenAcquired: ({ token }) => acquiredTokens.push(token),
     passwordUsers: [
       { email: "first@example.com", password: "not-logged-one" },
       { email: "second@example.com", password: "not-logged-two" },
@@ -68,6 +70,7 @@ test("paces token requests and retries a 429 without exposing user credentials",
   });
 
   assert.deepEqual(tokens, ["token-one", "token-two"]);
+  assert.deepEqual(acquiredTokens, ["token-one", "token-two"]);
   assert.deepEqual(requestStartedAt, [0, 3_000, 5_100]);
   assert.deepEqual(retryEvents, [
     { attempt: 1, delayMilliseconds: 3_000, maximumAttempts: 8 },

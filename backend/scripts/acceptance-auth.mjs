@@ -55,6 +55,7 @@ export async function acquirePasswordAccessTokens({
   now = Date.now,
   onProgress = () => {},
   onRetry = () => {},
+  onTokenAcquired = () => {},
   passwordUsers,
   publishableKey,
   random = Math.random,
@@ -123,7 +124,9 @@ export async function acquirePasswordAccessTokens({
 
   const tokens = [];
   for (let offset = 0; offset < passwordUsers.length; offset += 1) {
-    tokens.push(await signIn(passwordUsers[offset]));
+    const token = await signIn(passwordUsers[offset]);
+    tokens.push(token);
+    onTokenAcquired({ token });
     onProgress({ completed: offset + 1, total: passwordUsers.length });
   }
   return tokens;

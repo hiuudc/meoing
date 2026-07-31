@@ -61,6 +61,19 @@ analysis during a quiet period; it is not by itself proof that every row is
 large. Lock snapshots should be correlated with API database duration and the
 Supabase database dashboard before changing schema or query behavior.
 
+## Backup operations signals
+
+Use GitHub workflow and private R2 inventory monitoring to alert on:
+
+- any failed **Weekly production database backup** workflow, including its restore or
+  retention jobs;
+- any failed **Production backup freshness monitor** workflow;
+- a latest `weekly/` backup object or matching verification marker approaching eight days
+  old;
+- backup allocation approaching the enforced 3 GiB limit;
+- any old `manual/` object or unverified `weekly/` object becoming eligible for the
+  protected exact-inventory cleanup path.
+
 ## Provider quota alerts
 
 Repository code cannot create or verify billing/quota alarms for Cloudflare or
@@ -90,4 +103,5 @@ After the staging load gate:
 2. inspect Hyperdrive and PostgreSQL connection graphs for exhaustion;
 3. correlate any lock snapshot with `databaseDurationMs`;
 4. verify current provider quota utilization is below the warning level;
-5. confirm the latest maintenance and backup/restore workflows succeeded.
+5. confirm the latest maintenance workflow succeeded and the latest scheduled weekly
+   backup has a successful restore marker no more than eight days old.

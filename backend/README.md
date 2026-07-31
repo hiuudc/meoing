@@ -9,6 +9,8 @@ short-lived URLs for a private R2 bucket.
 - `src/api-worker.ts`: public Hono API, OpenAPI 3.1 at `/openapi.json`.
 - `src/maintenance-worker.ts`: Cron-only retention and deletion worker; it exports no HTTP
   handler.
+- `src/cost-guard-worker.ts`: five-minute Cron-only account usage guard; it persists state in
+  R2 and can detach only the exact allowlisted API custom domain at the stop threshold.
 - `src/db/repository.ts`: one short PostgreSQL transaction per API operation. Every
   transaction uses `SET LOCAL ROLE meoing_runtime` and
   `set_config('app.user_id', <verified JWT sub>, true)`.
@@ -55,6 +57,7 @@ Install and verify:
 npm install
 Copy-Item .dev.vars.example .dev.vars
 Copy-Item .dev.vars.maintenance.example .dev.vars.maintenance
+Copy-Item .dev.vars.cost-guard.example .dev.vars.cost-guard
 npm run auth:key:local
 npm run types
 npm run check
@@ -78,8 +81,8 @@ its SHA-256 hash.
 
 ## Cloud configuration
 
-Replace all project, account, Hyperdrive, bucket, and origin placeholders in both
-`wrangler.*.jsonc` files. Resource bindings and variables are deliberately repeated for
+Replace all project, account, Hyperdrive, bucket, and origin placeholders in the
+three `wrangler.*.jsonc` files. Resource bindings and variables are deliberately repeated for
 `staging` and `production` because Wrangler environments do not inherit them.
 
 Set API Worker secrets independently for each environment:
@@ -95,6 +98,14 @@ Set only the Auth administration secret on the maintenance Worker:
 
 ```powershell
 npx wrangler secret put SUPABASE_SECRET_KEY --config wrangler.maintenance.jsonc --env staging
+```
+
+The Cost Guard uses a separate account token with Account Analytics Read and Workers Scripts
+Edit. Store it only on that Worker:
+
+```powershell
+npx wrangler secret put CLOUDFLARE_COST_GUARD_TOKEN --config wrangler.cost-guard.jsonc --env staging
+npx wrangler secret put ALERT_RECIPIENT --config wrangler.cost-guard.jsonc --env staging
 ```
 
 Repeat with `--env production`. Use a dedicated `sb_secret_...` key for each environment.
@@ -128,6 +139,7 @@ application-table access from `anon` and `authenticated`.
 ```powershell
 npm run dev
 npm run dev:maintenance
+npm run dev:cost-guard
 npm run db:start
 npm run db:reset
 npm run db:test
@@ -159,12 +171,13 @@ transactions against one `maxUses=1` invite and fails unless exactly one
 redemption succeeds, the other returns `INVITE_INVALID`, and `uses_count`
 remains `1`. The harness uses random identities and removes its rows afterward.
 
-`npm run build` performs two Wrangler dry-runs and does not deploy. Deployments are
+`npm run build` performs three Wrangler dry-runs and does not deploy. Deployments are
 intentional, separate operations:
 
 ```powershell
 npx wrangler deploy --config wrangler.api.jsonc --env staging
 npx wrangler deploy --config wrangler.maintenance.jsonc --env staging
+npx wrangler deploy --config wrangler.cost-guard.jsonc --env staging
 ```
 
 Migrations must run before the API Worker that calls them. Production should require a
@@ -202,3 +215,7 @@ instead of pull-request CI.
 Sampled stats-row sizing, point-in-time lock/connection observations and the provider-side
 70%/85% quota-alert checklist are documented in
 [`../docs/runbooks/observability.md`](../docs/runbooks/observability.md).
+
+The account-wide Workers/R2 safe envelope, exact custom-domain stop behavior, separate
+80%/95% notifications, and protected below-5% resume procedure are documented in
+[`../docs/runbooks/cost-guard.md`](../docs/runbooks/cost-guard.md).

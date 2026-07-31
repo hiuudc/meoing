@@ -14,6 +14,7 @@ describe("PostgreSQL application error mapping", () => {
     ["22023", "INVALID_LESSON_TRACKING", 400, "INVALID_LESSON_TRACKING"],
     ["22023", "UNIT_CONTENT_REPLACEMENT_REQUIRED", 400, "UNIT_CONTENT_REPLACEMENT_REQUIRED"],
     ["54000", "UPLOAD_DAILY_QUOTA", 429, "UPLOAD_DAILY_QUOTA"],
+    ["54000", "STORAGE_BUDGET_REACHED", 429, "STORAGE_BUDGET_REACHED"],
     ["P0001", "USERNAME_CHANGE_COOLDOWN", 409, "USERNAME_COOLDOWN"],
     ["23505", "USERNAME_UNAVAILABLE", 409, "USERNAME_RESERVED"],
     ["42501", "ACCOUNT_LOCKED", 423, "ACCOUNT_DELETION_PENDING"],
@@ -27,6 +28,12 @@ describe("PostgreSQL application error mapping", () => {
       expect(mapped.internalCode).toBe(sqlState);
     },
   );
+
+  it("marks the storage budget failure as non-retryable", () => {
+    const mapped = mapDatabaseError(databaseError("54000", "STORAGE_BUDGET_REACHED"));
+
+    expect(mapped.details).toEqual({ retryable: false });
+  });
 
   it("does not expose unknown PostgreSQL messages", () => {
     const mapped = mapDatabaseError(

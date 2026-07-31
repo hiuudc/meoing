@@ -1,6 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=backup-storage.sh
+source "${script_dir}/backup-storage.sh"
+
+: "${SUPABASE_PRODUCTION_DB_URL:?SUPABASE_PRODUCTION_DB_URL is required}"
+: "${BACKUP_AGE_RECIPIENT:?BACKUP_AGE_RECIPIENT is required}"
+: "${R2_BACKUP_ENDPOINT:?R2_BACKUP_ENDPOINT is required}"
+: "${R2_BACKUP_BUCKET:?R2_BACKUP_BUCKET is required}"
+: "${BACKUP_KIND:?BACKUP_KIND is required}"
+
+case "$BACKUP_KIND" in
+  weekly | manual) ;;
+  *)
+    echo "BACKUP_KIND must be weekly or manual" >&2
+    exit 1
+    ;;
+esac
+
+maximum_allocation_bytes="${BACKUP_MAX_ALLOCATION_BYTES:-3221225472}"
+backup_require_uint "BACKUP_MAX_ALLOCATION_BYTES" "$maximum_allocation_bytes"
+allocation_before_bytes="$(backup_allocation_bytes)"
+backup_assert_projected_allocation "$allocation_before_bytes" 0 "$maximum_allocation_bytes" > /dev/null
+echo "Backup allocation preflight: ${allocation_before_bytes} of ${maximum_allocation_bytes} bytes"
+
 backup_dir="$(mktemp -d)"
 snapshot_holder_pid=""
 snapshot_holder_in=""
@@ -8,7 +32,7 @@ snapshot_holder_out=""
 
 cleanup() {
   if [[ -n "${snapshot_holder_in:-}" ]]; then
-    printf '%s\n' 'rollback;' '\q' >&"$snapshot_holder_in" 2>/dev/null || true
+    printf '%s\n' 'rollback;' '\q' 1>&"$snapshot_holder_in" 2>/dev/null || true
     exec {snapshot_holder_in}>&-
   fi
   if [[ -n "${snapshot_holder_out:-}" ]]; then
@@ -23,7 +47,7 @@ trap cleanup EXIT
 
 timestamp="$(date -u +%Y-%m-%dT%H-%M-%SZ)"
 created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-daily_key="daily/meoing-${timestamp}.tar.age"
+backup_key="${BACKUP_KIND}/meoing-${timestamp}.tar.age"
 plain_dump="${backup_dir}/meoing.dump"
 manifest="${backup_dir}/manifest.json"
 plain_bundle="${backup_dir}/meoing-backup.tar"
@@ -62,6 +86,8 @@ coproc SNAPSHOT_HOLDER {
     --tuples-only \
     --no-align
 }
+# Bash creates NAME_PID for a named coprocess.
+# shellcheck disable=SC2153
 snapshot_holder_pid="$SNAPSHOT_HOLDER_PID"
 snapshot_holder_in="${SNAPSHOT_HOLDER[1]}"
 snapshot_holder_out="${SNAPSHOT_HOLDER[0]}"
@@ -129,11 +155,21 @@ snapshot_holder_pid=""
 dump_sha256="$(sha256sum "$plain_dump" | awk '{print $1}')"
 jq --compact-output \
   --arg createdAt "$created_at" \
+  --arg backupKey "$backup_key" \
   --arg dumpSha256 "$dump_sha256" \
-  '. + {formatVersion: 1, createdAt: $createdAt, dumpSha256: $dumpSha256}' \
+  '. + {
+    formatVersion: 2,
+    backupKey: $backupKey,
+    createdAt: $createdAt,
+    dumpSha256: $dumpSha256
+  }' \
   "$raw_manifest" > "$manifest"
 jq --exit-status \
-  '.formatVersion == 1 and (.dumpSha256 | test("^[a-f0-9]{64}$")) and (.tables | length == 22)' \
+  --arg backupKey "$backup_key" \
+  '.formatVersion == 2
+    and .backupKey == $backupKey
+    and (.dumpSha256 | test("^[a-f0-9]{64}$"))
+    and (.tables | length == 22)' \
   "$manifest" > /dev/null
 
 tar --create \
@@ -144,38 +180,44 @@ tar --create \
 age --recipient "$BACKUP_AGE_RECIPIENT" --output "$encrypted_bundle" "$plain_bundle"
 rm -f -- "$plain_dump" "$manifest" "$raw_manifest" "$plain_bundle"
 
-aws --endpoint-url "$R2_BACKUP_ENDPOINT" s3 cp \
-  "$encrypted_bundle" "s3://${R2_BACKUP_BUCKET}/${daily_key}" \
-  --only-show-errors
+encrypted_size="$(stat --format='%s' "$encrypted_bundle")"
+encrypted_sha256="$(sha256sum "$encrypted_bundle" | awk '{print $1}')"
+backup_require_sha256 "encrypted backup SHA-256" "$encrypted_sha256"
+projected_allocation_bytes="$(
+  backup_assert_projected_allocation \
+    "$allocation_before_bytes" \
+    "$encrypted_size" \
+    "$maximum_allocation_bytes"
+)"
+echo "Projected backup allocation: ${projected_allocation_bytes} of ${maximum_allocation_bytes} bytes"
 
-if [[ "$(date -u +%u)" == "7" ]]; then
-  weekly_key="weekly/meoing-$(date -u +%G-W%V).tar.age"
-  aws --endpoint-url "$R2_BACKUP_ENDPOINT" s3 cp \
-    "$encrypted_bundle" "s3://${R2_BACKUP_BUCKET}/${weekly_key}" \
-    --only-show-errors
+aws --endpoint-url "$R2_BACKUP_ENDPOINT" s3api put-object \
+  --bucket "$R2_BACKUP_BUCKET" \
+  --key "$backup_key" \
+  --body "$encrypted_bundle" \
+  --content-type application/octet-stream \
+  --metadata "encrypted-sha256=${encrypted_sha256}" \
+  --if-none-match '*' \
+  --output json > /dev/null
+
+uploaded_head="$(backup_head_object_json "$backup_key")"
+printf '%s\n' "$uploaded_head" | backup_validate_head_object_json
+uploaded_size="$(printf '%s\n' "$uploaded_head" | jq --exit-status --raw-output '.ContentLength')"
+uploaded_sha256="$(
+  printf '%s\n' "$uploaded_head" |
+    jq --exit-status --raw-output '(.Metadata // {})["encrypted-sha256"] // ""'
+)"
+if [[ "$uploaded_size" != "$encrypted_size" || "$uploaded_sha256" != "$encrypted_sha256" ]]; then
+  echo "Uploaded R2 object identity does not match the encrypted archive" >&2
+  exit 1
 fi
 
-prune_prefix() {
-  local prefix="$1"
-  local keep="$2"
-  mapfile -t keys < <(
-    aws --endpoint-url "$R2_BACKUP_ENDPOINT" s3api list-objects-v2 \
-      --bucket "$R2_BACKUP_BUCKET" \
-      --prefix "${prefix}/" \
-      --query 'Contents[].Key' \
-      --output json |
-      jq -r '.[]' |
-      sort -r
-  )
-  if ((${#keys[@]} <= keep)); then
-    return
-  fi
-  for key in "${keys[@]:keep}"; do
-    aws --endpoint-url "$R2_BACKUP_ENDPOINT" s3 rm \
-      "s3://${R2_BACKUP_BUCKET}/${key}" \
-      --only-show-errors
-  done
-}
-
-prune_prefix daily 7
-prune_prefix weekly 4
+if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+  {
+    printf 'backup_key=%s\n' "$backup_key"
+    printf 'backup_kind=%s\n' "$BACKUP_KIND"
+    printf 'encrypted_sha256=%s\n' "$encrypted_sha256"
+    printf 'projected_allocation_bytes=%s\n' "$projected_allocation_bytes"
+  } >> "$GITHUB_OUTPUT"
+fi
+echo "Uploaded encrypted ${BACKUP_KIND} backup ${backup_key}"

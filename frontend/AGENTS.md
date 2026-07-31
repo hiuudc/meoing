@@ -4,39 +4,48 @@ These instructions apply to the `frontend/` package. The monorepo-level rules ar
 
 ## Project Overview
 
-Meoi is a browser-local language workspace with a Discord-style layout. Users organize collections, units, documents, words, phrases, and sentences, then customize the workspace theme. There is no backend, authentication layer, router, or remote API.
+Meoi is an authenticated language workspace with a Discord-style layout. This package contains both the React website and the Meoi Bridge Chrome extension. The website uses Supabase Auth and the Cloudflare Worker API in `../backend/`; PostgreSQL-backed API data is authoritative for accounts, collections, units, documents, learning content, progress, permissions, settings, and lifecycle operations. Browser storage remains important for narrowly scoped resilience and legacy cleanup, but it is not the canonical application database.
 
 ### Current Stack
 
 - React `18.3.1` with functional components and `react-dom/client`.
 - TypeScript with strict checking enabled.
-- Vite `6.4.2` for development and production builds.
-- Vitest `2.1.9` for unit tests.
+- Vite `6` for development and production web builds.
+- Vitest `4` for web and extension unit tests.
 - Playwright `1.60.0` is installed for browser verification, but there is no committed end-to-end test script.
+- `@supabase/supabase-js` for PKCE authentication and persisted, auto-refreshed sessions.
 - `lucide-react` for icons.
-- One global CSS file with responsive media queries and CSS custom properties.
-- React `useReducer` plus `localStorage` for browser-local persistence.
+- One website-global CSS file with responsive media queries and CSS custom properties; the extension keeps its popup styles under `extension/`.
+- React `useReducer` for the normalized in-memory workspace view, hydrated from and mutated through the API.
+- IndexedDB for the user-scoped, retryable progress outbox.
 
-Use Node.js `20` LTS or `>=22`. The installed Vite version declares support for `^18.0.0 || ^20.0.0 || >=22.0.0`; Node.js `21` is not supported.
+Use Node.js `>=22`, matching this package's `engines` declaration and the monorepo `.nvmrc`.
 
 ### Important Files
 
 - `src/main.tsx`: React entrypoint and global CSS import.
-- `src/App.tsx`: top-level composition, reducer wiring, modal and drawer lifecycle, and draft theme preview priority.
+- `src/App.tsx`: authenticated application composition, cloud-workspace hydration, API mutation orchestration, reducer wiring, modal/drawer lifecycle, and draft theme preview priority.
+- `src/auth/AuthProvider.tsx`: Supabase client/session lifecycle, authenticated `ApiClient`, profile loading, sign-in/out, recovery, OAuth, and post-auth outbox flushing.
+- `src/api/client.ts`: authenticated API envelope/error handling and idempotency-key support.
+- `src/api/generated.ts`: generated OpenAPI types; regenerate from the backend rather than hand-editing it.
+- `src/api/workspace.ts`: API-to-workspace normalization and paginated cloud hydration.
+- `src/api/progressOutbox.ts`: user-scoped IndexedDB queue, retry, quarantine, and idempotent progress delivery.
 - `src/components/`: named React UI components.
-- `src/store.ts`: seed data, reducer actions, localStorage persistence, and legacy theme normalization.
+- `src/store.ts`: normalized client reducer, seed/empty state helpers, and retained legacy localStorage normalization utilities.
+- `src/integration/`: browser/extension bridge protocol, recovery state, and legacy browser-data cleanup.
+- `src/learning/`: lesson generation, session, evaluation, rendering, and local recovery helpers.
+- `extension/`: Meoi Bridge Chrome extension source and tests.
 - `src/theme.ts`: pure theme utilities, palette presets, color conversion helpers, and CSS variable generation.
 - `src/types.ts`: shared domain, state, and action types.
 - `src/styles.css`: global styles, theme-variable usage, and responsive breakpoints.
-- `src/store.test.ts`: Vitest reducer, persistence, and theme-helper tests.
 
 ## Required Skills
 
-- For all UI work, load and follow `build-web-apps:react-best-practices` before editing or reviewing code.
+- For all UI work, load and follow `vercel:react-best-practices` before editing or reviewing code.
 - UI work includes React and TSX changes, CSS, layouts, responsive behavior, accessibility, theme helpers, rendering-related UI state flows, UI reviews, refactors, and performance work.
 - Apply the skill together with this repository's local rules. The local rules document Meoi-specific architecture, behavior, and verification requirements.
 - Do not copy the full skill into this file. Load the maintained installed skill when the task begins.
-- If `build-web-apps:react-best-practices` is unavailable, use an equivalent installed React best-practices skill such as `vercel-react-best-practices`, state the fallback clearly, and continue following this file.
+- If `vercel:react-best-practices` is unavailable, use an equivalent installed React best-practices skill, state the fallback clearly, and continue following this file.
 - For rendered UI changes, preserve the Playwright verification workflow described in `Testing and Quality`.
 
 ## Setup and Commands
@@ -53,8 +62,8 @@ npm run preview
 ```
 
 - `npm run dev`: starts the Vite development server.
-- `npm run build`: runs `tsc -b` and then creates the Vite production bundle.
-- `npm run test`: runs the Vitest suite once.
+- `npm run build`: cleans generated output, type-checks, and builds both the Vite website and Chrome extension.
+- `npm run test`: runs the web and extension Vitest suites once.
 - `npm run test:watch`: runs Vitest in watch mode.
 - `npm run preview`: serves the production bundle locally.
 - Lint command: not available.
@@ -65,12 +74,15 @@ Do not invent lint, format, or end-to-end scripts in reports. Adding those tools
 
 ## Architecture and State
 
+- Keep Supabase Auth/session concerns in `src/auth/`. The authenticated `ApiClient` created by `AuthProvider` is the normal path to application data.
+- Treat the backend API and database as canonical. Hydrate the normalized reducer through `loadCloudWorkspace`; successful remote mutations may update local reducer state or trigger a refresh, but local state alone is not durable.
 - Keep workspace domain state in the existing normalized reducer structure in `src/store.ts`.
 - Use reducer actions for collection, unit, document, and study-item changes. Do not mutate reducer inputs.
 - Keep transient UI state local to the owning component or in `App.tsx` when multiple surfaces coordinate it.
 - Do not duplicate derived lists in state. Derive active collections, units, documents, and study items from normalized records and order arrays.
-- Persist only through the existing `saveWorkspace` flow. Treat localStorage content as untrusted input and preserve normalization in `loadWorkspace`.
-- Keep `STORAGE_VERSION` stable unless a real migration or intentional reset strategy is part of the task.
+- Do not add new canonical workspace persistence to `localStorage`. `loadWorkspace`/`saveWorkspace` and `STORAGE_VERSION` remain for tested legacy compatibility; preserve their normalization unless an intentional migration/removal is part of the task.
+- Keep retryable lesson-progress batches in the existing user-scoped IndexedDB outbox. Preserve stable batch/event IDs across retries, acknowledge only successful API writes, and quarantine terminal rejections instead of silently dropping them.
+- Keep extension messaging behind the typed protocol and adapter modules in `src/integration/` and `extension/`; do not couple ordinary React presentation components directly to Chrome APIs.
 
 ### Theme Invariants
 
@@ -111,7 +123,7 @@ Do not invent lint, format, or end-to-end scripts in reports. Adding those tools
 
 ## File and Folder Rules
 
-Follow the current flat `src` organization.
+Follow the current package organization.
 
 ```text
 src/
@@ -119,21 +131,26 @@ src/
   main.tsx
   styles.css
   store.ts
-  store.test.ts
   theme.ts
   types.ts
+  api/
+  auth/
   components/
+  integration/
+  learning/
+extension/
 ```
 
 - Put reusable UI sections, modals, drawers, and workspace panels in `src/components/`.
 - Keep top-level app orchestration in `src/App.tsx`.
-- Keep reducer actions, seed data, persistence, and storage compatibility in `src/store.ts`.
+- Keep reducer actions, seed/empty state helpers, and legacy storage compatibility in `src/store.ts`.
+- Keep remote contracts and calls in `src/api/`, authentication in `src/auth/`, and extension/browser boundaries in `src/integration/` and `extension/`.
 - Keep pure theme and color utilities in `src/theme.ts`.
 - Keep shared types in `src/types.ts`.
 - Keep global CSS in `src/styles.css`.
 - Do not move files unless the task requires it.
 
-The project does not currently have pages, layouts, hooks, services, or assets folders. Create `src/pages/`, `src/layouts/`, `src/hooks/`, `src/services/`, or `src/assets/` only when a feature genuinely needs them. These are optional future locations, not existing conventions.
+The project does not currently use pages, layouts, services, or assets folders as primary conventions. Add new top-level folders only when a feature genuinely needs them; prefer the established `api`, `auth`, `components`, `integration`, and `learning` boundaries.
 
 ## Styling and UI Rules
 
@@ -164,14 +181,16 @@ The project does not currently have pages, layouts, hooks, services, or assets f
 
 ## API and Data Rules
 
-- There is no API client, remote service, server data cache, or environment-variable setup.
-- Do not invent API endpoints, service modules, or environment variables.
-- If remote data is added later, keep network calls out of deeply nested presentation components and add explicit loading, empty, success, and error states.
-- Never expose secrets, tokens, or private URLs in frontend code or committed files.
+- Use `src/api/client.ts` for authenticated Worker API requests and keep endpoint-specific mapping helpers in `src/api/`. Keep network calls out of deeply nested presentation components and preserve explicit loading, empty, success, conflict, and error states.
+- The backend OpenAPI contract is authoritative. Regenerate `src/api/generated.ts` with the backend `openapi:types` script when the contract changes; do not manually patch generated types.
+- Use Supabase directly only for Auth flows. Application tables, R2 authorization, permissions, rate limits, lifecycle operations, and business rules go through the Worker API; never call PostgREST application tables from the browser.
+- Treat client-side permission checks as presentation hints. The backend must remain the authorization authority for every protected operation.
+- Preserve API idempotency keys for retryable mutations and progress-outbox batches. Do not generate new batch/event IDs merely because a request is retried.
+- Public frontend configuration is read through `src/api/config.ts` from `VITE_MEOI_API_URL`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`, and optional `VITE_TURNSTILE_SITE_KEY`. These values may be public, but service-role/secret keys, passwords and access tokens must never enter frontend source, build variables, logs, URLs, or committed files.
 
 ## Testing and Quality
 
-- Add or update Vitest coverage when changing reducer behavior, persistence, theme helpers, or selection fallbacks.
+- Add or update Vitest coverage when changing reducer behavior, API mapping/client behavior, Auth helpers, outbox semantics, integration/extension protocol, persistence compatibility, theme helpers, or selection fallbacks.
 - Run `npm run test` and `npm run build` before finishing code changes.
 - For rendered UI changes, use Playwright with the installed dependency to verify desktop and mobile behavior, interactions, console health, and layout overflow.
 - Temporary Playwright scripts and screenshots must not be committed. Remove temporary `.qa` files after verification.
@@ -181,7 +200,8 @@ The project does not currently have pages, layouts, hooks, services, or assets f
 ## Security Rules
 
 - Never commit secrets, API keys, tokens, credentials, or private URLs.
-- Validate and normalize localStorage data before relying on it.
+- Let the Supabase client manage access/refresh tokens; do not copy tokens into app state, localStorage keys, logs, error reports, or extension messages.
+- Validate and normalize browser-stored legacy/recovery data before relying on it, and scope IndexedDB records to the authenticated user.
 - Validate user input where relevant and keep destructive actions behind confirmation.
 - Do not add `dangerouslySetInnerHTML` or equivalent unsafe HTML rendering without a documented, reviewed sanitization strategy.
 - Explain the need and risk before adding dependencies with security implications.

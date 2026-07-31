@@ -10503,6 +10503,15 @@ export interface operations {
                     };
                 };
             };
+            /** @description Upload or storage budget exhausted */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
         };
     };
     finalizeFileUpload: {

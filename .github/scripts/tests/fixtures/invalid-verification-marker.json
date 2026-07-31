@@ -1,0 +1,10 @@
+{
+  "formatVersion": 2,
+  "backupKey": "weekly/meoing-2026-08-17T02-23-00Z.tar.age",
+  "verifiedAt": "not-a-timestamp",
+  "manifestCreatedAt": "2026-08-17T02:23:00Z",
+  "dumpSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "encryptedSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "encryptedSize": 500,
+  "objectEtag": "\"backup-500\""
+}

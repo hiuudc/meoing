@@ -1,0 +1,12 @@
+{
+  "IsTruncated": true,
+  "NextContinuationToken": "page-2",
+  "Contents": [
+    {
+      "Key": "manual/meoing-2026-07-01T02-23-00Z.tar.age",
+      "LastModified": "2026-07-01T02:24:00Z",
+      "Size": 100,
+      "ETag": "\"page-one\""
+    }
+  ]
+}

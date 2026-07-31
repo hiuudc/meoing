@@ -16,8 +16,8 @@ jobs:
   frontend:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -32,8 +32,8 @@ jobs:
   backend:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -54,16 +54,28 @@ jobs:
   operations:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Validate operations shell scripts
-        run: bash -n .github/scripts/backup-production.sh .github/scripts/restore-drill.sh
+        run: >-
+          bash -n
+          .github/scripts/backup-storage.sh
+          .github/scripts/backup-production.sh
+          .github/scripts/restore-drill.sh
+          .github/scripts/prune-production-backups.sh
+          .github/scripts/cleanup-legacy-daily.sh
+          .github/scripts/cleanup-unretained-backups.sh
+          .github/scripts/check-backup-freshness.sh
+          .github/scripts/tests/backup-operations.test.sh
+          .github/scripts/tests/fake-aws.sh
+      - name: Test backup and restore behavior
+        run: bash .github/scripts/tests/backup-operations.test.sh
 
   database:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
           cache: npm

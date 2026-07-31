@@ -8,7 +8,7 @@ grant meoing_runtime to current_user with set true;
 grant usage on schema extensions to meoing_runtime;
 grant execute on all functions in schema extensions to meoing_runtime;
 
-select plan(137);
+select plan(140);
 
 select ok(
   case
@@ -3053,6 +3053,82 @@ select throws_ok(
   'the runtime role cannot invoke privileged operational observations'
 );
 reset role;
+
+-- The local deployment identity intentionally uses the staging 0.5 GiB cap.
+-- Rows are metadata-only, so the boundary can be exercised without writing R2.
+delete from app.file_assets;
+
+select lives_ok(
+  $$
+    insert into app.file_assets (
+      id,
+      owner_id,
+      r2_key,
+      original_filename,
+      mime_type,
+      expected_size_bytes,
+      expected_sha256
+    )
+    select
+      gen_random_uuid(),
+      '10000000-0000-0000-0000-000000000001'::uuid,
+      'budget/' || item::text,
+      'budget.bin',
+      'application/pdf',
+      26214400,
+      decode(repeat('00', 32), 'hex')
+    from generate_series(1, 20) as item
+  $$,
+  'storage reservations can fill the first 500 MiB of the staging budget'
+);
+
+select lives_ok(
+  $$
+    insert into app.file_assets (
+      id,
+      owner_id,
+      r2_key,
+      original_filename,
+      mime_type,
+      expected_size_bytes,
+      expected_sha256
+    ) values (
+      gen_random_uuid(),
+      '10000000-0000-0000-0000-000000000001'::uuid,
+      'budget/exact-limit',
+      'budget.bin',
+      'application/pdf',
+      12582912,
+      decode(repeat('00', 32), 'hex')
+    )
+  $$,
+  'storage reservations may reach the exact 0.5 GiB staging budget'
+);
+
+select throws_ok(
+  $$
+    insert into app.file_assets (
+      id,
+      owner_id,
+      r2_key,
+      original_filename,
+      mime_type,
+      expected_size_bytes,
+      expected_sha256
+    ) values (
+      gen_random_uuid(),
+      '10000000-0000-0000-0000-000000000001'::uuid,
+      'budget/over-limit',
+      'budget.bin',
+      'application/pdf',
+      1,
+      decode(repeat('00', 32), 'hex')
+    )
+  $$,
+  '54000',
+  'STORAGE_BUDGET_REACHED',
+  'the atomic storage guard rejects the first byte over budget'
+);
 
 select * from finish();
 rollback;

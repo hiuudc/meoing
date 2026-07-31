@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiClient } from "./client";
+import { ApiClient, ApiError } from "./client";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -42,5 +42,17 @@ describe("ApiClient", () => {
         code: "REVISION_CONFLICT",
         requestId: "request-2",
       });
+  });
+
+  it("turns a detached or unreachable API domain into the static budget-safe message", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    }));
+    const client = new ApiClient("https://api.example.test", async () => "jwt-token");
+
+    await expect(client.get("/v1/me")).rejects.toMatchObject({
+      status: 503,
+      code: "API_UNAVAILABLE",
+    } satisfies Partial<ApiError>);
   });
 });

@@ -68,11 +68,20 @@ export class ApiClient {
     if (options.body !== undefined) headers.set("Content-Type", "application/json");
     if (options.idempotencyKey) headers.set("Idempotency-Key", options.idempotencyKey);
 
-    const response = await fetch(`${this.baseUrl}${path}`, {
-      ...options,
-      headers,
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}${path}`, {
+        ...options,
+        headers,
+        body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      });
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
+      throw new ApiError(503, {
+        code: "API_UNAVAILABLE",
+        message: "Meoing API is temporarily unavailable. It may be paused to protect the operating budget; try again later.",
+      });
+    }
 
     let payload: unknown;
     try {

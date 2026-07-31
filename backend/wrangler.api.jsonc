@@ -4,8 +4,14 @@
   "main": "src/api-worker.ts",
   "compatibility_date": "2026-07-30",
   "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
   "placement": {
     "mode": "smart"
+  },
+  "limits": {
+    "cpu_ms": 20,
+    "subrequests": 16
   },
   "observability": {
     "enabled": true,
@@ -77,12 +83,10 @@
       "placement": {
         "region": "aws:ap-northeast-1"
       },
-      "routes": [
-        {
-          "pattern": "api-staging.meoing.com",
-          "custom_domain": true
-        }
-      ],
+      "limits": {
+        "cpu_ms": 20,
+        "subrequests": 16
+      },
       "vars": {
         "APP_ENV": "staging",
         "CORS_ORIGINS": "https://staging.meoing.com",
@@ -126,12 +130,10 @@
     "production": {
       "workers_dev": false,
       "preview_urls": false,
-      "routes": [
-        {
-          "pattern": "api.meoing.com",
-          "custom_domain": true
-        }
-      ],
+      "limits": {
+        "cpu_ms": 20,
+        "subrequests": 16
+      },
       "vars": {
         "APP_ENV": "production",
         "CORS_ORIGINS": "https://meoing.com",

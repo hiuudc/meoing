@@ -6,25 +6,32 @@ import {
 
 const SUPABASE_PROJECT_REF_PATTERN = /^[a-z0-9]{20}$/;
 const LOAD_USERNAME_PATTERN = /^load([0-9]{3})$/;
+const PINNED_STAGING_API_ORIGIN = "https://api-staging.meoing.com/";
+
+export function reservedAcceptanceEmail(username) {
+  assert(
+    typeof username === "string",
+    "Acceptance usernames must use the reserved staging namespace",
+  );
+  if (username === "acceptance.owner") {
+    return "acceptance-owner@auth.meoing.com";
+  } else if (username === "acceptance.member") {
+    return "acceptance-member@auth.meoing.com";
+  }
+
+  const loadMatch = LOAD_USERNAME_PATTERN.exec(username);
+  assert(loadMatch, "Acceptance usernames must use the reserved staging namespace");
+  const loadIndex = Number(loadMatch[1]);
+  assert(
+    loadIndex >= 1 && loadIndex <= 100,
+    "Acceptance load usernames must be between load001 and load100",
+  );
+  return `acceptance-load-${loadMatch[1]}@auth.meoing.com`;
+}
 
 export function assertReservedAcceptanceIdentity({ email, username }) {
-  let expectedEmail;
-  if (username === "acceptance.owner") {
-    expectedEmail = "acceptance-owner@auth.meoing.com";
-  } else if (username === "acceptance.member") {
-    expectedEmail = "acceptance-member@auth.meoing.com";
-  } else {
-    const loadMatch = LOAD_USERNAME_PATTERN.exec(username);
-    assert(loadMatch, "Acceptance usernames must use the reserved staging namespace");
-    const loadIndex = Number(loadMatch[1]);
-    assert(
-      loadIndex >= 1 && loadIndex <= 100,
-      "Acceptance load usernames must be between load001 and load100",
-    );
-    expectedEmail = `acceptance-load-${loadMatch[1]}@auth.meoing.com`;
-  }
   assert(
-    email === expectedEmail,
+    email === reservedAcceptanceEmail(username),
     "Acceptance emails must use the reserved staging namespace",
   );
 }
@@ -124,7 +131,7 @@ export function assertExpectedStagingSupabaseProject({
 }) {
   assert(
     SUPABASE_PROJECT_REF_PATTERN.test(expectedProjectRef),
-    "MEOING_PROVISION_EXPECTED_SUPABASE_PROJECT_REF must be a 20-character lowercase alphanumeric project ref",
+    "The expected Supabase project ref must be a 20-character lowercase alphanumeric project ref",
   );
 
   const expectedOrigin = `https://${expectedProjectRef}.supabase.co`;
@@ -133,7 +140,28 @@ export function assertExpectedStagingSupabaseProject({
       supabaseUrl.pathname === "/" &&
       supabaseUrl.username === "" &&
       supabaseUrl.password === "",
-    "MEOING_PROVISION_SUPABASE_URL must be the canonical URL for MEOING_PROVISION_EXPECTED_SUPABASE_PROJECT_REF; no Auth Admin changes were made",
+    "The Supabase URL must be the canonical URL for the expected Supabase project ref; no Auth Admin changes were made",
+  );
+}
+
+export function assertExpectedStagingApiOrigin({ apiUrl, expectedApiOrigin }) {
+  assert(
+    apiUrl instanceof URL && expectedApiOrigin instanceof URL,
+    "The staging API URL and expected origin must be absolute URLs",
+  );
+  assert(
+    expectedApiOrigin.protocol === "https:" &&
+      expectedApiOrigin.href === PINNED_STAGING_API_ORIGIN &&
+      expectedApiOrigin.pathname === "/" &&
+      expectedApiOrigin.search === "" &&
+      expectedApiOrigin.hash === "" &&
+      expectedApiOrigin.username === "" &&
+      expectedApiOrigin.password === "",
+    `The expected staging API origin must be exactly ${PINNED_STAGING_API_ORIGIN}`,
+  );
+  assert(
+    apiUrl.href === expectedApiOrigin.href,
+    "The staging API URL must exactly match the independently pinned HTTPS origin",
   );
 }
 

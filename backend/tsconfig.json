@@ -21,6 +21,7 @@
     "test/**/*.ts",
     "vitest.config.ts",
     "worker-configuration.d.ts",
-    "worker-maintenance-configuration.d.ts"
+    "worker-maintenance-configuration.d.ts",
+    "worker-cost-guard-configuration.d.ts"
   ]
 }

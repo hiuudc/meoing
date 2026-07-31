@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  assertExpectedStagingApiOrigin,
   acceptanceAuthMutation,
   acceptanceUserMarker,
   assertOwnedAcceptanceUser,
@@ -8,13 +9,38 @@ import {
   assertReservedAcceptanceIdentity,
   existingAcceptanceUsersByEmail,
   requireStagingProvisioningTargets,
+  reservedAcceptanceEmail,
 } from "./provision-staging-guard.mjs";
 
 const STAGING_PROJECT_REF = "sdwuwmyrbdaarxokxmsf";
 const API_URL = new URL("https://api-staging.meoing.com/");
 const SUPABASE_URL = new URL(`https://${STAGING_PROJECT_REF}.supabase.co/`);
 
+test("pins cleanup API traffic to the canonical Meoing staging HTTPS origin", () => {
+  assert.doesNotThrow(() => assertExpectedStagingApiOrigin({
+    apiUrl: API_URL,
+    expectedApiOrigin: API_URL,
+  }));
+  for (const url of [
+    new URL("http://api-staging.meoing.com/"),
+    new URL("https://foreign.example/"),
+  ]) {
+    assert.throws(() => assertExpectedStagingApiOrigin({
+      apiUrl: url,
+      expectedApiOrigin: url,
+    }));
+  }
+});
+
 test("accepts only reserved staging acceptance identities", () => {
+  assert.equal(
+    reservedAcceptanceEmail("acceptance.owner"),
+    "acceptance-owner@auth.meoing.com",
+  );
+  assert.equal(
+    reservedAcceptanceEmail("load100"),
+    "acceptance-load-100@auth.meoing.com",
+  );
   for (const identity of [
     {
       email: "acceptance-owner@auth.meoing.com",
