@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const RESUME_RATIO = 0.05;
 
@@ -32,6 +33,8 @@ const CLASS_B_ACTIONS = new Set([
 ]);
 const FREE_ACTIONS = new Set([
   "DeleteObject",
+  // R2 GraphQL reports an S3 bulk deletion with this plural action name.
+  "DeleteObjects",
   "DeleteBucket",
   "AbortMultipartUpload",
 ]);
@@ -105,7 +108,7 @@ function isCanonicalTimestamp(value) {
   );
 }
 
-function parseMetrics(payload) {
+export function parseMetrics(payload) {
   if (Array.isArray(payload?.errors) && payload.errors.length > 0) {
     throw new Error("Cloudflare GraphQL returned errors");
   }
@@ -256,4 +259,6 @@ async function main() {
   );
 }
 
-await main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main();
+}

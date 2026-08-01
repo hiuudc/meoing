@@ -505,6 +505,7 @@ describe("Cloudflare GraphQL metric parsing", () => {
               { dimensions: { actionType: "PutObject" }, sum: { requests: 3 } },
               { dimensions: { actionType: "GetObject" }, sum: { requests: 7 } },
               { dimensions: { actionType: "DeleteObject" }, sum: { requests: 2 } },
+              { dimensions: { actionType: "DeleteObjects" }, sum: { requests: 5 } },
             ],
             r2StorageAdaptiveGroups: [
               {
