@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import pg from "pg";
 
-const { Client } = pg;
+const { Client, escapeIdentifier, escapeLiteral } = pg;
 
 const databaseUrl = process.env.DATABASE_URL?.trim();
 if (!databaseUrl) {
@@ -12,6 +12,10 @@ if (!databaseUrl) {
 }
 
 const runId = randomBytes(8).toString("hex");
+const runtimeLoginRole = `meoing_concurrency_${runId}`;
+const runtimeLoginPassword = randomBytes(32).toString("hex");
+const runtimeLoginRoleSql = escapeIdentifier(runtimeLoginRole);
+const runtimeLoginPasswordSql = escapeLiteral(runtimeLoginPassword);
 const ownerId = randomUUID();
 const firstMemberId = randomUUID();
 const secondMemberId = randomUUID();
@@ -25,14 +29,58 @@ const inviteTokenHash = createHash("sha256")
 let collectionId;
 let inviteId;
 
-function clientConfig(label) {
+function runtimeDatabaseUrl() {
+  const url = new URL(databaseUrl);
+  url.username = runtimeLoginRole;
+  url.password = runtimeLoginPassword;
+  return url.toString();
+}
+
+function clientConfig(label, { runtime = false } = {}) {
   return {
-    connectionString: databaseUrl,
+    connectionString: runtime ? runtimeDatabaseUrl() : databaseUrl,
     application_name: `meoing-db-concurrency-${label}-${runId}`,
     connectionTimeoutMillis: 10_000,
     query_timeout: 15_000,
     statement_timeout: 15_000,
   };
+}
+
+async function assertLocalDatabase(client) {
+  const identity = await client.query(
+    "select environment from private.deployment_identity where singleton",
+  );
+  assert.equal(
+    identity.rows[0]?.environment,
+    "local",
+    "database concurrency acceptance is intentionally local-only",
+  );
+}
+
+async function createRuntimeLogin(client) {
+  await client.query(`
+    create role ${runtimeLoginRoleSql}
+      login
+      nosuperuser
+      noinherit
+      nocreatedb
+      nocreaterole
+      noreplication
+      nobypassrls
+      connection limit 4
+      password ${runtimeLoginPasswordSql}
+  `);
+}
+
+async function grantRuntimeLogin(client) {
+  await client.query(`
+    grant meoing_runtime to ${runtimeLoginRoleSql}
+      with admin false, inherit false, set true
+  `);
+}
+
+async function dropRuntimeLogin(client) {
+  await client.query(`drop role if exists ${runtimeLoginRoleSql}`);
 }
 
 function errorSummary(error) {
@@ -218,8 +266,8 @@ async function createMaxUseInvite(client) {
 }
 
 async function exerciseInviteRace() {
-  const firstClient = new Client(clientConfig("member-a"));
-  const secondClient = new Client(clientConfig("member-b"));
+  const firstClient = new Client(clientConfig("member-a", { runtime: true }));
+  const secondClient = new Client(clientConfig("member-b", { runtime: true }));
 
   try {
     await Promise.all([firstClient.connect(), secondClient.connect()]);
@@ -310,14 +358,7 @@ async function verifyRaceResult(client, attempts) {
 }
 
 async function seedStorageBudget(client) {
-  const identity = await client.query(
-    "select environment from private.deployment_identity where singleton",
-  );
-  assert.equal(
-    identity.rows[0]?.environment,
-    "local",
-    "storage-budget concurrency acceptance is intentionally local-only",
-  );
+  await assertLocalDatabase(client);
 
   await client.query(
     `
@@ -372,8 +413,8 @@ async function reservePreparedStorage(client, userId, assetId, suffix) {
 }
 
 async function exerciseStorageRace() {
-  const firstClient = new Client(clientConfig("storage-a"));
-  const secondClient = new Client(clientConfig("storage-b"));
+  const firstClient = new Client(clientConfig("storage-a", { runtime: true }));
+  const secondClient = new Client(clientConfig("storage-b", { runtime: true }));
 
   try {
     await Promise.all([firstClient.connect(), secondClient.connect()]);
@@ -460,15 +501,43 @@ async function cleanup(client) {
 
 async function main() {
   const setupClient = new Client(clientConfig("setup"));
-  let connected = false;
+  const runtimeSetupClient = new Client(
+    clientConfig("runtime-setup", { runtime: true }),
+  );
+  let setupConnected = false;
+  let localDatabaseVerified = false;
+  let runtimeSetupConnected = false;
+  let runtimeLoginCreated = false;
   let primaryError;
   let summary;
 
+  function recordTeardownError(stage, error) {
+    const teardownError = { stage, ...errorSummary(error) };
+    if (!primaryError) {
+      primaryError = error instanceof Error ? error : new Error(String(error));
+    }
+    if (primaryError && typeof primaryError === "object") {
+      primaryError.teardownErrors = [
+        ...(Array.isArray(primaryError.teardownErrors)
+          ? primaryError.teardownErrors
+          : []),
+        teardownError,
+      ];
+    }
+  }
+
   try {
     await setupClient.connect();
-    connected = true;
+    setupConnected = true;
+    await assertLocalDatabase(setupClient);
+    localDatabaseVerified = true;
+    await createRuntimeLogin(setupClient);
+    runtimeLoginCreated = true;
+    await grantRuntimeLogin(setupClient);
     await seedUsers(setupClient);
-    await createMaxUseInvite(setupClient);
+    await runtimeSetupClient.connect();
+    runtimeSetupConnected = true;
+    await createMaxUseInvite(runtimeSetupClient);
     const attempts = await exerciseInviteRace();
     const inviteSummary = await verifyRaceResult(setupClient, attempts);
     await seedStorageBudget(setupClient);
@@ -478,17 +547,35 @@ async function main() {
   } catch (error) {
     primaryError = error;
   } finally {
-    if (connected) {
+    if (runtimeSetupConnected) {
+      try {
+        await runtimeSetupClient.end();
+      } catch (error) {
+        recordTeardownError("runtime_client_end", error);
+      }
+    }
+
+    if (localDatabaseVerified) {
       try {
         await cleanup(setupClient);
-      } catch (cleanupError) {
-        if (primaryError) {
-          primaryError.cleanupError = errorSummary(cleanupError);
-        } else {
-          primaryError = cleanupError;
+      } catch (error) {
+        recordTeardownError("data_cleanup", error);
+      }
+
+      if (runtimeLoginCreated) {
+        try {
+          await dropRuntimeLogin(setupClient);
+        } catch (error) {
+          recordTeardownError("runtime_role_cleanup", error);
         }
-      } finally {
+      }
+    }
+
+    if (setupConnected) {
+      try {
         await setupClient.end();
+      } catch (error) {
+        recordTeardownError("setup_client_end", error);
       }
     }
   }
@@ -511,9 +598,9 @@ main().catch((error) => {
     JSON.stringify({
       event: "db_concurrency_failed",
       error: errorSummary(error),
-      cleanupError:
-        error && typeof error === "object" && "cleanupError" in error
-          ? error.cleanupError
+      teardownErrors:
+        error && typeof error === "object" && "teardownErrors" in error
+          ? error.teardownErrors
           : undefined,
     }),
   );
