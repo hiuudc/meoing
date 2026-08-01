@@ -312,9 +312,11 @@ Revoke the temporary Supabase provisioning key and remove
 `SUPABASE_PROVISIONING_SECRET_KEY` from the protected GitHub environment after
 provisioning. The maintenance Worker's
 `SUPABASE_SECRET_KEY` remains only in Cloudflare's Worker secret store and is
-never required by this workflow. The workflow retains sanitized JSON summaries
-for 30 days. A smoke-only dispatch is useful for diagnosis but does not satisfy
-the v1 load acceptance gate.
+never required by this workflow. The workflow explicitly includes only the
+sanitized `staging-smoke.json` and `load-gate.json` summaries from the hidden
+`backend/.acceptance-results` directory and retains the artifact for 30 days.
+A smoke-only dispatch is useful for diagnosis but does not satisfy the v1 load
+acceptance gate.
 
 The separate **Cleanup staging acceptance users** workflow requires the same
 protected environment values plus an explicit `usernames_json` selection. Do

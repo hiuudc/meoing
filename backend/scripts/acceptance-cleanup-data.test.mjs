@@ -209,6 +209,10 @@ test("privileged staging dispatches run only trusted main code with step-scoped 
     acceptanceWorkflow.indexOf("${{ secrets.") >
       acceptanceWorkflow.indexOf("Provision staging acceptance accounts"),
   );
+  assert.match(
+    acceptanceWorkflow,
+    /path: backend\/\.acceptance-results\s+include-hidden-files: true\s+if-no-files-found: warn\s+retention-days: 30/,
+  );
 });
 
 test("accepts only exact personal and selected-owner collection R2 namespaces", () => {
