@@ -418,6 +418,112 @@ describe("Lesson payload v8 contract", () => {
     ).toBe(false);
   });
 
+  it("bounds duplicate-label answer-bank composition with an impossible suffix", () => {
+    const question = questionForType("translation", "duplicate-bank");
+    Object.assign(question, {
+      referenceAnswer: `${Array.from({ length: 29 }, () => "go").join(" ")} x.`,
+      answerBank: {
+        tokens: Array.from({ length: 30 }, (_, index) => ({
+          id: `repeat-${index}`,
+          label: "go",
+        })),
+        separator: "space",
+        defaultMode: "bank",
+      },
+    });
+
+    const parsed = QuestionSchema.safeParse(question);
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues.some((issue) => issue.message.includes("compose an answer exactly")))
+        .toBe(true);
+    }
+  }, 1_000);
+
+  it("preserves repeated answer-bank tokens needed by a valid composition", () => {
+    const question = questionForType("translation", "repeated-bank");
+    Object.assign(question, {
+      referenceAnswer: "go go go.",
+      answerBank: {
+        tokens: [
+          { id: "go-1", label: "go" },
+          { id: "go-2", label: "go" },
+          { id: "go-3", label: "go" },
+          { id: "distractor", label: "stay" },
+        ],
+        separator: "space",
+        defaultMode: "bank",
+      },
+    });
+
+    expect(QuestionSchema.safeParse(question).success).toBe(true);
+  });
+
+  it("rejects pathological overlapping compositions at a deterministic state limit", () => {
+    const question = questionForType("translation", "overlapping-bank");
+    Object.assign(question, {
+      referenceAnswer: `${"a".repeat(180)} ${"a".repeat(50)} b.`,
+      answerBank: {
+        tokens: Array.from({ length: 30 }, (_, index) => ({
+          id: `overlap-${index}`,
+          label: "a".repeat(index + 1),
+        })),
+        separator: "none",
+        defaultMode: "bank",
+      },
+    });
+
+    const parsed = QuestionSchema.safeParse(question);
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues.some((issue) => issue.message.includes("validation complexity limit")))
+        .toBe(true);
+    }
+  }, 1_000);
+
+  it("bounds aggregate composition work across a maximum-size lesson envelope", () => {
+    const baseQuestion = questionForType("errorCorrection", "aggregate-bank");
+    const pathologicalQuestion = {
+      ...baseQuestion,
+      acceptedAnswers: [`${"a".repeat(21)}b.`],
+      answerBank: {
+        tokens: Array.from({ length: 6 }, (_, index) => ({
+          id: `aggregate-${index}`,
+          label: "a".repeat(index + 1),
+        })).concat({ id: "aggregate-distractor", label: "c" }),
+        separator: "none",
+        defaultMode: "bank",
+      },
+    };
+
+    const singleQuestion = QuestionSchema.safeParse(pathologicalQuestion);
+    expect(singleQuestion.success).toBe(false);
+    if (!singleQuestion.success) {
+      expect(singleQuestion.error.issues.some((issue) => issue.message.includes("complexity limit")))
+        .toBe(false);
+    }
+
+    const parsed = LessonPayloadSchema.safeParse({
+      targetLanguage: "English",
+      questions: Array.from({ length: 23 }, (_, index) => ({
+        ...pathologicalQuestion,
+        id: `aggregate-primary-${index}`,
+      })),
+      questionAlternates: Array.from({ length: 23 }, (_, index) => ({
+        questionId: `aggregate-primary-${index}`,
+        question: {
+          ...pathologicalQuestion,
+          id: `aggregate-alternate-${index}`,
+        },
+      })),
+    });
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues.some((issue) => issue.message.includes("validation complexity limit")))
+        .toBe(true);
+    }
+  }, 1_500);
+
   it("requires the frontend top-level fields and rejects unknown fields", () => {
     const missingSummary = cloneLesson();
     Reflect.deleteProperty(missingSummary, "summary");

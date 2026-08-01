@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { normalizeStudyList, normalizeStudyText } from "../src/domain/normalize";
 import { ApiError } from "../src/http/errors";
-import { UsernameSchema } from "../src/http/schemas";
+import { UnitDocumentSchema, UsernameSchema } from "../src/http/schemas";
 
 describe("study content normalization", () => {
   it("normalizes Unicode, surrounding whitespace, and repeated whitespace", () => {
@@ -30,5 +30,38 @@ describe("Discord-like usernames", () => {
     expect(UsernameSchema.safeParse("ab").success).toBe(false);
     expect(UsernameSchema.safeParse("Meoing").success).toBe(false);
     expect(UsernameSchema.safeParse("meo..ing").success).toBe(false);
+  });
+});
+
+describe("persisted unit document images", () => {
+  const validAssetId = "1b26fe98-1f4d-4306-a620-454059304cf5";
+
+  it("accepts a private asset reference with an empty or omitted download URL", () => {
+    for (const image of [
+      { type: "meoi-image", assetId: validAssetId, src: "" },
+      { type: "meoi-image", assetId: validAssetId },
+    ]) {
+      expect(UnitDocumentSchema.safeParse({
+        title: "Private image",
+        content: {
+          root: {
+            children: [image],
+          },
+        },
+      }).success).toBe(true);
+    }
+  });
+
+  it("rejects external image URLs and image nodes without an asset reference", () => {
+    for (const image of [
+      { type: "meoi-image", src: "https://tracker.example/pixel.png" },
+      { type: "meoi-image", assetId: validAssetId, src: "https://signed.example/temporary" },
+      { type: "meoi-image", assetId: "not-a-uuid", src: "" },
+    ]) {
+      expect(UnitDocumentSchema.safeParse({
+        title: "Unsafe image",
+        content: { root: { children: [image] } },
+      }).success).toBe(false);
+    }
   });
 });

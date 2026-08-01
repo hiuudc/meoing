@@ -102,6 +102,25 @@ describe("Lexical file assets", () => {
     expect(onUploaded).toHaveBeenCalledWith("asset-new");
   });
 
+  it("rejects an external image URL instead of persisting a collaborator-visible request", async () => {
+    const post = vi.fn();
+
+    await expect(prepareLexicalDocumentForStorage(
+      apiWithPost(post),
+      JSON.stringify({
+        root: {
+          children: [{
+            type: "meoi-image",
+            src: "https://tracker.example/pixel.png?viewer=canary",
+          }],
+        },
+      }),
+      "collection-1",
+    )).rejects.toThrow("Document images must be uploaded before they can be saved.");
+
+    expect(post).not.toHaveBeenCalled();
+  });
+
   it("hydrates one signed URL per asset even when the document reuses it", async () => {
     const post = vi.fn().mockResolvedValue({
       data: { downloadUrl: "https://r2.example/download" },
@@ -125,6 +144,28 @@ describe("Lexical file assets", () => {
       "https://r2.example/download",
       "https://r2.example/download",
     ]);
+  });
+
+  it("removes legacy external image sources that have no authorized asset", async () => {
+    const post = vi.fn();
+
+    const hydrated = JSON.parse(await hydrateLexicalDocumentForEditing(
+      apiWithPost(post),
+      {
+        root: {
+          children: [{
+            type: "meoi-image",
+            src: "https://tracker.example/legacy.png?viewer=canary",
+          }],
+        },
+      },
+    )) as { root: { children: Array<Record<string, unknown>> } };
+
+    expect(hydrated.root.children[0]).toMatchObject({
+      type: "meoi-image",
+      src: "",
+    });
+    expect(post).not.toHaveBeenCalled();
   });
 
   it("uploads a selected profile image through the same private R2 flow", async () => {

@@ -120,6 +120,8 @@ async function prepareNodeForStorage(
     } else if (DATA_IMAGE.test(source)) {
       next.assetId = await uploadDataImage(api, source, collectionId, onUploaded);
       next.src = "";
+    } else {
+      throw new Error("Document images must be uploaded before they can be saved.");
     }
   }
   return next;
@@ -155,17 +157,20 @@ async function hydrateNodeForEditing(
   for (const [key, child] of Object.entries(value)) {
     next[key] = await hydrateNodeForEditing(api, child, cache);
   }
-  if (value.type === "meoi-image" && typeof value.assetId === "string" && value.assetId) {
-    let url = cache.get(value.assetId);
-    if (!url) {
-      const response = await api.post<DownloadAuthorization>(
-        `/v1/files/${encodeURIComponent(value.assetId)}/download`,
-      );
-      url = response.data.downloadUrl ?? response.data.url;
-      if (!url) throw new Error("The API did not return an authorized asset URL.");
-      cache.set(value.assetId, url);
+  if (value.type === "meoi-image") {
+    next.src = "";
+    if (typeof value.assetId === "string" && value.assetId) {
+      let url = cache.get(value.assetId);
+      if (!url) {
+        const response = await api.post<DownloadAuthorization>(
+          `/v1/files/${encodeURIComponent(value.assetId)}/download`,
+        );
+        url = response.data.downloadUrl ?? response.data.url;
+        if (!url) throw new Error("The API did not return an authorized asset URL.");
+        cache.set(value.assetId, url);
+      }
+      next.src = url;
     }
-    next.src = url;
   }
   return next;
 }

@@ -102,36 +102,81 @@ function normalizeBankComposition(value: string): string {
     .replace(/[\p{P}\p{S}\s]+/gu, "");
 }
 
-function answerBankCanCompose(
+const ANSWER_BANK_COMPOSITION_STATE_LIMIT = 2_048;
+const LESSON_ANSWER_BANK_COMPOSITION_STATE_LIMIT = 512;
+
+type AnswerBankCompositionStatus = "composable" | "not-composable" | "budget-exceeded";
+interface AnswerBankCompositionBudget {
+  remaining: number;
+}
+
+function answerBankCompositionStatus(
   referenceAnswer: string,
   tokens: ReadonlyArray<{ id: string; label: string }>,
   minimumTokenCount = 1,
-): boolean {
+  budget: AnswerBankCompositionBudget = { remaining: ANSWER_BANK_COMPOSITION_STATE_LIMIT },
+): AnswerBankCompositionStatus {
   const target = normalizeBankComposition(referenceAnswer);
-  if (!target) return false;
-  const parts = tokens
-    .map((token, index) => ({
-      id: `${index}:${token.id}`,
-      text: normalizeBankComposition(token.label),
-    }))
-    .filter((token) => token.text);
-  const failed = new Set<string>();
+  if (!target) return "not-composable";
+  const inventory = new Map<string, number>();
+  tokens.forEach((token) => {
+    const text = normalizeBankComposition(token.label);
+    if (text) inventory.set(text, (inventory.get(text) ?? 0) + 1);
+  });
+  const parts = [...inventory].map(([text, available]) => ({ text, available }));
+  const totalAvailableLength = parts.reduce(
+    (total, part) => total + part.text.length * part.available,
+    0,
+  );
+  if (target.length > totalAvailableLength) return "not-composable";
 
-  function visit(offset: number, used: Set<string>, count: number): boolean {
+  const failed = new Set<string>();
+  const usedCounts = Array.from({ length: parts.length }, () => 0);
+  let budgetExceeded = false;
+
+  function visit(offset: number, count: number): boolean {
     if (offset === target.length) return count >= minimumTokenCount;
-    const key = `${offset}|${count}|${[...used].sort().join(",")}`;
+    const key = `${offset}|${usedCounts.join(",")}`;
     if (failed.has(key)) return false;
-    for (const token of parts) {
-      if (used.has(token.id) || !target.startsWith(token.text, offset)) continue;
-      const nextUsed = new Set(used);
-      nextUsed.add(token.id);
-      if (visit(offset + token.text.length, nextUsed, count + 1)) return true;
+    if (budget.remaining <= 0) {
+      budgetExceeded = true;
+      return false;
+    }
+    budget.remaining -= 1;
+
+    for (let index = 0; index < parts.length; index += 1) {
+      const token = parts[index];
+      if (!token) continue;
+      const used = usedCounts[index] ?? 0;
+      if (used >= token.available || !target.startsWith(token.text, offset)) continue;
+      usedCounts[index] = used + 1;
+      const composed = visit(offset + token.text.length, count + 1);
+      usedCounts[index] = used;
+      if (composed) return true;
+      if (budgetExceeded) return false;
     }
     failed.add(key);
     return false;
   }
 
-  return visit(0, new Set(), 0);
+  const composed = visit(0, 0);
+  if (composed) return "composable";
+  return budgetExceeded ? "budget-exceeded" : "not-composable";
+}
+
+function answerBankCompositionStatusForAny(
+  referenceAnswers: readonly string[],
+  tokens: ReadonlyArray<{ id: string; label: string }>,
+  minimumTokenCount = 1,
+  budget: AnswerBankCompositionBudget = { remaining: ANSWER_BANK_COMPOSITION_STATE_LIMIT },
+): AnswerBankCompositionStatus {
+  let budgetExceeded = false;
+  for (const answer of referenceAnswers) {
+    const status = answerBankCompositionStatus(answer, tokens, minimumTokenCount, budget);
+    if (status === "composable") return status;
+    if (status === "budget-exceeded") budgetExceeded = true;
+  }
+  return budgetExceeded ? "budget-exceeded" : "not-composable";
 }
 
 function hasWholeReferenceToken(
@@ -331,15 +376,21 @@ export const lessonQuestionSchema = z.discriminatedUnion("type", [
         message: `${question.type} answer banks cannot contain a complete sentence answer in one token.`,
       });
     }
-    if (
-      sentenceAnswers.length
-      && !sentenceAnswers.some((answer) => answerBankCanCompose(answer, question.answerBank!.tokens, 2))
-    ) {
-      context.addIssue({
-        code: "custom",
-        path: ["answerBank", "tokens"],
-        message: `${question.type} answer-bank tokens must compose at least one complete answer exactly in the same order.`,
-      });
+    if (sentenceAnswers.length) {
+      const compositionStatus = answerBankCompositionStatusForAny(
+        sentenceAnswers,
+        question.answerBank.tokens,
+        2,
+      );
+      if (compositionStatus !== "composable") {
+        context.addIssue({
+          code: "custom",
+          path: ["answerBank", "tokens"],
+          message: compositionStatus === "budget-exceeded"
+            ? `${question.type} answer-bank composition exceeds the validation complexity limit.`
+            : `${question.type} answer-bank tokens must compose at least one complete answer exactly in the same order.`,
+        });
+      }
     }
   }
   if (question.type === "selectBlank") {
@@ -423,12 +474,17 @@ function validateSchemaEightQuestion(
   ) {
     errors.push(`Question ${question.id} answer bank cannot contain a complete sentence answer in one token.`);
   }
-  if (
-    question.answerBank
-    && sentenceAnswers.length
-    && !sentenceAnswers.some((answer) => answerBankCanCompose(answer, question.answerBank!.tokens, 2))
-  ) {
-    errors.push(`Question ${question.id} answer bank must compose at least one complete answer exactly in the same order.`);
+  if (question.answerBank && sentenceAnswers.length) {
+    const compositionStatus = answerBankCompositionStatusForAny(
+      sentenceAnswers,
+      question.answerBank.tokens,
+      2,
+    );
+    if (compositionStatus === "budget-exceeded") {
+      errors.push(`Question ${question.id} answer-bank composition exceeds the validation complexity limit.`);
+    } else if (compositionStatus === "not-composable") {
+      errors.push(`Question ${question.id} answer bank must compose at least one complete answer exactly in the same order.`);
+    }
   }
   (question.glossaryTargets ?? []).forEach((target) => {
     const visibleTarget = stripBlankMarkers(target);
@@ -477,7 +533,80 @@ export function validateQuestionGlossaryCoverage(
   return errors;
 }
 
-export const lessonSchema = z
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function rawLessonCompositionCandidate(
+  value: unknown,
+): { answers: string[]; tokens: Array<{ id: string; label: string }> } | "invalid" | null {
+  if (!isUnknownRecord(value)) return null;
+  const relevantType = value.type === "translation"
+    || value.type === "shortAnswer"
+    || value.type === "errorCorrection"
+    || value.type === "sentenceTransformation"
+    || value.type === "dictation";
+  if (!relevantType || value.answerBank === undefined) return null;
+  if (!isUnknownRecord(value.answerBank)) return "invalid";
+  const rawTokens = value.answerBank.tokens;
+  if (!Array.isArray(rawTokens) || rawTokens.length < 2 || rawTokens.length > 30) return "invalid";
+  const tokens: Array<{ id: string; label: string }> = [];
+  for (let index = 0; index < rawTokens.length; index += 1) {
+    const token = rawTokens[index];
+    if (!isUnknownRecord(token) || typeof token.label !== "string" || token.label.length > 500) {
+      return "invalid";
+    }
+    tokens.push({ id: String(index), label: token.label });
+  }
+
+  let answers: unknown[] = [];
+  if (value.type === "translation" || value.type === "shortAnswer") {
+    answers = [value.referenceAnswer];
+  } else if (
+    value.type === "errorCorrection"
+    || value.type === "sentenceTransformation"
+    || value.type === "dictation"
+  ) {
+    answers = Array.isArray(value.acceptedAnswers) ? value.acceptedAnswers : [];
+  }
+  if (answers.length > 20 || answers.some((answer) => typeof answer !== "string" || answer.length > 16_000)) {
+    return "invalid";
+  }
+  return { answers: answers as string[], tokens };
+}
+
+function lessonCompositionStaysWithinBudget(value: unknown): boolean {
+  if (!isUnknownRecord(value)) return true;
+  const primary = Array.isArray(value.questions) ? value.questions : [];
+  const alternates = Array.isArray(value.questionAlternates)
+    ? value.questionAlternates.map((alternate) => (
+      isUnknownRecord(alternate) ? alternate.question : undefined
+    ))
+    : [];
+  if (primary.length > 23 || alternates.length > 23) return false;
+
+  const budget = { remaining: LESSON_ANSWER_BANK_COMPOSITION_STATE_LIMIT };
+  const isCjk = value.targetLanguage === "Japanese"
+    || value.targetLanguage === "Chinese"
+    || value.targetLanguage === "Korean";
+  for (const rawQuestion of [...primary, ...alternates]) {
+    const candidate = rawLessonCompositionCandidate(rawQuestion);
+    if (candidate === "invalid") return false;
+    if (!candidate) continue;
+    const answers = isCjk
+      ? candidate.answers
+      : candidate.answers.filter((answer) => needsSentenceBankComposition(answer));
+    if (
+      answers.length > 0
+      && answerBankCompositionStatusForAny(answers, candidate.tokens, 2, budget) === "budget-exceeded"
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+const lessonStructureSchema = z
   .object({
     schemaVersion: z.literal(8),
     id,
@@ -565,6 +694,14 @@ export const lessonSchema = z
       }
     });
   });
+
+export const lessonSchema = z
+  .unknown()
+  .refine(
+    lessonCompositionStaysWithinBudget,
+    "Lesson answer-bank composition exceeds the validation complexity limit.",
+  )
+  .pipe(lessonStructureSchema);
 
 export function parseLesson(value: unknown): Lesson {
   return lessonSchema.parse(value) as Lesson;

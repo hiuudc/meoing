@@ -21,6 +21,7 @@ const IMAGE_DATA_URL = /^data:image\/(?:png|jpeg|webp|gif);base64,[a-z0-9+/=\s]+
 const IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 const SAFE_LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:", "tel:"]);
 const SAFE_MEDIA_PROTOCOLS = new Set(["http:", "https:"]);
+const ASSET_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export function deriveDocumentPlainText(editorState: EditorState): string {
   let plainText = "";
@@ -48,11 +49,18 @@ export function sanitizeLinkUrl(value: string): string | null {
   return url && SAFE_LINK_PROTOCOLS.has(url.protocol) ? url.toString() : null;
 }
 
-export function sanitizeImageSource(value: string): string | null {
+export function sanitizeImageDataSource(value: string): string | null {
   const trimmed = value.trim();
-  if (IMAGE_DATA_URL.test(trimmed)) return trimmed.replace(/\s+/g, "");
+  return IMAGE_DATA_URL.test(trimmed) ? trimmed.replace(/\s+/g, "") : null;
+}
+
+export function resolveAuthorizedImageSource(value: string, assetId: string): string {
+  const dataSource = sanitizeImageDataSource(value);
+  if (dataSource) return dataSource;
+  if (!ASSET_UUID.test(assetId)) return "";
+  const trimmed = value.trim();
   const url = parseAbsoluteUrl(trimmed);
-  return url && SAFE_MEDIA_PROTOCOLS.has(url.protocol) ? url.toString() : null;
+  return url && SAFE_MEDIA_PROTOCOLS.has(url.protocol) ? url.toString() : "";
 }
 
 export function isSupportedImageFile(file: Pick<File, "type">): boolean {
@@ -68,7 +76,7 @@ export function readImageFileAsDataUrl(file: File): Promise<string> {
     reader.onerror = () => reject(new Error("The image could not be read."));
     reader.onload = () => {
       const source = typeof reader.result === "string"
-        ? sanitizeImageSource(reader.result)
+        ? sanitizeImageDataSource(reader.result)
         : null;
       if (!source) reject(new Error("The selected file is not a supported image."));
       else resolve(source);
@@ -162,7 +170,23 @@ export function importEditorContent(
   source: string,
 ): void {
   if (format === "json") {
-    const editorState = editor.parseEditorState(source);
+    const sanitizeImportedImages = (value: unknown): unknown => {
+      if (Array.isArray(value)) return value.map(sanitizeImportedImages);
+      if (!value || typeof value !== "object") return value;
+      const record = value as Record<string, unknown>;
+      const sanitized = Object.fromEntries(
+        Object.entries(record).map(([key, child]) => [key, sanitizeImportedImages(child)]),
+      );
+      if (record.type === "meoi-image") {
+        sanitized.src = typeof record.src === "string"
+          ? sanitizeImageDataSource(record.src) ?? ""
+          : "";
+      }
+      return sanitized;
+    };
+    const editorState = editor.parseEditorState(JSON.stringify(
+      sanitizeImportedImages(JSON.parse(source) as unknown),
+    ));
     editor.setEditorState(editorState);
     return;
   }

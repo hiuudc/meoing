@@ -36,8 +36,9 @@ import {
   exportEditorContent,
   importEditorContent,
   isSupportedImageFile,
+  resolveAuthorizedImageSource,
+  sanitizeImageDataSource,
   resolveEmbedUrl,
-  sanitizeImageSource,
   sanitizeLinkUrl,
 } from "./editorUtils";
 import {
@@ -125,7 +126,7 @@ describe("document editor custom nodes", () => {
       const rubyParagraph = $createParagraphNode().append($createRubyNode("漢字", "かんじ"));
       $getRoot().append(
         $createBilingualBlockNode("すみません", "Excuse me", "Japanese"),
-        $createImageNode("https://example.com/image.png", "Example", "Caption", 520, 320),
+        $createImageNode("data:image/png;base64,aGVsbG8=", "Example", "Caption", 520, 320),
         $createEquationNode("x^2 + y^2 = z^2"),
         $createEmbedNode("youtube", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"),
         $createExcalidrawNode(JSON.stringify({ elements: [{ id: "shape-1" }] })),
@@ -143,7 +144,7 @@ describe("document editor custom nodes", () => {
       expect(children[0].getTextContent()).toContain("すみません");
       expect($isImageNode(children[1])).toBe(true);
       if ($isImageNode(children[1])) {
-        expect(children[1].getSource()).toBe("https://example.com/image.png");
+        expect(children[1].getSource()).toBe("data:image/png;base64,aGVsbG8=");
         expect(children[1].getAltText()).toBe("Example");
         expect(children[1].getWidth()).toBe(520);
         expect(children[1].getHeight()).toBe(320);
@@ -174,6 +175,32 @@ describe("document editor custom nodes", () => {
         expect(ruby.getRubyText()).toBe("かんじ");
       }
     });
+  });
+
+  it("drops an external source that is not backed by an authorized asset", () => {
+    const editor = createTestEditor();
+    editor.update(() => {
+      $getRoot().append($createImageNode("https://tracker.example/pixel.png"));
+    }, { discrete: true });
+
+    editor.getEditorState().read(() => {
+      const image = $getRoot().getFirstChild();
+      expect($isImageNode(image)).toBe(true);
+      if ($isImageNode(image)) expect(image.getSource()).toBe("");
+    });
+  });
+
+  it("exports image elements with a no-referrer policy", () => {
+    const editor = createTestEditor();
+    editor.update(() => {
+      const image = $createImageNode("data:image/png;base64,aGVsbG8=");
+      $getRoot().append(image);
+      const exportedElement = image.exportDOM().element;
+      expect(exportedElement).toBeInstanceOf(HTMLElement);
+      if (exportedElement instanceof HTMLElement) {
+        expect(exportedElement.querySelector("img")?.referrerPolicy).toBe("no-referrer");
+      }
+    }, { discrete: true });
   });
 });
 
@@ -209,6 +236,30 @@ describe("document import and export", () => {
     expect(exportEditorContent(markdownEditor, "markdown")).toContain("- First");
   });
 
+  it("removes external image sources from imported JSON even when an assetId is supplied", () => {
+    const sourceEditor = createTestEditor();
+    sourceEditor.update(() => {
+      $getRoot().append($createImageNode("data:image/png;base64,aGVsbG8="));
+    }, { discrete: true });
+    const serialized = JSON.parse(exportEditorContent(sourceEditor, "json")) as {
+      root: { children: Array<Record<string, unknown>> };
+    };
+    serialized.root.children[0] = {
+      ...serialized.root.children[0],
+      assetId: "fake-asset",
+      src: "https://tracker.example/imported.png?viewer=canary",
+    };
+
+    const importedEditor = createTestEditor();
+    importEditorContent(importedEditor, "json", JSON.stringify(serialized));
+
+    importedEditor.getEditorState().read(() => {
+      const image = $getRoot().getFirstChild();
+      expect($isImageNode(image)).toBe(true);
+      if ($isImageNode(image)) expect(image.getSource()).toBe("");
+    });
+  });
+
   it("derives normalized plain text from editor state", () => {
     const editor = createTestEditor();
     editor.update(() => {
@@ -229,12 +280,21 @@ describe("document URL and file validation", () => {
     expect(sanitizeLinkUrl("javascript:alert(1)")).toBeNull();
   });
 
-  it("accepts supported image sources and MIME types only", () => {
-    expect(sanitizeImageSource("https://example.com/photo.webp")).toBe("https://example.com/photo.webp");
-    expect(sanitizeImageSource("data:image/png;base64,aGVsbG8=")).toBe("data:image/png;base64,aGVsbG8=");
-    expect(sanitizeImageSource("data:image/svg+xml;base64,PHN2Zz4=")).toBeNull();
+  it("accepts local data images but not ordinary external image URLs", () => {
+    expect(sanitizeImageDataSource("https://example.com/photo.webp")).toBeNull();
+    expect(sanitizeImageDataSource("data:image/png;base64,aGVsbG8=")).toBe("data:image/png;base64,aGVsbG8=");
+    expect(sanitizeImageDataSource("data:image/svg+xml;base64,PHN2Zz4=")).toBeNull();
     expect(isSupportedImageFile({ type: "image/gif" })).toBe(true);
     expect(isSupportedImageFile({ type: "image/svg+xml" })).toBe(false);
+  });
+
+  it("only resolves a remote source when it accompanies a server-shaped asset ID", () => {
+    const source = "https://r2.example/signed-image";
+    expect(resolveAuthorizedImageSource(source, "fake-asset")).toBe("");
+    expect(resolveAuthorizedImageSource(
+      source,
+      "1b26fe98-1f4d-4306-a620-454059304cf5",
+    )).toBe(source);
   });
 
   it("validates provider-specific embed URLs and creates privacy-aware embeds", () => {

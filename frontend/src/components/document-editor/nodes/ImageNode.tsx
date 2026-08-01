@@ -1,5 +1,5 @@
 import { useRef, useState, type ReactNode } from "react";
-import { ImagePlus, Link2, Trash2, Upload } from "lucide-react";
+import { ImagePlus, Trash2, Upload } from "lucide-react";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import {
   $applyNodeReplacement,
@@ -15,7 +15,8 @@ import {
 } from "lexical";
 import {
   readImageFileAsDataUrl,
-  sanitizeImageSource,
+  resolveAuthorizedImageSource,
+  sanitizeImageDataSource,
 } from "../editorUtils";
 
 export type SerializedImageNode = Spread<{
@@ -50,7 +51,6 @@ function ImageEditor({
   width,
 }: ImageEditorProps) {
   const [editor] = useLexicalComposerContext();
-  const [sourceInput, setSourceInput] = useState(src);
   const [error, setError] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -66,22 +66,10 @@ function ImageEditor({
     try {
       const nextSource = await readImageFileAsDataUrl(file);
       updateNode((node) => node.setSource(nextSource));
-      setSourceInput(nextSource);
       setError("");
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "The image could not be loaded.");
     }
-  }
-
-  function applyUrl() {
-    const nextSource = sanitizeImageSource(sourceInput);
-    if (!nextSource) {
-      setError("Enter an HTTPS image URL, or upload a PNG, JPEG, WebP, or GIF.");
-      return;
-    }
-    updateNode((node) => node.setSource(nextSource));
-    setSourceInput(nextSource);
-    setError("");
   }
 
   return (
@@ -90,6 +78,7 @@ function ImageEditor({
         <img
           src={src}
           alt={altText}
+          referrerPolicy="no-referrer"
           style={{
             width: `${width}px`,
             ...(height > 0 ? { height: `${height}px` } : {}),
@@ -98,26 +87,11 @@ function ImageEditor({
       ) : (
         <div className="document-image-placeholder">
           <ImagePlus size={28} />
-          <span>Add an image from your device or a URL</span>
+          <span>Add an image from your device</span>
         </div>
       )}
       <div className="document-node-controls document-image-controls">
         <div className="document-image-source-row">
-          <label>
-            <span>Image URL</span>
-            <input
-              type="url"
-              value={sourceInput}
-              onChange={(event) => setSourceInput(event.target.value)}
-              onBlur={() => {
-                if (!sourceInput.trim()) setSourceInput(src);
-              }}
-              placeholder="https://..."
-            />
-          </label>
-          <button type="button" onClick={applyUrl} aria-label="Use image URL" title="Use image URL">
-            <Link2 size={16} />
-          </button>
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
@@ -222,7 +196,7 @@ export class ImageNode extends DecoratorNode<ReactNode> {
 
   static importJSON(serializedNode: SerializedImageNode): ImageNode {
     return new ImageNode(
-      sanitizeImageSource(serializedNode.src) ?? "",
+      resolveAuthorizedImageSource(serializedNode.src, serializedNode.assetId ?? ""),
       serializedNode.altText,
       serializedNode.caption,
       serializedNode.width,
@@ -243,7 +217,7 @@ export class ImageNode extends DecoratorNode<ReactNode> {
   ) {
     super(key);
     this.__assetId = assetId;
-    this.__src = sanitizeImageSource(src) ?? "";
+    this.__src = resolveAuthorizedImageSource(src, assetId);
     this.__altText = altText;
     this.__caption = caption;
     this.__width = clampDimension(width, 640);
@@ -278,6 +252,7 @@ export class ImageNode extends DecoratorNode<ReactNode> {
     const image = document.createElement("img");
     image.src = this.getSource();
     image.alt = this.getAltText();
+    image.referrerPolicy = "no-referrer";
     image.width = this.getWidth();
     if (this.getHeight() > 0) image.height = this.getHeight();
     figure.append(image);
@@ -331,7 +306,7 @@ export class ImageNode extends DecoratorNode<ReactNode> {
 
   setSource(value: string): this {
     const writable = this.getWritable();
-    writable.__src = sanitizeImageSource(value) ?? "";
+    writable.__src = sanitizeImageDataSource(value) ?? "";
     writable.__assetId = "";
     return this;
   }

@@ -78,10 +78,10 @@ export const INSERT_COMMANDS: InsertCommand[] = [
     label: "Table",
   },
   {
-    description: "Upload a supported image or use a URL",
+    description: "Upload a PNG, JPEG, WebP, or GIF image",
     icon: Image,
     id: "image",
-    keywords: ["photo", "upload", "url"],
+    keywords: ["photo", "upload"],
     label: "Image",
   },
   {

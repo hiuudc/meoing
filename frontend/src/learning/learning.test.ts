@@ -373,6 +373,123 @@ describe("lesson schema", () => {
     })).not.toThrow();
   });
 
+  it("bounds duplicate-label answer-bank composition with an impossible suffix", () => {
+    const translation = lesson.questions.find(
+      (question): question is Extract<LessonQuestion, { type: "translation" }> => question.type === "translation",
+    )!;
+    const repeatedTokens = Array.from({ length: 30 }, (_, index) => ({
+      id: `repeat-${index}`,
+      label: "go",
+    }));
+    const parsed = lessonQuestionSchema.safeParse({
+      ...translation,
+      referenceAnswer: `${Array.from({ length: 29 }, () => "go").join(" ")} x.`,
+      answerBank: {
+        tokens: repeatedTokens,
+        separator: "space",
+        defaultMode: "bank",
+      },
+    });
+
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues.some((issue) => issue.message.includes("compose at least one complete answer")))
+        .toBe(true);
+    }
+  }, 1_000);
+
+  it("preserves repeated answer-bank tokens needed by a valid composition", () => {
+    const translation = lesson.questions.find(
+      (question): question is Extract<LessonQuestion, { type: "translation" }> => question.type === "translation",
+    )!;
+
+    expect(() => lessonQuestionSchema.parse({
+      ...translation,
+      referenceAnswer: "go go go.",
+      answerBank: {
+        tokens: [
+          { id: "go-1", label: "go" },
+          { id: "go-2", label: "go" },
+          { id: "go-3", label: "go" },
+          { id: "distractor", label: "stay" },
+        ],
+        separator: "space",
+        defaultMode: "bank",
+      },
+    })).not.toThrow();
+  });
+
+  it("rejects pathological overlapping compositions at a deterministic state limit", () => {
+    const translation = lesson.questions.find(
+      (question): question is Extract<LessonQuestion, { type: "translation" }> => question.type === "translation",
+    )!;
+    const overlappingTokens = Array.from({ length: 30 }, (_, index) => ({
+      id: `overlap-${index}`,
+      label: "a".repeat(index + 1),
+    }));
+    const parsed = lessonQuestionSchema.safeParse({
+      ...translation,
+      referenceAnswer: `${"a".repeat(180)} ${"a".repeat(50)} b.`,
+      answerBank: {
+        tokens: overlappingTokens,
+        separator: "none",
+        defaultMode: "bank",
+      },
+    });
+
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues.some((issue) => issue.message.includes("validation complexity limit")))
+        .toBe(true);
+    }
+  }, 1_000);
+
+  it("bounds aggregate composition work across a maximum-size lesson envelope", () => {
+    const correction = lesson.questions.find(
+      (question): question is Extract<LessonQuestion, { type: "errorCorrection" }> => question.type === "errorCorrection",
+    )!;
+    const overlappingTokens = Array.from({ length: 6 }, (_, index) => ({
+      id: `aggregate-${index}`,
+      label: "a".repeat(index + 1),
+    })).concat({ id: "aggregate-distractor", label: "c" });
+    const pathologicalQuestion = {
+      ...correction,
+      acceptedAnswers: [`${"a".repeat(21)}b.`],
+      answerBank: {
+        tokens: overlappingTokens,
+        separator: "none" as const,
+        defaultMode: "bank" as const,
+      },
+    };
+
+    const singleQuestion = lessonQuestionSchema.safeParse(pathologicalQuestion);
+    expect(singleQuestion.success).toBe(false);
+    if (!singleQuestion.success) {
+      expect(singleQuestion.error.issues.some((issue) => issue.message.includes("complexity limit")))
+        .toBe(false);
+    }
+
+    const parsed = lessonSchema.safeParse({
+      targetLanguage: "English",
+      questions: Array.from({ length: 23 }, (_, index) => ({
+        ...pathologicalQuestion,
+        id: `aggregate-primary-${index}`,
+      })),
+      questionAlternates: Array.from({ length: 23 }, (_, index) => ({
+        questionId: `aggregate-primary-${index}`,
+        question: {
+          ...pathologicalQuestion,
+          id: `aggregate-alternate-${index}`,
+        },
+      })),
+    });
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues.some((issue) => issue.message.includes("validation complexity limit")))
+        .toBe(true);
+    }
+  }, 1_500);
+
   it("allows a longer token only when it exactly fills one declared blank", () => {
     const fillBlank = questions.find(
       (question): question is Extract<LessonQuestion, { type: "fillBlank" }> => question.type === "fillBlank",

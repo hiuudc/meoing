@@ -22,7 +22,7 @@ grant meoing_runtime to meoing_pgtap_executor
 grant usage on schema extensions to meoing_runtime;
 grant execute on all functions in schema extensions to meoing_runtime;
 
-select plan(140);
+select plan(148);
 
 select ok(
   case
@@ -893,6 +893,64 @@ select throws_ok(
   'a user cannot authorize download of an asset from another collection'
 );
 
+select throws_ok(
+  format(
+    $query$select private.api_unit_create(
+      jsonb_build_object(
+        'collectionId', %L,
+        'name', 'External image only',
+        'languageCode', 'en',
+        'words', '[]'::jsonb,
+        'phrases', '[]'::jsonb,
+        'sentences', '[]'::jsonb,
+        'documents', '[{"title":"Unsafe","content":{"root":{"children":[{"type":"meoi-image","src":"https://tracker.example/pixel.png"}]}}}]'::jsonb
+      )
+    )$query$,
+    (select value from test_ids where key = 'collection_one')
+  ),
+  '23514',
+  null,
+  'unit creation rejects a persisted external image without an asset ID'
+);
+
+select throws_ok(
+  format(
+    $query$select private.api_unit_create(
+      jsonb_build_object(
+        'collectionId', %L,
+        'name', 'Asset image with transient URL',
+        'languageCode', 'en',
+        'words', '[]'::jsonb,
+        'phrases', '[]'::jsonb,
+        'sentences', '[]'::jsonb,
+        'documents', '[{"title":"Unsafe","content":{"root":{"children":[{"type":"meoi-image","assetId":"50000000-0000-4000-8000-000000000001","src":"https://signed.example/temporary.png"}]}}}]'::jsonb
+      )
+    )$query$,
+    (select value from test_ids where key = 'collection_one')
+  ),
+  '23514',
+  null,
+  'unit creation rejects transient image URLs even when an asset ID is present'
+);
+
+select is(
+  private.sanitize_unit_documents_images(
+    '[{"title":"Legacy","content":{"root":{"children":[{"type":"meoi-image","assetId":"50000000-0000-4000-8000-000000000001","src":"https://tracker.example/pixel.png","altText":"kept"}]}}}]'::jsonb,
+    (select value from test_ids where key = 'collection_one')
+  ),
+  '[{"title":"Legacy","content":{"root":{"children":[{"type":"meoi-image","assetId":"50000000-0000-4000-8000-000000000001","altText":"kept"}]}}}]'::jsonb,
+  'legacy cleanup strips src while retaining an authorized asset-backed image'
+);
+
+select ok(
+  not has_function_privilege(
+    'meoing_runtime',
+    to_regprocedure('private.sanitize_unit_documents_images(jsonb,uuid)'),
+    'execute'
+  ),
+  'runtime callers cannot invoke the privileged legacy image sanitizer directly'
+);
+
 insert into test_ids (key, value)
 select
   'unit_one',
@@ -907,7 +965,7 @@ select
         'words', '[{"text":"go","translation":"đi","notes":"verb"},"went"]'::jsonb,
         'phrases', '["go home"]'::jsonb,
         'sentences', '["I went home."]'::jsonb,
-        'documents', '[{"title":"Notes","content":{"root":{"children":[{"type":"meoi-image","assetId":"50000000-0000-4000-8000-000000000001"}]}}}]'::jsonb
+        'documents', '[{"title":"Notes","content":{"root":{"children":[{"type":"meoi-image","assetId":"50000000-0000-4000-8000-000000000001","src":""}]}}}]'::jsonb
       )
     ) ->> 'id'
   )::uuid;
@@ -1013,6 +1071,37 @@ select throws_ok(
   '42501',
   'ASSET_REFERENCE_FORBIDDEN',
   'a unit cannot attach an asset from another collection'
+);
+
+select throws_ok(
+  format(
+    $$select private.api_unit_update(
+      jsonb_build_object(
+        'unitId', %L,
+        'expectedRevision', 1,
+        'name', 'External source attempt',
+        'languageCode', 'en',
+        'words', '[{"text":"go","translation":"Ä‘i","notes":"verb"},"went"]'::jsonb,
+        'phrases', '["go home"]'::jsonb,
+        'sentences', '["I went home."]'::jsonb,
+        'documents', '[{"title":"Unsafe","content":{"root":{"children":[{"type":"meoi-image","assetId":"50000000-0000-4000-8000-000000000001","src":"https://tracker.example/pixel.png"}]}}}]'::jsonb
+      )
+    )$$,
+    (select value from test_ids where key = 'unit_one')
+  ),
+  '23514',
+  null,
+  'unit updates reject persisted image source URLs'
+);
+
+select is(
+  (
+    select revision
+    from app.units
+    where id = (select value from test_ids where key = 'unit_one')
+  ),
+  1::bigint,
+  'a rejected external image update leaves the unit revision unchanged'
 );
 
 select throws_ok(
@@ -1122,6 +1211,83 @@ select throws_ok(
   'REVISION_CONFLICT',
   'a stale unit revision restore is rejected'
 );
+
+insert into test_ids (key, value)
+select
+  'unit_legacy_image',
+  (
+    private.api_unit_create(
+      jsonb_build_object(
+        'collectionId', (select value from test_ids where key = 'collection_one'),
+        'name', 'Legacy image restore',
+        'languageCode', 'en',
+        'words', '[]'::jsonb,
+        'phrases', '[]'::jsonb,
+        'sentences', '[]'::jsonb,
+        'documents', '[{"title":"Legacy","content":{"root":{"children":[]}}}]'::jsonb
+      )
+    ) ->> 'id'
+  )::uuid;
+
+-- Simulate a pre-invariant snapshot. NOT VALID keeps the historical row in
+-- place while still checking the new restored revision written by the RPC.
+alter table app.unit_revisions
+  drop constraint unit_revisions_persisted_images_are_asset_backed;
+
+update app.unit_revisions
+set snapshot = jsonb_set(
+  snapshot,
+  '{documents}',
+  '[{"title":"Legacy","content":{"root":{"children":[{"type":"meoi-image","src":"https://tracker.example/pixel.png"}]}}}]'::jsonb,
+  true
+)
+where unit_id = (select value from test_ids where key = 'unit_legacy_image')
+  and revision = 1;
+
+alter table app.unit_revisions
+  add constraint unit_revisions_persisted_images_are_asset_backed
+  check (
+    private.unit_documents_have_safe_images(
+      coalesce(snapshot -> 'documents', '[]'::jsonb)
+    )
+  )
+  not valid;
+
+select lives_ok(
+  format(
+    $$select private.api_unit_revision_restore(
+      jsonb_build_object(
+        'unitId', %L,
+        'revision', 1,
+        'expectedRevision', 1
+      )
+    )$$,
+    (select value from test_ids where key = 'unit_legacy_image')
+  ),
+  'restoring a legacy snapshot sanitizes an external-only image'
+);
+
+select is(
+  (
+    select documents
+    from app.units
+    where id = (select value from test_ids where key = 'unit_legacy_image')
+  ),
+  '[{"title":"Legacy","content":{"root":{"children":[]}}}]'::jsonb,
+  'legacy restore removes the unsafe image while preserving surrounding content'
+);
+
+delete from app.units
+where id = (select value from test_ids where key = 'unit_legacy_image');
+select set_config('app.maintenance_cleanup', 'on', true);
+delete from app.collection_audit_logs
+where target_type = 'units'
+  and target_id = (select value from test_ids where key = 'unit_legacy_image');
+select set_config('app.maintenance_cleanup', 'off', true);
+delete from test_ids where key = 'unit_legacy_image';
+
+alter table app.unit_revisions
+  validate constraint unit_revisions_persisted_images_are_asset_backed;
 
 select throws_ok(
   format(

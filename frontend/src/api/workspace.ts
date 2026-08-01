@@ -127,7 +127,7 @@ async function documentFromWire(
     : typeof rawContent === "string"
       ? rawContent
       : await hydrateLexicalDocumentForEditing(api, rawContent, assetUrlCache)
-        .catch(() => JSON.stringify(rawContent));
+        .catch(() => JSON.stringify(stripPersistedImageSources(rawContent)));
   return {
     id: `${unitId}:document:${index}`,
     unitId,
@@ -294,16 +294,14 @@ export function restoreDeletedUnit(
   );
 }
 
-function stripAuthorizedAssetSources(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stripAuthorizedAssetSources);
+function stripPersistedImageSources(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripPersistedImageSources);
   if (!value || typeof value !== "object") return value;
   const record = value as Record<string, unknown>;
   const next = Object.fromEntries(
-    Object.entries(record).map(([key, child]) => [key, stripAuthorizedAssetSources(child)]),
+    Object.entries(record).map(([key, child]) => [key, stripPersistedImageSources(child)]),
   );
-  if (record.type === "meoi-image" && typeof record.assetId === "string" && record.assetId) {
-    next.src = "";
-  }
+  if (record.type === "meoi-image") next.src = "";
   return next;
 }
 
@@ -312,7 +310,7 @@ function parseLexicalContent(content: string | undefined): unknown {
   try {
     const parsed = JSON.parse(content);
     return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? stripAuthorizedAssetSources(parsed)
+      ? stripPersistedImageSources(parsed)
       : {};
   } catch {
     return {};

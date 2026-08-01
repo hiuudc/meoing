@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createEmptyWorkspaceState } from "../store";
 import type { ApiClient } from "./client";
 import {
+  loadCloudWorkspace,
   loadDeletedCollections,
   loadDeletedUnits,
   restoreDeletedUnit,
@@ -55,6 +56,59 @@ describe("cloud unit serialization", () => {
     expect((serialized.documents[0].content as {
       root: { children: Array<{ src: string; assetId: string }> };
     }).root.children[0]).toEqual({ type: "meoi-image", assetId: "asset-1", src: "" });
+  });
+
+  it("does not restore a persisted external source when asset authorization fails", async () => {
+    const get = vi.fn(async (path: string) => {
+      if (path === "/v1/collections") {
+        return { data: { items: [{ id: "collection", name: "Collection" }], nextCursor: null } };
+      }
+      if (path === "/v1/settings/user") return { data: {} };
+      if (path.startsWith("/v1/settings?")) {
+        return { data: { items: [] } };
+      }
+      if (path === "/v1/collections/collection/units") {
+        return {
+          data: {
+            items: [{
+              id: "unit",
+              collectionId: "collection",
+              name: "Unit",
+              words: [],
+              phrases: [],
+              sentences: [],
+              documents: [{
+                title: "Legacy image",
+                content: {
+                  root: {
+                    children: [{
+                      type: "meoi-image",
+                      assetId: "unavailable-asset",
+                      src: "https://tracker.example/fallback.png",
+                    }],
+                  },
+                },
+              }],
+            }],
+            nextCursor: null,
+          },
+        };
+      }
+      throw new Error(`Unexpected GET ${path}`);
+    });
+    const post = vi.fn().mockRejectedValue(new Error("Asset authorization failed"));
+
+    const state = await loadCloudWorkspace({ get, post } as unknown as ApiClient);
+    const content = JSON.parse(state.documents["unit:document:0"].content ?? "{}") as {
+      root: { children: Array<Record<string, unknown>> };
+    };
+
+    expect(content.root.children[0]).toMatchObject({
+      type: "meoi-image",
+      assetId: "unavailable-asset",
+      src: "",
+    });
+    expect(JSON.stringify(content)).not.toContain("tracker.example");
   });
 
   it("loads only restorable collections through the includeDeleted contract", async () => {
