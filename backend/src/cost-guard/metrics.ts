@@ -68,6 +68,8 @@ const CLASS_B_ACTIONS = new Set([
 
 const FREE_ACTIONS = new Set([
   "DeleteObject",
+  // R2 GraphQL reports an S3 bulk deletion with this plural action name.
+  "DeleteObjects",
   "DeleteBucket",
   "AbortMultipartUpload",
 ]);
