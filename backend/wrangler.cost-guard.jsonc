@@ -1,0 +1,140 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "meoing-cost-guard",
+  "main": "src/cost-guard-worker.ts",
+  "compatibility_date": "2026-07-30",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [],
+  "secrets": {
+    "required": ["CLOUDFLARE_COST_GUARD_TOKEN", "ALERT_RECIPIENT"]
+  },
+  "limits": {
+    "cpu_ms": 50,
+    "subrequests": 10
+  },
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": false
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.01
+    }
+  },
+  "vars": {
+    "APP_ENV": "local",
+    "CLOUDFLARE_ACCOUNT_ID": "00000000000000000000000000000000",
+    "BILLING_CYCLE_ANCHOR_DAY_UTC": "30",
+    "WORKERS_REQUEST_GUARD_LIMIT": "1350000",
+    "WORKERS_INCLUDED_CPU_MS": "30000000",
+    "R2_INCLUDED_CLASS_A_OPERATIONS": "1000000",
+    "R2_INCLUDED_CLASS_B_OPERATIONS": "10000000",
+    "R2_INCLUDED_STORAGE_BYTES": "10000000000",
+    "PROTECTED_CUSTOM_DOMAINS": "[{\"hostname\":\"api.local.meoing.invalid\",\"service\":\"meoing-api\"}]",
+    "ALERT_FROM": "no-reply@auth.meoing.com"
+  },
+  "r2_buckets": [
+    {
+      "binding": "STATE",
+      "bucket_name": "meoing-cost-guard-local"
+    }
+  ],
+  "send_email": [
+    {
+      "name": "ALERT_EMAIL",
+      "allowed_sender_addresses": ["no-reply@auth.meoing.com"]
+    }
+  ],
+  "triggers": {
+    "crons": []
+  },
+  "env": {
+    "staging": {
+      "account_id": "29e80074abc5eb106165d2349db7ca56",
+      "workers_dev": false,
+      "preview_urls": false,
+      "routes": [],
+      "secrets": {
+        "required": ["CLOUDFLARE_COST_GUARD_TOKEN", "ALERT_RECIPIENT"]
+      },
+      "limits": {
+        "cpu_ms": 50,
+        "subrequests": 10
+      },
+      "vars": {
+        "APP_ENV": "staging",
+        "CLOUDFLARE_ACCOUNT_ID": "29e80074abc5eb106165d2349db7ca56",
+        "BILLING_CYCLE_ANCHOR_DAY_UTC": "30",
+        "WORKERS_REQUEST_GUARD_LIMIT": "1350000",
+        "WORKERS_INCLUDED_CPU_MS": "30000000",
+        "R2_INCLUDED_CLASS_A_OPERATIONS": "1000000",
+        "R2_INCLUDED_CLASS_B_OPERATIONS": "10000000",
+        "R2_INCLUDED_STORAGE_BYTES": "10000000000",
+        "PROTECTED_CUSTOM_DOMAINS": "[{\"hostname\":\"api-staging.meoing.com\",\"service\":\"meoing-api-staging\"}]",
+        "ALERT_FROM": "no-reply@auth.meoing.com"
+      },
+      "r2_buckets": [
+        {
+          "binding": "STATE",
+          "bucket_name": "meoing-cost-guard-staging"
+        }
+      ],
+      "send_email": [
+        {
+          "name": "ALERT_EMAIL",
+          "destination_address": "hiuudc@gmail.com",
+          "allowed_sender_addresses": ["no-reply@auth.meoing.com"]
+        }
+      ],
+      "triggers": {
+        "crons": []
+      }
+    },
+    "production": {
+      "account_id": "29e80074abc5eb106165d2349db7ca56",
+      "workers_dev": false,
+      "preview_urls": false,
+      "routes": [],
+      "secrets": {
+        "required": ["CLOUDFLARE_COST_GUARD_TOKEN", "ALERT_RECIPIENT"]
+      },
+      "limits": {
+        "cpu_ms": 50,
+        "subrequests": 10
+      },
+      "vars": {
+        "APP_ENV": "production",
+        "CLOUDFLARE_ACCOUNT_ID": "29e80074abc5eb106165d2349db7ca56",
+        "BILLING_CYCLE_ANCHOR_DAY_UTC": "30",
+        "WORKERS_REQUEST_GUARD_LIMIT": "1350000",
+        "WORKERS_INCLUDED_CPU_MS": "30000000",
+        "R2_INCLUDED_CLASS_A_OPERATIONS": "1000000",
+        "R2_INCLUDED_CLASS_B_OPERATIONS": "10000000",
+        "R2_INCLUDED_STORAGE_BYTES": "10000000000",
+        "PROTECTED_CUSTOM_DOMAINS": "[{\"hostname\":\"api-staging.meoing.com\",\"service\":\"meoing-api-staging\"},{\"hostname\":\"api.meoing.com\",\"service\":\"meoing-api-production\"}]",
+        "ALERT_FROM": "no-reply@auth.meoing.com"
+      },
+      "r2_buckets": [
+        {
+          "binding": "STATE",
+          "bucket_name": "meoing-cost-guard-production"
+        }
+      ],
+      "send_email": [
+        {
+          "name": "ALERT_EMAIL",
+          "destination_address": "hiuudc@gmail.com",
+          "allowed_sender_addresses": ["no-reply@auth.meoing.com"]
+        }
+      ],
+      "triggers": {
+        "crons": ["*/5 * * * *"]
+      }
+    }
+  }
+}

@@ -808,10 +808,13 @@ export interface components {
     schemas: {
         LiveHealth: {
             environment: string;
+            supabaseProjectRef: string;
             /** @enum {string} */
             status: "ok";
         };
         ReadyHealth: {
+            databaseEnvironment: string;
+            databaseProjectRef: string;
             /** @enum {string} */
             status: "ready";
         };
@@ -10498,6 +10501,15 @@ export interface operations {
                             requestId: string;
                         };
                     };
+                };
+            };
+            /** @description Upload or storage budget exhausted */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
                 };
             };
         };

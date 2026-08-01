@@ -9,7 +9,7 @@ function maintenanceEnv(
   return {
     APP_ENV: "test",
     FILES: { delete: deleteObjects },
-    SUPABASE_SERVICE_ROLE_KEY: "test-service-role",
+    SUPABASE_SECRET_KEY: "sb_secret_test",
     SUPABASE_URL: "https://test.supabase.co",
   } as unknown as MaintenanceEnv;
 }
@@ -47,7 +47,7 @@ describe("two-phase maintenance", () => {
     );
 
     const entries = consoleLog.mock.calls
-      .map(([entry]) => JSON.parse(String(entry)) as Record<string, unknown>);
+      .map(([entry]) => entry as Record<string, unknown>);
     expect(entries).toContainEqual(expect.objectContaining({
       event: "maintenance_observation",
       globalStatsP95Bytes: 12_000,
@@ -81,8 +81,11 @@ describe("two-phase maintenance", () => {
       },
       finalize,
     };
-    const fetcher = vi.fn(async () => {
-      events.push("auth");
+    const fetcher = vi.fn(async (
+      input: RequestInfo | URL,
+      _init?: RequestInit,
+    ) => {
+      events.push(String(input).includes("?page=1") ? "auth-canary" : "auth-delete");
       return new Response(null, { status: 204 });
     });
     const env = maintenanceEnv(async () => {
@@ -91,7 +94,10 @@ describe("two-phase maintenance", () => {
 
     await runMaintenance(env, repository, fetcher);
 
-    expect(events).toEqual(["cleanup", "r2", "auth", "finalize"]);
+    expect(events).toEqual(["auth-canary", "cleanup", "r2", "auth-delete", "finalize"]);
+    const authRequestHeaders = new Headers(fetcher.mock.calls[1]?.[1]?.headers);
+    expect(authRequestHeaders.get("apikey")).toBe("sb_secret_test");
+    expect(authRequestHeaders.has("authorization")).toBe(false);
     expect(finalize).toHaveBeenCalledWith({
       collectionIds: ["25112aab-e87b-4cb6-8bd2-74ee8274fb83"],
       assetIds: ["1b26fe98-1f4d-4306-a620-454059304cf5"],
@@ -112,15 +118,14 @@ describe("two-phase maintenance", () => {
       }),
       finalize,
     };
-    const fetcher = vi.fn(async (
-      _input: RequestInfo | URL,
-      _init?: RequestInit,
-    ) => new Response(null, { status: 404 }));
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      .mockResolvedValueOnce(new Response(null, { status: 404 }));
 
     await runMaintenance(maintenanceEnv(async () => undefined), repository, fetcher);
 
-    expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(fetcher.mock.calls[0]?.[0]).toContain(
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher.mock.calls[1]?.[0]).toContain(
       "/auth/v1/admin/users/101ed68b-c50b-4b35-b44c-45a0ef227f6e",
     );
     expect(finalize).toHaveBeenCalledTimes(1);
@@ -137,14 +142,20 @@ describe("two-phase maintenance", () => {
       }),
       finalize,
     };
-    const fetcher = vi.fn(async () => new Response(null, { status: 204 }));
+    const fetcher = vi.fn(async (
+      _input: RequestInfo | URL,
+      _init?: RequestInit,
+    ) => new Response(null, { status: 204 }));
     const env = maintenanceEnv(async () => {
       throw new Error("R2 unavailable");
     });
 
     await expect(runMaintenance(env, repository, fetcher)).rejects.toThrow("R2 unavailable");
     expect(finalize).not.toHaveBeenCalled();
-    expect(fetcher).not.toHaveBeenCalled();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls[0]?.[0]).toContain(
+      "/auth/v1/admin/users?page=1&per_page=1",
+    );
   });
 
   it("keeps staged candidates eligible when Auth deletion fails and retries next run", async () => {
@@ -165,7 +176,9 @@ describe("two-phase maintenance", () => {
     const repository: MaintenanceRepository = { cleanup, finalize };
     const deleteObjects = vi.fn(async () => undefined);
     const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
       .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
       .mockResolvedValueOnce(new Response(null, { status: 204 }));
     const env = maintenanceEnv(deleteObjects);
 
@@ -180,12 +193,44 @@ describe("two-phase maintenance", () => {
 
     expect(cleanup).toHaveBeenCalledTimes(2);
     expect(deleteObjects).toHaveBeenCalledTimes(2);
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher).toHaveBeenCalledTimes(4);
     expect(finalize).toHaveBeenCalledTimes(1);
     expect(finalize).toHaveBeenCalledWith({
       collectionIds: [collectionId],
       assetIds: [assetId],
       authUserIds: [userId],
     });
+  });
+
+  it("fails closed before cleanup when the hosted Auth Admin secret is invalid", async () => {
+    const cleanup = vi.fn(async () => ({}));
+    const repository: MaintenanceRepository = {
+      cleanup,
+      finalize: async () => ({}),
+    };
+    const env = maintenanceEnv(async () => undefined);
+    env.APP_ENV = "staging";
+    env.SUPABASE_SECRET_KEY = "legacy-service-role-key";
+    const fetcher = vi.fn(async () => new Response(null, { status: 200 }));
+
+    await expect(runMaintenance(env, repository, fetcher)).rejects.toThrow(
+      "Supabase Auth Admin secret is not a dedicated secret key",
+    );
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(cleanup).not.toHaveBeenCalled();
+  });
+
+  it("fails closed before cleanup when the Auth Admin canary is rejected", async () => {
+    const cleanup = vi.fn(async () => ({}));
+    const repository: MaintenanceRepository = {
+      cleanup,
+      finalize: async () => ({}),
+    };
+    const fetcher = vi.fn(async () => new Response(null, { status: 401 }));
+
+    await expect(
+      runMaintenance(maintenanceEnv(async () => undefined), repository, fetcher),
+    ).rejects.toThrow("Supabase Auth Admin canary failed");
+    expect(cleanup).not.toHaveBeenCalled();
   });
 });

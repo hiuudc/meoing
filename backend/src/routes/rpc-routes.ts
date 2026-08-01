@@ -1253,6 +1253,10 @@ export function registerFileRoutes(app: OpenAPIHono<AppBindings>): void {
           },
         },
       },
+      429: {
+        description: "Upload or storage budget exhausted",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
     },
   });
 

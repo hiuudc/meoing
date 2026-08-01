@@ -18,6 +18,7 @@ export type ErrorCode =
   | "NOT_FOUND"
   | "RATE_LIMITED"
   | "REVISION_CONFLICT"
+  | "STORAGE_BUDGET_REACHED"
   | "USERNAME_COOLDOWN"
   | "USERNAME_RESERVED"
   | `${string}_FORBIDDEN`
@@ -35,6 +36,7 @@ export type ErrorCode =
 
 export class ApiError extends Error {
   readonly code: ErrorCode;
+  readonly internalCode?: string;
   readonly status: ContentfulStatusCode;
   readonly details?: Record<string, unknown>;
 
@@ -43,12 +45,14 @@ export class ApiError extends Error {
     code: ErrorCode,
     message: string,
     details?: Record<string, unknown>,
+    internalCode?: string,
   ) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
     this.details = details;
+    this.internalCode = internalCode;
   }
 }
 
@@ -138,6 +142,14 @@ function applicationError(code: string): ApiError | null {
   if (code === "PROGRESS_TOO_LARGE") {
     return new ApiError(413, "BODY_TOO_LARGE", "The progress record is too large");
   }
+  if (code === "STORAGE_BUDGET_REACHED") {
+    return new ApiError(
+      429,
+      "STORAGE_BUDGET_REACHED",
+      "The storage budget has been reached; uploads are temporarily disabled",
+      { retryable: false },
+    );
+  }
   if (code.endsWith("_NOT_FOUND") || code === "REVISION_NOT_FOUND") {
     return new ApiError(404, code as ErrorCode, "The requested resource was not found");
   }
@@ -173,33 +185,69 @@ export function mapDatabaseError(error: unknown): ApiError {
   if (applicationCode) {
     const mapped = applicationError(applicationCode);
     if (mapped) {
-      return mapped;
+      return new ApiError(
+        mapped.status,
+        mapped.code,
+        mapped.message,
+        mapped.details,
+        error.code,
+      );
     }
   }
 
+  const databaseError = (
+    status: ContentfulStatusCode,
+    code: ErrorCode,
+    message: string,
+  ): ApiError => new ApiError(status, code, message, undefined, error.code);
+
   switch (error.code) {
     case "22023":
-      return new ApiError(400, "INVALID_REQUEST", "The request is invalid");
+      return databaseError(400, "INVALID_REQUEST", "The request is invalid");
     case "28000":
-      return new ApiError(401, "AUTH_REQUIRED", "Authentication is required");
+      return databaseError(401, "AUTH_REQUIRED", "Authentication is required");
     case "40001":
-      return new ApiError(
+      return databaseError(
         409,
         "REVISION_CONFLICT",
         "The resource changed; reload it and try again",
       );
     case "54000":
-      return new ApiError(429, "RATE_LIMITED", "The request quota has been reached; retry later");
+      return databaseError(
+        429,
+        "RATE_LIMITED",
+        "The request quota has been reached; retry later",
+      );
     case "23505":
     case "23503":
     case "23514":
-      return new ApiError(409, "CONFLICT", "The requested change conflicts with current data");
+      return databaseError(
+        409,
+        "CONFLICT",
+        "The requested change conflicts with current data",
+      );
     case "42501":
-      return new ApiError(403, "FORBIDDEN", "You do not have permission to perform this action");
+      return databaseError(
+        403,
+        "FORBIDDEN",
+        "You do not have permission to perform this action",
+      );
     case "57014":
-      return new ApiError(503, "INTERNAL_ERROR", "The database operation timed out");
+      return databaseError(503, "INTERNAL_ERROR", "The database operation timed out");
+    case "57P03":
+      return databaseError(
+        503,
+        "INTERNAL_ERROR",
+        "The database identity could not be verified",
+      );
+    case "53300":
+      return databaseError(
+        503,
+        "INTERNAL_ERROR",
+        "The database is temporarily unavailable",
+      );
     default:
-      return new ApiError(500, "INTERNAL_ERROR", "An unexpected database error occurred");
+      return databaseError(500, "INTERNAL_ERROR", "An unexpected database error occurred");
   }
 }
 

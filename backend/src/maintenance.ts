@@ -7,6 +7,30 @@ export type MaintenanceFetch = (
   init?: RequestInit,
 ) => Promise<Response>;
 
+async function verifyAuthAdminAccess(
+  env: MaintenanceEnv,
+  fetcher: MaintenanceFetch,
+): Promise<void> {
+  if (
+    env.APP_ENV !== "local" &&
+    (typeof env.SUPABASE_SECRET_KEY !== "string" ||
+      !env.SUPABASE_SECRET_KEY.startsWith("sb_secret_"))
+  ) {
+    throw new Error("Supabase Auth Admin secret is not a dedicated secret key");
+  }
+
+  const baseUrl = env.SUPABASE_URL.replace(/\/+$/, "");
+  const response = await fetcher(`${baseUrl}/auth/v1/admin/users?page=1&per_page=1`, {
+    headers: {
+      accept: "application/json",
+      apikey: env.SUPABASE_SECRET_KEY,
+    },
+  });
+  if (!response.ok) {
+    throw new Error("Supabase Auth Admin canary failed");
+  }
+}
+
 function stringArray(value: JsonValue | undefined): string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string") ? value : [];
 }
@@ -28,8 +52,7 @@ async function deleteAuthUsers(
         fetcher(`${baseUrl}/auth/v1/admin/users/${encodeURIComponent(userId)}`, {
           method: "DELETE",
           headers: {
-            apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-            authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+            apikey: env.SUPABASE_SECRET_KEY,
           },
         }),
       ),
@@ -45,6 +68,8 @@ export async function runMaintenance(
   repository: MaintenanceRepository,
   fetcher: MaintenanceFetch = fetch,
 ): Promise<JsonObject> {
+  await verifyAuthAdminAccess(env, fetcher);
+
   const result = await repository.cleanup({
     batchSize: 500,
     now: new Date().toISOString(),

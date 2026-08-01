@@ -4,15 +4,21 @@
   "main": "src/api-worker.ts",
   "compatibility_date": "2026-07-30",
   "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
   "placement": {
     "mode": "smart"
+  },
+  "limits": {
+    "cpu_ms": 20,
+    "subrequests": 16
   },
   "observability": {
     "enabled": true,
     "logs": {
       "enabled": true,
       "head_sampling_rate": 1,
-      "invocation_logs": true
+      "invocation_logs": false
     },
     "traces": {
       "enabled": true,
@@ -71,12 +77,22 @@
   // Bindings and vars are deliberately repeated because Wrangler environments do not inherit them.
   "env": {
     "staging": {
+      "account_id": "29e80074abc5eb106165d2349db7ca56",
+      "workers_dev": false,
+      "preview_urls": false,
+      "placement": {
+        "region": "aws:ap-northeast-1"
+      },
+      "limits": {
+        "cpu_ms": 20,
+        "subrequests": 16
+      },
       "vars": {
         "APP_ENV": "staging",
-        "CORS_ORIGINS": "https://staging.meoing.app",
-        "SUPABASE_URL": "https://STAGING_PROJECT_REF.supabase.co",
+        "CORS_ORIGINS": "https://staging.meoing.com",
+        "SUPABASE_URL": "https://sdwuwmyrbdaarxokxmsf.supabase.co",
         "SUPABASE_JWT_AUDIENCE": "authenticated",
-        "R2_ACCOUNT_ID": "REPLACE_WITH_ACCOUNT_ID",
+        "R2_ACCOUNT_ID": "29e80074abc5eb106165d2349db7ca56",
         "R2_BUCKET_NAME": "meoing-files-staging",
         "PRESIGNED_UPLOAD_TTL_SECONDS": "900",
         "PRESIGNED_DOWNLOAD_TTL_SECONDS": "300"
@@ -84,7 +100,7 @@
       "hyperdrive": [
         {
           "binding": "HYPERDRIVE",
-          "id": "00000000000000000000000000000000"
+          "id": "9f551f4a12064b71877a2df108e2bcb9"
         }
       ],
       "r2_buckets": [
@@ -112,9 +128,15 @@
       ]
     },
     "production": {
+      "workers_dev": false,
+      "preview_urls": false,
+      "limits": {
+        "cpu_ms": 20,
+        "subrequests": 16
+      },
       "vars": {
         "APP_ENV": "production",
-        "CORS_ORIGINS": "https://meoing.app",
+        "CORS_ORIGINS": "https://meoing.com",
         "SUPABASE_URL": "https://PRODUCTION_PROJECT_REF.supabase.co",
         "SUPABASE_JWT_AUDIENCE": "authenticated",
         "R2_ACCOUNT_ID": "REPLACE_WITH_ACCOUNT_ID",

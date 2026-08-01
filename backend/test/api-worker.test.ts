@@ -14,6 +14,12 @@ const ACTOR: Actor = {
   sessionId: "session-id",
   tokenId: "token-id",
 };
+const DATABASE_IDENTITY = {
+  environment: env.APP_ENV,
+  supabaseProjectRef: env.APP_ENV === "local"
+    ? "local"
+    : new URL(env.SUPABASE_URL).hostname.split(".")[0] ?? "",
+};
 
 const ME: JsonValue = {
   userId: USER_ID,
@@ -74,7 +80,9 @@ class RecordingRepository implements DomainRepository {
     return response;
   }
 
-  async checkHealth(): Promise<void> {}
+  async checkHealth() {
+    return DATABASE_IDENTITY;
+  }
 }
 
 function appWith(repository: DomainRepository) {
@@ -102,6 +110,23 @@ async function request(
 }
 
 describe("Meoing API Worker", () => {
+  it("reports the bound Supabase project identity in liveness", async () => {
+    const response = await request(appWith(new RecordingRepository({})), "/health/live");
+    const payload = await response.json() as {
+      data: {
+        environment: string;
+        status: string;
+        supabaseProjectRef: string;
+      };
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.data.status).toBe("ok");
+    expect(payload.data.supabaseProjectRef).toBe(
+      new URL(env.SUPABASE_URL).hostname.split(".")[0],
+    );
+  });
+
   it("uses actor-wide rate-limit buckets instead of resource-specific keys", () => {
     expect(rateLimitKey(USER_ID, "GET", "/v1/units/first")).toBe(`${USER_ID}:read`);
     expect(rateLimitKey(USER_ID, "GET", "/v1/units/second")).toBe(`${USER_ID}:read`);
@@ -323,7 +348,7 @@ describe("Meoing API Worker", () => {
 
     const staleCalls: Array<{ operation: RpcOperation; input: JsonObject }> = [];
     const staleRepository: DomainRepository = {
-      checkHealth: async () => undefined,
+      checkHealth: async () => DATABASE_IDENTITY,
       call: async (operation, _actorId, input = {}) => {
         staleCalls.push({ operation, input });
         throw new ApiError(
@@ -435,6 +460,43 @@ describe("Meoing API Worker", () => {
       error: {
         code: "INTERNAL_ERROR",
         message: "The database is unavailable",
+      },
+    });
+  });
+
+  it("fails readiness when Hyperdrive reaches a different database identity", async () => {
+    const repository: DomainRepository = {
+      call: async () => ME,
+      checkHealth: async () => ({
+        environment: "production",
+        supabaseProjectRef: "aaaaaaaaaaaaaaaaaaaa",
+      }),
+    };
+    const response = await request(createApiApp({
+      repositoryFactory: () => repository,
+    }), "/health/ready");
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      error: {
+        code: "INTERNAL_ERROR",
+        message: "The database identity does not match the Worker environment",
+      },
+    });
+  });
+
+  it("reports the verified Hyperdrive database identity in readiness", async () => {
+    const response = await request(
+      appWith(new RecordingRepository({})),
+      "/health/ready",
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        databaseEnvironment: DATABASE_IDENTITY.environment,
+        databaseProjectRef: DATABASE_IDENTITY.supabaseProjectRef,
+        status: "ready",
       },
     });
   });

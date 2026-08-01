@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import pg from "pg";
 
-const { Client } = pg;
+const { Client, escapeIdentifier, escapeLiteral } = pg;
 
 const databaseUrl = process.env.DATABASE_URL?.trim();
 if (!databaseUrl) {
@@ -12,10 +12,16 @@ if (!databaseUrl) {
 }
 
 const runId = randomBytes(8).toString("hex");
+const runtimeLoginRole = `meoing_concurrency_${runId}`;
+const runtimeLoginPassword = randomBytes(32).toString("hex");
+const runtimeLoginRoleSql = escapeIdentifier(runtimeLoginRole);
+const runtimeLoginPasswordSql = escapeLiteral(runtimeLoginPassword);
 const ownerId = randomUUID();
 const firstMemberId = randomUUID();
 const secondMemberId = randomUUID();
 const userIds = [ownerId, firstMemberId, secondMemberId];
+const storageAssetIds = [randomUUID(), randomUUID()];
+const storagePrefix = `concurrency/${runId}`;
 const inviteTokenHash = createHash("sha256")
   .update(randomBytes(32))
   .digest("hex");
@@ -23,14 +29,58 @@ const inviteTokenHash = createHash("sha256")
 let collectionId;
 let inviteId;
 
-function clientConfig(label) {
+function runtimeDatabaseUrl() {
+  const url = new URL(databaseUrl);
+  url.username = runtimeLoginRole;
+  url.password = runtimeLoginPassword;
+  return url.toString();
+}
+
+function clientConfig(label, { runtime = false } = {}) {
   return {
-    connectionString: databaseUrl,
+    connectionString: runtime ? runtimeDatabaseUrl() : databaseUrl,
     application_name: `meoing-db-concurrency-${label}-${runId}`,
     connectionTimeoutMillis: 10_000,
     query_timeout: 15_000,
     statement_timeout: 15_000,
   };
+}
+
+async function assertLocalDatabase(client) {
+  const identity = await client.query(
+    "select environment from private.deployment_identity where singleton",
+  );
+  assert.equal(
+    identity.rows[0]?.environment,
+    "local",
+    "database concurrency acceptance is intentionally local-only",
+  );
+}
+
+async function createRuntimeLogin(client) {
+  await client.query(`
+    create role ${runtimeLoginRoleSql}
+      login
+      nosuperuser
+      noinherit
+      nocreatedb
+      nocreaterole
+      noreplication
+      nobypassrls
+      connection limit 4
+      password ${runtimeLoginPasswordSql}
+  `);
+}
+
+async function grantRuntimeLogin(client) {
+  await client.query(`
+    grant meoing_runtime to ${runtimeLoginRoleSql}
+      with admin false, inherit false, set true
+  `);
+}
+
+async function dropRuntimeLogin(client) {
+  await client.query(`drop role if exists ${runtimeLoginRoleSql}`);
 }
 
 function errorSummary(error) {
@@ -216,8 +266,8 @@ async function createMaxUseInvite(client) {
 }
 
 async function exerciseInviteRace() {
-  const firstClient = new Client(clientConfig("member-a"));
-  const secondClient = new Client(clientConfig("member-b"));
+  const firstClient = new Client(clientConfig("member-a", { runtime: true }));
+  const secondClient = new Client(clientConfig("member-b", { runtime: true }));
 
   try {
     await Promise.all([firstClient.connect(), secondClient.connect()]);
@@ -307,6 +357,117 @@ async function verifyRaceResult(client, attempts) {
   };
 }
 
+async function seedStorageBudget(client) {
+  await assertLocalDatabase(client);
+
+  await client.query(
+    `
+      insert into app.file_assets (
+        id,
+        owner_id,
+        r2_key,
+        original_filename,
+        mime_type,
+        expected_size_bytes,
+        expected_sha256
+      )
+      select
+        gen_random_uuid(),
+        $1::uuid,
+        $2::text || '/filler-' || item::text,
+        'budget.bin',
+        'application/pdf',
+        26214400,
+        decode(repeat('00', 32), 'hex')
+      from generate_series(1, 20) as item
+    `,
+    [ownerId, storagePrefix],
+  );
+}
+
+async function reservePreparedStorage(client, userId, assetId, suffix) {
+  try {
+    const key = `users/${userId}/${assetId}`;
+    const result = await client.query(
+      `
+        select private.api_file_create_pending(
+          jsonb_build_object(
+            'assetId', $1::uuid,
+            'key', $2::text,
+            'fileName', 'budget.pdf',
+            'contentType', 'application/pdf',
+            'idempotencyKey', $3::text,
+            'sizeBytes', 12582912,
+            'sha256', repeat('00', 32)
+          )
+        ) as value
+      `,
+      [assetId, key, `db-concurrency-storage-${suffix}-${runId}`],
+    );
+    await client.query("commit");
+    return result.rows[0]?.value;
+  } catch (error) {
+    await rollbackQuietly(client);
+    throw error;
+  }
+}
+
+async function exerciseStorageRace() {
+  const firstClient = new Client(clientConfig("storage-a", { runtime: true }));
+  const secondClient = new Client(clientConfig("storage-b", { runtime: true }));
+
+  try {
+    await Promise.all([firstClient.connect(), secondClient.connect()]);
+    await Promise.all([
+      prepareInviteAcceptance(firstClient, firstMemberId),
+      prepareInviteAcceptance(secondClient, secondMemberId),
+    ]);
+
+    return await Promise.allSettled([
+      reservePreparedStorage(firstClient, firstMemberId, storageAssetIds[0], "a"),
+      reservePreparedStorage(secondClient, secondMemberId, storageAssetIds[1], "b"),
+    ]);
+  } finally {
+    await Promise.allSettled([firstClient.end(), secondClient.end()]);
+  }
+}
+
+async function verifyStorageRace(client, attempts) {
+  const successes = attempts.filter((attempt) => attempt.status === "fulfilled");
+  const failures = attempts.filter((attempt) => attempt.status === "rejected");
+  assert.equal(successes.length, 1, "exactly one concurrent 12 MiB reservation must succeed");
+  assert.equal(failures.length, 1, "exactly one concurrent 12 MiB reservation must fail");
+  assert.equal(
+    failures[0].reason?.message,
+    "STORAGE_BUDGET_REACHED",
+    "the losing storage reservation must fail with STORAGE_BUDGET_REACHED",
+  );
+
+  const result = await client.query(
+    `
+      select
+        count(*) filter (where id = any($1::uuid[]))::integer as winner_count,
+        coalesce(sum(expected_size_bytes), 0)::bigint as reserved_bytes
+      from app.file_assets
+      where r2_key like $2::text || '/%'
+         or id = any($1::uuid[])
+    `,
+    [storageAssetIds, storagePrefix],
+  );
+  assert.equal(result.rows[0]?.winner_count, 1, "only one racing asset may be reserved");
+  assert.equal(
+    Number(result.rows[0]?.reserved_bytes),
+    536870912,
+    "concurrent reservations must stop exactly at the 0.5 GiB local budget",
+  );
+
+  return {
+    storageRejectedCount: failures.length,
+    storageReservedBytes: Number(result.rows[0]?.reserved_bytes),
+    storageWinnerCount: result.rows[0]?.winner_count,
+  };
+}
+
 async function cleanup(client) {
   await client.query("begin");
   try {
@@ -324,6 +485,10 @@ async function cleanup(client) {
       );
     }
     await client.query(
+      "delete from app.file_assets where r2_key like $1::text || '/%' or id = any($2::uuid[])",
+      [storagePrefix, storageAssetIds],
+    );
+    await client.query(
       "delete from auth.users where id = any($1::uuid[])",
       [userIds],
     );
@@ -336,31 +501,81 @@ async function cleanup(client) {
 
 async function main() {
   const setupClient = new Client(clientConfig("setup"));
-  let connected = false;
+  const runtimeSetupClient = new Client(
+    clientConfig("runtime-setup", { runtime: true }),
+  );
+  let setupConnected = false;
+  let localDatabaseVerified = false;
+  let runtimeSetupConnected = false;
+  let runtimeLoginCreated = false;
   let primaryError;
   let summary;
 
+  function recordTeardownError(stage, error) {
+    const teardownError = { stage, ...errorSummary(error) };
+    if (!primaryError) {
+      primaryError = error instanceof Error ? error : new Error(String(error));
+    }
+    if (primaryError && typeof primaryError === "object") {
+      primaryError.teardownErrors = [
+        ...(Array.isArray(primaryError.teardownErrors)
+          ? primaryError.teardownErrors
+          : []),
+        teardownError,
+      ];
+    }
+  }
+
   try {
     await setupClient.connect();
-    connected = true;
+    setupConnected = true;
+    await assertLocalDatabase(setupClient);
+    localDatabaseVerified = true;
+    await createRuntimeLogin(setupClient);
+    runtimeLoginCreated = true;
+    await grantRuntimeLogin(setupClient);
     await seedUsers(setupClient);
-    await createMaxUseInvite(setupClient);
+    await runtimeSetupClient.connect();
+    runtimeSetupConnected = true;
+    await createMaxUseInvite(runtimeSetupClient);
     const attempts = await exerciseInviteRace();
-    summary = await verifyRaceResult(setupClient, attempts);
+    const inviteSummary = await verifyRaceResult(setupClient, attempts);
+    await seedStorageBudget(setupClient);
+    const storageAttempts = await exerciseStorageRace();
+    const storageSummary = await verifyStorageRace(setupClient, storageAttempts);
+    summary = { ...inviteSummary, ...storageSummary };
   } catch (error) {
     primaryError = error;
   } finally {
-    if (connected) {
+    if (runtimeSetupConnected) {
+      try {
+        await runtimeSetupClient.end();
+      } catch (error) {
+        recordTeardownError("runtime_client_end", error);
+      }
+    }
+
+    if (localDatabaseVerified) {
       try {
         await cleanup(setupClient);
-      } catch (cleanupError) {
-        if (primaryError) {
-          primaryError.cleanupError = errorSummary(cleanupError);
-        } else {
-          primaryError = cleanupError;
+      } catch (error) {
+        recordTeardownError("data_cleanup", error);
+      }
+
+      if (runtimeLoginCreated) {
+        try {
+          await dropRuntimeLogin(setupClient);
+        } catch (error) {
+          recordTeardownError("runtime_role_cleanup", error);
         }
-      } finally {
+      }
+    }
+
+    if (setupConnected) {
+      try {
         await setupClient.end();
+      } catch (error) {
+        recordTeardownError("setup_client_end", error);
       }
     }
   }
@@ -383,9 +598,9 @@ main().catch((error) => {
     JSON.stringify({
       event: "db_concurrency_failed",
       error: errorSummary(error),
-      cleanupError:
-        error && typeof error === "object" && "cleanupError" in error
-          ? error.cleanupError
+      teardownErrors:
+        error && typeof error === "object" && "teardownErrors" in error
+          ? error.teardownErrors
           : undefined,
     }),
   );

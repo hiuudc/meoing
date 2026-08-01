@@ -1,0 +1,92 @@
+name: Resume Cloudflare Cost Guard
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Use production for live recovery; staging is attended drill-only
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      confirmation:
+        description: Type RESUME PRODUCTION (live) or RESUME STAGING (attended drill only)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cost-guard-resume-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  request-resume:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Keep staging and production credentials isolated. Add required reviewers to
+    # both environments when the repository plan exposes that control.
+    environment: cost-guard-resume-${{ inputs.environment }}
+    env:
+      COST_GUARD_ENVIRONMENT: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+        working-directory: backend
+      - name: Validate explicit confirmation
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$COST_GUARD_ENVIRONMENT" == "staging" ]]; then
+            expected="RESUME STAGING"
+          elif [[ "$COST_GUARD_ENVIRONMENT" == "production" ]]; then
+            expected="RESUME PRODUCTION"
+          else
+            echo "Environment must be exactly staging or production" >&2
+            exit 1
+          fi
+          if [[ "$CONFIRMATION" != "$expected" ]]; then
+            echo "Confirmation must be exactly: $expected" >&2
+            exit 1
+          fi
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+      - name: Download stopped state
+        working-directory: backend
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          R2_COST_GUARD_ACCESS_KEY_ID: ${{ secrets.R2_COST_GUARD_ACCESS_KEY_ID }}
+          R2_COST_GUARD_SECRET_ACCESS_KEY: ${{ secrets.R2_COST_GUARD_SECRET_ACCESS_KEY }}
+        run: >-
+          node scripts/cost-guard-resume-r2.mjs
+          download-state
+          --output .cost-guard/state.json
+      - name: Recheck account usage below five percent
+        working-directory: backend
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_COST_GUARD_ANALYTICS_TOKEN: ${{ secrets.CLOUDFLARE_COST_GUARD_ANALYTICS_TOKEN }}
+        run: >-
+          node scripts/request-cost-guard-resume.mjs
+          --state .cost-guard/state.json
+          --output .cost-guard/resume-request.json
+      - name: Queue one resume request for the next Cron
+        working-directory: backend
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          R2_COST_GUARD_ACCESS_KEY_ID: ${{ secrets.R2_COST_GUARD_ACCESS_KEY_ID }}
+          R2_COST_GUARD_SECRET_ACCESS_KEY: ${{ secrets.R2_COST_GUARD_SECRET_ACCESS_KEY }}
+        run: |
+          node scripts/cost-guard-resume-r2.mjs upload-request --input .cost-guard/resume-request.json
+          echo "The Cost Guard will recheck usage and restore only its strict allowlisted domain on the next five-minute Cron."

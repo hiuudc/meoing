@@ -7,9 +7,20 @@ import { log } from "./observability";
 
 export type MaintenanceRepositoryFactory = (env: MaintenanceEnv) => MaintenanceRepository;
 
+function expectedDatabaseProjectRef(env: MaintenanceEnv): string {
+  if (env.APP_ENV === "local") return "local";
+  return new URL(env.SUPABASE_URL).hostname.split(".")[0] ?? "";
+}
+
 export function createMaintenanceHandler(
   repositoryFactory: MaintenanceRepositoryFactory = (env) =>
-    new PostgresMaintenanceRepository(env.HYPERDRIVE.connectionString),
+    new PostgresMaintenanceRepository(
+      env.HYPERDRIVE.connectionString,
+      {
+        environment: env.APP_ENV,
+        supabaseProjectRef: expectedDatabaseProjectRef(env),
+      },
+    ),
   fetcher: MaintenanceFetch = fetch,
 ): ExportedHandler<MaintenanceEnv> {
   return {

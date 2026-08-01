@@ -1,0 +1,60 @@
+name: Cleanup staging acceptance users
+
+on:
+  workflow_dispatch:
+    inputs:
+      usernames_json:
+        description: 'Exact JSON array of reserved usernames, for example ["acceptance.owner","load001"]'
+        required: true
+        type: string
+        default: "[]"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-acceptance
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: staging
+    steps:
+      - name: Require the protected main ref
+        run: test "$GITHUB_REF" = "refs/heads/main"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+        working-directory: backend
+      - name: Validate acceptance cleanup harness
+        run: npm run acceptance:check
+        working-directory: backend
+      - name: Revoke sessions and delete explicitly selected canaries
+        run: npm run acceptance:cleanup
+        working-directory: backend
+        env:
+          MEOING_CLEANUP_API_URL: ${{ vars.MEOI_API_URL }}
+          MEOING_CLEANUP_EXPECTED_API_ORIGIN: https://api-staging.meoing.com
+          MEOING_CLEANUP_SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          MEOING_CLEANUP_EXPECTED_SUPABASE_PROJECT_REF: sdwuwmyrbdaarxokxmsf
+          MEOING_CLEANUP_SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_PROVISIONING_SECRET_KEY }}
+          MEOING_CLEANUP_SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}
+          MEOING_CLEANUP_USERNAMES_JSON: ${{ inputs.usernames_json }}
+          MEOING_CLEANUP_OWNER_PASSWORD: ${{ secrets.MEOI_ACCEPTANCE_PASSWORD }}
+          MEOING_CLEANUP_MEMBER_PASSWORD: ${{ secrets.MEOI_ACCEPTANCE_MEMBER_PASSWORD }}
+          MEOING_CLEANUP_LOAD_PASSWORD: ${{ secrets.MEOI_LOAD_PASSWORD }}
+          MEOING_CLEANUP_DATABASE_URL: ${{ secrets.STAGING_CLEANUP_DATABASE_URL }}
+          MEOING_CLEANUP_R2_ACCOUNT_ID: 29e80074abc5eb106165d2349db7ca56
+          MEOING_CLEANUP_R2_BUCKET_NAME: meoing-files-staging
+          MEOING_CLEANUP_R2_ACCESS_KEY_ID: ${{ secrets.R2_STAGING_CLEANUP_ACCESS_KEY_ID }}
+          MEOING_CLEANUP_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_STAGING_CLEANUP_SECRET_ACCESS_KEY }}

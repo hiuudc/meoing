@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: main
           fetch-depth: 0
@@ -66,7 +66,7 @@ jobs:
 
           git checkout --detach "$resolved_sha"
           echo "release_sha=$resolved_sha" >> "$GITHUB_OUTPUT"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -75,6 +75,31 @@ jobs:
             frontend/package-lock.json
       - run: npm ci
         working-directory: backend
+      - name: Verify production database target before migrations
+        run: npm run db:target:verify
+        working-directory: backend
+        env:
+          MEOING_DATABASE_ENVIRONMENT: production
+          MEOING_EXPECTED_SUPABASE_PROJECT_REF: ${{ vars.EXPECTED_SUPABASE_PROJECT_REF }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+      - name: Verify maintenance secret binding
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler secret list \
+            --config wrangler.maintenance.jsonc \
+            --env production \
+            --format json |
+            jq -e 'any(.[]; .name == "SUPABASE_SECRET_KEY" and .type == "secret_text")' \
+              >/dev/null ||
+            {
+              echo "The production maintenance Worker is missing SUPABASE_SECRET_KEY." >&2
+              exit 1
+            }
+        working-directory: backend
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       - run: npm ci
         working-directory: frontend
       - name: Verify release
@@ -119,20 +144,31 @@ jobs:
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
-      - name: Deploy maintenance Worker
-        run: npx wrangler deploy --config wrangler.maintenance.jsonc --env production
+      - name: Configure and verify production database identity
+        run: npm run db:identity:configure
         working-directory: backend
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          MEOING_DATABASE_ENVIRONMENT: production
+          MEOING_EXPECTED_SUPABASE_PROJECT_REF: ${{ vars.EXPECTED_SUPABASE_PROJECT_REF }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+      - name: Verify API deploy cannot manage public routes
+        run: npm run cost-guard:deploy-boundary
+        working-directory: backend
       - name: Deploy API Worker
         run: npx wrangler deploy --config wrangler.api.jsonc --env production
         working-directory: backend
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Deploy maintenance Worker
+        run: npx wrangler deploy --config wrangler.maintenance.jsonc --env production
+        working-directory: backend
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       - name: Upload production extension artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: meoi-bridge-v8-production-${{ steps.release.outputs.release_sha }}
           path: frontend/dist-extension
@@ -146,8 +182,31 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_PAGES_PROJECT: ${{ vars.CLOUDFLARE_PAGES_PROJECT }}
       - name: Production smoke test
+        shell: bash
         run: |
-          curl --fail --retry 5 --retry-delay 5 "${MEOI_API_URL}/health/live"
-          curl --fail --retry 5 --retry-delay 5 "${MEOI_API_URL}/health/ready"
+          set -euo pipefail
+          live_payload="$(
+            curl --silent --show-error --fail --retry 5 --retry-delay 5 \
+              "${MEOI_API_URL}/health/live"
+          )"
+          ready_payload="$(
+            curl --silent --show-error --fail --retry 5 --retry-delay 5 \
+              "${MEOI_API_URL}/health/ready"
+          )"
+          jq -e \
+            --arg environment "production" \
+            --arg project_ref "$EXPECTED_SUPABASE_PROJECT_REF" \
+            '.data.status == "ok"
+             and .data.environment == $environment
+             and .data.supabaseProjectRef == $project_ref' \
+            <<<"$live_payload" >/dev/null
+          jq -e \
+            --arg environment "production" \
+            --arg project_ref "$EXPECTED_SUPABASE_PROJECT_REF" \
+            '.data.status == "ready"
+             and .data.databaseEnvironment == $environment
+             and .data.databaseProjectRef == $project_ref' \
+            <<<"$ready_payload" >/dev/null
         env:
           MEOI_API_URL: ${{ vars.MEOI_API_URL }}
+          EXPECTED_SUPABASE_PROJECT_REF: ${{ vars.EXPECTED_SUPABASE_PROJECT_REF }}

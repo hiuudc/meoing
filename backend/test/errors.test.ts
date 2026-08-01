@@ -14,17 +14,26 @@ describe("PostgreSQL application error mapping", () => {
     ["22023", "INVALID_LESSON_TRACKING", 400, "INVALID_LESSON_TRACKING"],
     ["22023", "UNIT_CONTENT_REPLACEMENT_REQUIRED", 400, "UNIT_CONTENT_REPLACEMENT_REQUIRED"],
     ["54000", "UPLOAD_DAILY_QUOTA", 429, "UPLOAD_DAILY_QUOTA"],
+    ["54000", "STORAGE_BUDGET_REACHED", 429, "STORAGE_BUDGET_REACHED"],
     ["P0001", "USERNAME_CHANGE_COOLDOWN", 409, "USERNAME_COOLDOWN"],
     ["23505", "USERNAME_UNAVAILABLE", 409, "USERNAME_RESERVED"],
     ["42501", "ACCOUNT_LOCKED", 423, "ACCOUNT_DELETION_PENDING"],
+    ["57P03", "DATABASE_IDENTITY_MISMATCH", 503, "INTERNAL_ERROR"],
   ])(
     "maps SQLSTATE %s and %s to HTTP %i",
     (sqlState, message, expectedStatus, expectedCode) => {
       const mapped = mapDatabaseError(databaseError(sqlState, message));
       expect(mapped.status).toBe(expectedStatus);
       expect(mapped.code).toBe(expectedCode);
+      expect(mapped.internalCode).toBe(sqlState);
     },
   );
+
+  it("marks the storage budget failure as non-retryable", () => {
+    const mapped = mapDatabaseError(databaseError("54000", "STORAGE_BUDGET_REACHED"));
+
+    expect(mapped.details).toEqual({ retryable: false });
+  });
 
   it("does not expose unknown PostgreSQL messages", () => {
     const mapped = mapDatabaseError(
@@ -32,6 +41,18 @@ describe("PostgreSQL application error mapping", () => {
     );
     expect(mapped.status).toBe(500);
     expect(mapped.code).toBe("INTERNAL_ERROR");
+    expect(mapped.internalCode).toBe("P0001");
     expect(mapped.message).not.toContain("sensitive");
+  });
+
+  it("reports connection exhaustion as a temporary service failure", () => {
+    const mapped = mapDatabaseError(
+      databaseError("53300", "too many connections for role"),
+    );
+
+    expect(mapped.status).toBe(503);
+    expect(mapped.code).toBe("INTERNAL_ERROR");
+    expect(mapped.internalCode).toBe("53300");
+    expect(mapped.message).not.toContain("role");
   });
 });

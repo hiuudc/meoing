@@ -31,7 +31,10 @@ describe("R2 file lifecycle", () => {
     });
     const repository: DomainRepository = {
       call,
-      checkHealth: async () => undefined,
+      checkHealth: async () => ({
+        environment: "local",
+        supabaseProjectRef: "local",
+      }),
     };
     const head = vi.fn();
     const service = new FileService(repository, {
@@ -64,7 +67,10 @@ describe("R2 file lifecycle", () => {
     });
     const repository: DomainRepository = {
       call,
-      checkHealth: async () => undefined,
+      checkHealth: async () => ({
+        environment: "local",
+        supabaseProjectRef: "local",
+      }),
     };
     const service = new FileService(repository, {
       R2_ACCESS_KEY_ID: accessKeyId,

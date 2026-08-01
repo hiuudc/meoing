@@ -66,9 +66,14 @@ export const RPC_FUNCTIONS = {
 
 export type RpcOperation = keyof typeof RPC_FUNCTIONS;
 
+export interface DatabaseIdentity {
+  readonly environment: string;
+  readonly supabaseProjectRef: string;
+}
+
 export interface DomainRepository {
   call(operation: RpcOperation, actorId: string, input?: JsonObject): Promise<JsonValue>;
-  checkHealth(): Promise<void>;
+  checkHealth(): Promise<DatabaseIdentity>;
 }
 
 export type RepositoryFactory = (env: ApiEnv) => DomainRepository;
@@ -85,9 +90,11 @@ function createClient(connectionString: string): Client {
 
 export class PostgresDomainRepository implements DomainRepository {
   readonly #connectionString: string;
+  readonly #expectedIdentity: DatabaseIdentity;
 
-  constructor(connectionString: string) {
+  constructor(connectionString: string, expectedIdentity: DatabaseIdentity) {
     this.#connectionString = connectionString;
+    this.#expectedIdentity = expectedIdentity;
   }
 
   async call(
@@ -100,7 +107,16 @@ export class PostgresDomainRepository implements DomainRepository {
       await client.connect();
       await client.query("begin");
       await client.query("set local role meoing_runtime");
-      await client.query("select set_config('app.user_id', $1, true)", [actorId]);
+      await client.query(
+        `select
+           set_config('app.user_id', $1, true),
+           private.assert_database_identity($2, $3)`,
+        [
+          actorId,
+          this.#expectedIdentity.environment,
+          this.#expectedIdentity.supabaseProjectRef,
+        ],
+      );
       const functionName = RPC_FUNCTIONS[operation];
       const result = await client.query<{ data: unknown }>(
         `select ${functionName}($1::jsonb) as data`,
@@ -128,13 +144,50 @@ export class PostgresDomainRepository implements DomainRepository {
     }
   }
 
-  async checkHealth(): Promise<void> {
+  async checkHealth(): Promise<DatabaseIdentity> {
     const client = createClient(this.#connectionString);
     try {
       await client.connect();
-      await client.query("select 1");
-    } catch {
-      throw new ApiError(503, "INTERNAL_ERROR", "The database is unavailable");
+      await client.query("begin");
+      await client.query("set local role meoing_runtime");
+      const result = await client.query<{ identity: unknown }>(
+        "select private.assert_database_identity($1, $2) as identity",
+        [
+          this.#expectedIdentity.environment,
+          this.#expectedIdentity.supabaseProjectRef,
+        ],
+      );
+      await client.query("commit");
+      const identity = result.rows[0]?.identity;
+      if (
+        !identity ||
+        typeof identity !== "object" ||
+        Array.isArray(identity) ||
+        !("environment" in identity) ||
+        typeof identity.environment !== "string" ||
+        !("supabaseProjectRef" in identity) ||
+        typeof identity.supabaseProjectRef !== "string"
+      ) {
+        throw new Error("The database returned an invalid deployment identity");
+      }
+      return {
+        environment: identity.environment,
+        supabaseProjectRef: identity.supabaseProjectRef,
+      };
+    } catch (error) {
+      try {
+        await client.query("rollback");
+      } catch {
+        // The connection may already be closed; the original error is more useful.
+      }
+      const mapped = mapDatabaseError(error);
+      throw new ApiError(
+        503,
+        "INTERNAL_ERROR",
+        "The database is unavailable",
+        undefined,
+        mapped.internalCode,
+      );
     } finally {
       await client.end().catch(() => undefined);
     }

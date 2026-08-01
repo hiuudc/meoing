@@ -1,0 +1,87 @@
+name: Cleanup unretained database backups
+
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: Select expired manual objects or old weekly objects without a valid matching marker
+        required: true
+        default: manual
+        type: choice
+        options:
+          - manual
+          - unverified-weekly
+      mode:
+        description: Preview first; delete requires the exact preview inventory
+        required: true
+        default: preview
+        type: choice
+        options:
+          - preview
+          - delete
+      expected_object_count:
+        description: Exact candidate count printed by preview; required for delete mode
+        required: false
+        default: ""
+        type: string
+      expected_inventory_digest:
+        description: Exact SHA-256 candidate digest printed by preview; required for delete mode
+        required: false
+        default: ""
+        type: string
+      confirmation:
+        description: Type DELETE UNRETAINED BACKUPS for delete mode
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-backup-storage
+  cancel-in-progress: false
+
+jobs:
+  preview:
+    if: github.ref == 'refs/heads/main' && inputs.mode == 'preview'
+    runs-on: ubuntu-latest
+    environment: production-backup
+    steps:
+      - name: Require the protected main ref
+        run: test "$GITHUB_REF" = "refs/heads/main"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Preview old unretained backups
+        run: bash .github/scripts/cleanup-unretained-backups.sh
+        env:
+          BACKUP_CLEANUP_SCOPE: ${{ inputs.scope }}
+          BACKUP_CLEANUP_MODE: preview
+          BACKUP_CLEANUP_MINIMUM_AGE_SECONDS: "691200"
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_BACKUP_READ_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_BACKUP_READ_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_BACKUP_ENDPOINT: ${{ secrets.R2_BACKUP_ENDPOINT }}
+          R2_BACKUP_BUCKET: ${{ secrets.R2_BACKUP_BUCKET }}
+
+  delete:
+    if: github.ref == 'refs/heads/main' && inputs.mode == 'delete'
+    runs-on: ubuntu-latest
+    environment: production-backup-destructive
+    steps:
+      - name: Require the protected main ref
+        run: test "$GITHUB_REF" = "refs/heads/main"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Delete the exact approved unretained inventory
+        run: bash .github/scripts/cleanup-unretained-backups.sh
+        env:
+          BACKUP_CLEANUP_SCOPE: ${{ inputs.scope }}
+          BACKUP_CLEANUP_MODE: delete
+          BACKUP_CLEANUP_MINIMUM_AGE_SECONDS: "691200"
+          BACKUP_CLEANUP_EXPECTED_COUNT: ${{ inputs.expected_object_count }}
+          BACKUP_CLEANUP_EXPECTED_DIGEST: ${{ inputs.expected_inventory_digest }}
+          BACKUP_CLEANUP_CONFIRMATION: ${{ inputs.confirmation }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_BACKUP_DELETE_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_BACKUP_DELETE_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_BACKUP_ENDPOINT: ${{ secrets.R2_BACKUP_ENDPOINT }}
+          R2_BACKUP_BUCKET: ${{ secrets.R2_BACKUP_BUCKET }}

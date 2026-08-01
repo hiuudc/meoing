@@ -1,0 +1,77 @@
+name: Cleanup legacy daily database backups
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Preview first; delete requires a fresh verified weekly backup
+        required: true
+        default: preview
+        type: choice
+        options:
+          - preview
+          - delete
+      expected_object_count:
+        description: Exact count printed by preview; required for delete mode
+        required: false
+        default: ""
+        type: string
+      expected_inventory_digest:
+        description: Exact SHA-256 inventory digest printed by preview; required for delete mode
+        required: false
+        default: ""
+        type: string
+      confirmation:
+        description: Type DELETE LEGACY DAILY BACKUPS for delete mode
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-backup-storage
+  cancel-in-progress: false
+
+jobs:
+  preview:
+    if: github.ref == 'refs/heads/main' && inputs.mode == 'preview'
+    runs-on: ubuntu-latest
+    environment: production-backup
+    steps:
+      - name: Require the protected main ref
+        run: test "$GITHUB_REF" = "refs/heads/main"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Preview legacy daily backups
+        run: bash .github/scripts/cleanup-legacy-daily.sh
+        env:
+          LEGACY_CLEANUP_MODE: preview
+          RESTORE_MAX_AGE_SECONDS: "691200"
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_BACKUP_READ_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_BACKUP_READ_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_BACKUP_ENDPOINT: ${{ secrets.R2_BACKUP_ENDPOINT }}
+          R2_BACKUP_BUCKET: ${{ secrets.R2_BACKUP_BUCKET }}
+
+  delete:
+    if: github.ref == 'refs/heads/main' && inputs.mode == 'delete'
+    runs-on: ubuntu-latest
+    environment: production-backup-destructive
+    steps:
+      - name: Require the protected main ref
+        run: test "$GITHUB_REF" = "refs/heads/main"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Delete the exact approved legacy daily inventory
+        run: bash .github/scripts/cleanup-legacy-daily.sh
+        env:
+          LEGACY_CLEANUP_MODE: delete
+          LEGACY_DAILY_EXPECTED_COUNT: ${{ inputs.expected_object_count }}
+          LEGACY_DAILY_EXPECTED_DIGEST: ${{ inputs.expected_inventory_digest }}
+          LEGACY_DAILY_CLEANUP_CONFIRMATION: ${{ inputs.confirmation }}
+          RESTORE_MAX_AGE_SECONDS: "691200"
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_BACKUP_DELETE_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_BACKUP_DELETE_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_BACKUP_ENDPOINT: ${{ secrets.R2_BACKUP_ENDPOINT }}
+          R2_BACKUP_BUCKET: ${{ secrets.R2_BACKUP_BUCKET }}

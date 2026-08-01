@@ -44,12 +44,15 @@ export function successSchema<T extends z.ZodType>(data: T) {
 export const LiveHealthSchema = z
   .object({
     environment: z.string().min(1),
+    supabaseProjectRef: z.string().min(1),
     status: z.literal("ok"),
   })
   .openapi("LiveHealth");
 
 export const ReadyHealthSchema = z
   .object({
+    databaseEnvironment: z.string().min(1),
+    databaseProjectRef: z.string().min(1),
     status: z.literal("ready"),
   })
   .openapi("ReadyHealth");

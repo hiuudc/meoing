@@ -1,0 +1,2 @@
+CLOUDFLARE_COST_GUARD_TOKEN=replace-with-a-dedicated-account-token
+ALERT_RECIPIENT=replace-with-verified-recipient@meoing.invalid
