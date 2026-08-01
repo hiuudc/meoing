@@ -101,5 +101,6 @@ jobs:
         with:
           name: staging-acceptance-${{ github.sha }}
           path: backend/.acceptance-results
+          include-hidden-files: true
           if-no-files-found: warn
           retention-days: 30
