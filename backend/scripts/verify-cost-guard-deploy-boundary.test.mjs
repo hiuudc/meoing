@@ -154,6 +154,7 @@ test("resume workflow keeps secrets out of setup and pins immutable Actions", ()
   const secureWorkflow = `
   request-resume:
     if: github.ref == 'refs/heads/main'
+    environment: cost-guard-resume-\${{ inputs.environment }}
     env:
       COST_GUARD_ENVIRONMENT: staging
     steps:
@@ -162,16 +163,40 @@ test("resume workflow keeps secrets out of setup and pins immutable Actions", ()
           ref: \${{ github.sha }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
       - run: npm ci
-      - run: wrangler r2 object get
+      - name: Validate explicit confirmation
+        run: |
+          expected="RESUME STAGING"
+          expected="RESUME PRODUCTION"
+      - name: Download stopped state
         env:
-          CLOUDFLARE_API_TOKEN: \${{ secrets.RESUME_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: \${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          R2_COST_GUARD_ACCESS_KEY_ID: \${{ secrets.R2_COST_GUARD_ACCESS_KEY_ID }}
+          R2_COST_GUARD_SECRET_ACCESS_KEY: \${{ secrets.R2_COST_GUARD_SECRET_ACCESS_KEY }}
+        run: >-
+          node scripts/cost-guard-resume-r2.mjs
+          download-state
+          --output .cost-guard/state.json
+      - name: Recheck account usage below five percent
+        env:
+          CLOUDFLARE_ACCOUNT_ID: \${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_COST_GUARD_ANALYTICS_TOKEN: \${{ secrets.CLOUDFLARE_COST_GUARD_ANALYTICS_TOKEN }}
+        run: node scripts/request-cost-guard-resume.mjs
+      - name: Queue one resume request for the next Cron
+        env:
+          CLOUDFLARE_ACCOUNT_ID: \${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          R2_COST_GUARD_ACCESS_KEY_ID: \${{ secrets.R2_COST_GUARD_ACCESS_KEY_ID }}
+          R2_COST_GUARD_SECRET_ACCESS_KEY: \${{ secrets.R2_COST_GUARD_SECRET_ACCESS_KEY }}
+        run: >-
+          node scripts/cost-guard-resume-r2.mjs
+          upload-request
+          --input .cost-guard/resume-request.json
   `;
   assert.doesNotThrow(() => assertResumeWorkflowScopesCredentials(secureWorkflow));
   assert.throws(
     () => assertResumeWorkflowScopesCredentials(
       secureWorkflow.replace(
         "COST_GUARD_ENVIRONMENT: staging",
-        "CLOUDFLARE_API_TOKEN: ${{ secrets.RESUME_TOKEN }}",
+        "TOKEN: ${{ secrets.PROVIDER_TOKEN }}",
       ),
     ),
     /must not expose Cloudflare secrets job-wide/,
@@ -195,9 +220,64 @@ test("resume workflow keeps secrets out of setup and pins immutable Actions", ()
     () => assertResumeWorkflowScopesCredentials(secureWorkflow.replace(
       "      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
       "      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020\n" +
-        "        env:\n          TOKEN: ${{ secrets.RESUME_TOKEN }}",
+        "        env:\n          TOKEN: ${{ secrets.PROVIDER_TOKEN }}",
     )),
     /must not expose provider secrets to - uses: actions\/setup-node/,
+  );
+  assert.throws(
+    () => assertResumeWorkflowScopesCredentials(secureWorkflow.replace(
+      "environment: cost-guard-resume-${{ inputs.environment }}",
+      "environment: cost-guard-resume",
+    )),
+    /isolate credentials in the selected protected environment/,
+  );
+  assert.throws(
+    () => assertResumeWorkflowScopesCredentials(secureWorkflow.replace(
+      "CLOUDFLARE_COST_GUARD_ANALYTICS_TOKEN",
+      "CLOUDFLARE_COST_GUARD_RESUME_TOKEN",
+    )),
+    /legacy combined Cloudflare token/,
+  );
+  assert.throws(
+    () => assertResumeWorkflowScopesCredentials(secureWorkflow.replace(
+      "node scripts/cost-guard-resume-r2.mjs\n          download-state",
+      "npx wrangler --config resume.jsonc r2 object get\n          download-state",
+    )),
+    /not native R2 REST/,
+  );
+  assert.throws(
+    () => assertResumeWorkflowScopesCredentials(secureWorkflow.replace(
+      "${{ vars.CLOUDFLARE_ACCOUNT_ID }}",
+      "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}",
+    )),
+    /non-secret account ID/,
+  );
+  assert.throws(
+    () => assertResumeWorkflowScopesCredentials(secureWorkflow.replace(
+      "R2_COST_GUARD_SECRET_ACCESS_KEY: ${{ secrets.R2_COST_GUARD_SECRET_ACCESS_KEY }}",
+      "R2_COST_GUARD_SECRET_ACCESS_KEY: ${{ secrets.R2_COST_GUARD_SECRET_ACCESS_KEY }}\n" +
+        "          LEAKED_ANALYTICS: ${{ secrets.CLOUDFLARE_COST_GUARD_ANALYTICS_TOKEN }}",
+    )),
+    /resume state download must receive exactly these secrets/,
+  );
+  assert.throws(
+    () => assertResumeWorkflowScopesCredentials(secureWorkflow.replace(
+      "R2_COST_GUARD_SECRET_ACCESS_KEY: ${{ secrets.R2_COST_GUARD_SECRET_ACCESS_KEY }}",
+      "R2_COST_GUARD_SECRET_ACCESS_KEY: ${{ secrets.R2_COST_GUARD_SECRET_ACCESS_KEY }}\n" +
+        "          LEAKED: ${{ secrets['CLOUDFLARE_COST_GUARD_ANALYTICS_TOKEN'] }}",
+    )),
+    /must not use bracket-style secret references/,
+  );
+  assert.throws(
+    () => assertResumeWorkflowScopesCredentials(secureWorkflow.replace(
+      "      - name: Download stopped state",
+      "      - name: Unexpected credential consumer\n" +
+        "        env:\n" +
+        "          TOKEN: ${{ secrets.R2_COST_GUARD_SECRET_ACCESS_KEY }}\n" +
+        "        run: node unexpected.mjs\n" +
+        "      - name: Download stopped state",
+    )),
+    /must not expose secrets outside the three provider steps/,
   );
 });
 

@@ -101,6 +101,9 @@ References:
 - [Workers GraphQL metrics](https://developers.cloudflare.com/analytics/graphql-api/tutorials/querying-workers-metrics/)
 - [R2 metrics](https://developers.cloudflare.com/r2/platform/metrics-analytics/)
 - [R2 pricing and operation classes](https://developers.cloudflare.com/r2/pricing/)
+- [R2 API tokens and bucket scoping](https://developers.cloudflare.com/r2/api/tokens/)
+- [R2 object tokens are S3-only](https://developers.cloudflare.com/r2/platform/troubleshooting/#object-level-api-tokens-fail-against-the-rest-api)
+- [GraphQL API token authentication](https://developers.cloudflare.com/analytics/graphql-api/getting-started/authentication/api-token-auth/)
 - [Workers custom domains API](https://developers.cloudflare.com/api/resources/workers/subresources/domains/)
 - [Email Sending binding](https://developers.cloudflare.com/email-service/email-sending/send-email/workers-binding/)
 
@@ -251,17 +254,75 @@ the attended drill above while its temporary Cron is still active; never queue a
 marker after the staging Cron has been disabled. Do not attach either domain directly in the
 Cloudflare dashboard.
 
-The repository environment `cost-guard-resume` must have required reviewers and contain:
+Create exactly two GitHub environments, `cost-guard-resume-staging` and
+`cost-guard-resume-production`. Restrict both to `main`. Enable required reviewers when the
+repository plan exposes that control. If the plan does not support required reviewers for
+this private repository, record that limitation: the main-only guard, exact typed
+confirmation, and environment isolation remain mandatory but are not a substitute for a
+second-person production approval. Production acceptance then requires a supported GitHub
+plan, an approved external deployment gate, or an explicit security-risk acceptance.
 
-- `CLOUDFLARE_ACCOUNT_ID`.
-- `CLOUDFLARE_COST_GUARD_RESUME_TOKEN`, a separate least-privilege token with Account
-  Analytics Read plus the minimum R2 object read/write permission needed for only the Cost
-  Guard state bucket. It does not need Workers Scripts Edit.
+Each environment has the same names but distinct environment-specific values:
 
-The workflow scopes these credentials only to the two R2 steps and the GraphQL recheck. The
-checkout, Node setup, confirmation, and dependency-install steps do not receive them. Its
-third-party Actions are pinned to verified full commit SHAs. Dispatches from any ref other
-than `refs/heads/main` are rejected, and checkout uses the exact dispatch commit SHA.
+- Environment variable `CLOUDFLARE_ACCOUNT_ID`, set to the exact Meoing account ID. It is not
+  a secret.
+- Secret `CLOUDFLARE_COST_GUARD_ANALYTICS_TOKEN`, scoped only to Account Analytics Read for
+  the Meoing account. Prefer a distinct token per environment for independent rotation and
+  audit evidence.
+- Secrets `R2_COST_GUARD_ACCESS_KEY_ID` and `R2_COST_GUARD_SECRET_ACCESS_KEY`, created from an
+  R2 Object Read & Write token restricted to exactly one bucket:
+  `meoing-cost-guard-staging` or `meoing-cost-guard-production`, matching the GitHub
+  environment.
+
+R2 object credentials authenticate only through the S3-compatible endpoint with SigV4,
+region `auto`. Do not map them to `CLOUDFLARE_API_TOKEN` or use `wrangler r2 object --remote`:
+Cloudflare's native REST API does not accept bucket-scoped object tokens and would require
+broader account-level R2 authority. Bucket and object keys are fixed in the checked-in helper;
+they are never workflow inputs or secrets.
+
+The workflow exposes the R2 pair only to the state-download and marker-upload steps. The
+GraphQL recheck receives only the Analytics Read token. Checkout, Node setup, confirmation,
+and dependency installation receive no provider secret. Third-party Actions are pinned to
+verified full commit SHAs. Dispatches from refs other than `refs/heads/main` are rejected,
+checkout uses the exact dispatch commit SHA, and the choice input selects one of the two
+protected GitHub environments.
+
+### Resume credential cutover
+
+The staging state bucket already exists in the default jurisdiction. Provision staging first.
+The production state bucket is not yet present in the current inventory; create
+`meoing-cost-guard-production` in the default jurisdiction before provisioning or testing
+production credentials. Source support for production does not authorize enabling its Cron.
+
+For each environment, record sanitized token identifiers, permission policies, timestamps,
+and results in the restricted change record, never secret values. The following permission
+matrix is a hard gate:
+
+| Credential | Must succeed | Must be denied |
+| --- | --- | --- |
+| Analytics token | The checked-in GraphQL Workers/R2 metrics query | Native R2 object REST; Workers Scripts and custom-domain mutation |
+| Staging R2 pair | S3 SigV4 GET/PUT/HEAD/DELETE of a unique canary in `meoing-cost-guard-staging` | Every production, asset, and backup bucket; bucket creation/deletion |
+| Production R2 pair | S3 SigV4 GET/PUT/HEAD/DELETE of a unique canary in `meoing-cost-guard-production` | Every staging, asset, and backup bucket; bucket creation/deletion |
+
+Delete each credential-test canary and verify HEAD returns 404. Any cross-bucket success is a
+stop condition. A missing/wrong credential, bad signature, wrong account/jurisdiction,
+malformed or non-STOPPED state, state from the other environment, existing resume claim, or
+usage at or above 5% must write no marker and must leave domains detached.
+
+Run the full attended staging STOP, marker, Cron resume, and idempotency drill before
+production. Prove only the staging domain changed and prove the staging schedule is empty
+afterward. Once the new source is deployed and every currently live environment has passed,
+revoke the Cloudflare token behind the legacy `CLOUDFLARE_COST_GUARD_RESUME_TOKEN`, delete
+that GitHub secret, and delete or empty the legacy `cost-guard-resume` environment. The live
+resume workflow and runtime scripts must contain neither that secret name nor a native
+Wrangler R2 object command. Verifier code, negative-test fixtures, and this deprecation note
+may retain those strings solely to reject their reintroduction.
+
+Do not retain a dormant broad R2 fallback. Before revocation, rollback may restore the prior
+workflow only as an attended temporary measure while the legacy protected environment remains
+inaccessible to untrusted code. After revocation, leave the controller STOPPED and fix
+forward. If recovery cannot wait, the account owner may issue a short-lived account-scoped
+credential for one attended incident, then revoke it immediately and record the exception.
 
 The workflow requires the exact typed confirmation, downloads STOPPED state, independently
 rechecks all five account metrics, and refuses unless the highest utilization is strictly

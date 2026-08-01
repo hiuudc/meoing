@@ -172,7 +172,7 @@ async function main() {
     throw new Error("GITHUB_RUN_ID is invalid");
   }
   const accountId = requiredEnvironment("CLOUDFLARE_ACCOUNT_ID");
-  const apiToken = requiredEnvironment("CLOUDFLARE_COST_GUARD_RESUME_TOKEN");
+  const apiToken = requiredEnvironment("CLOUDFLARE_COST_GUARD_ANALYTICS_TOKEN");
   const state = JSON.parse(await readFile(statePath, "utf8"));
   if (
     state?.version !== 1 ||
