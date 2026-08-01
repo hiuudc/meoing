@@ -4,7 +4,21 @@ set local search_path = public, extensions, app, private;
 
 -- pgTAP is installed in the extensions schema. These grants exist only inside
 -- this test transaction and let assertions continue to run after SET ROLE.
-grant meoing_runtime to current_user with set true;
+-- Supabase Postgres 17 currently crashes when a CREATEROLE user adds a second
+-- membership edge to a role it created. Use a transaction-scoped intermediary
+-- so every explicit membership grant is new and the application roles stay
+-- unchanged. See supabase/postgres#2325.
+set local createrole_self_grant = 'set';
+create role meoing_pgtap_executor
+  nologin
+  nosuperuser
+  noinherit
+  nocreatedb
+  nocreaterole
+  noreplication
+  nobypassrls;
+grant meoing_runtime to meoing_pgtap_executor
+  with admin false, inherit false, set true;
 grant usage on schema extensions to meoing_runtime;
 grant execute on all functions in schema extensions to meoing_runtime;
 
