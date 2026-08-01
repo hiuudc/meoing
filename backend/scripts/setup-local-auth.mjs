@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -53,6 +53,10 @@ export function normalizePrivateEs256KeyDocument(parsed) {
   return keys.map(normalizePrivateEs256Key);
 }
 
+export async function ensurePrivateFileMode(filePath) {
+  await chmod(filePath, 0o600);
+}
+
 export async function setupLocalAuthKey() {
   if (existsSync(destination)) {
     const raw = await readFile(destination, "utf8");
@@ -71,6 +75,7 @@ export async function setupLocalAuthKey() {
     } else {
       console.log("Local Supabase ES256 signing key already exists.");
     }
+    await ensurePrivateFileMode(destination);
     return;
   }
 
@@ -132,6 +137,7 @@ export async function setupLocalAuthKey() {
     encoding: "utf8",
     mode: 0o600,
   });
+  await ensurePrivateFileMode(destination);
   console.log("Generated ignored local Supabase ES256 signing key.");
 }
 

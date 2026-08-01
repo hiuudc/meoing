@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import {
+  ensurePrivateFileMode,
   normalizePrivateEs256Key,
   normalizePrivateEs256KeyDocument,
   validPrivateEs256Key,
@@ -44,4 +48,17 @@ test("upgrades an existing metadata-less signing-key document", () => {
   assert.equal(normalized[0].kid, original.kid);
   assert.equal(normalized[0].x, original.x);
   assert.equal(normalized[0].y, original.y);
+});
+
+test("restricts an existing private key file to owner read/write", {
+  skip: process.platform === "win32",
+}, async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "meoing-auth-key-"));
+  context.after(() => rm(directory, { force: true, recursive: true }));
+  const filePath = join(directory, "signing_keys.json");
+  await writeFile(filePath, "[]\n", { mode: 0o644 });
+
+  await ensurePrivateFileMode(filePath);
+
+  assert.equal((await stat(filePath)).mode & 0o777, 0o600);
 });
