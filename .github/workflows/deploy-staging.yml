@@ -35,6 +35,9 @@ jobs:
             frontend/package-lock.json
       - run: npm ci
         working-directory: backend
+      - name: Generate ephemeral local Supabase signing key
+        run: npm run auth:key:local
+        working-directory: backend
       - name: Verify staging database target before migrations
         run: npm run db:target:verify
         working-directory: backend
