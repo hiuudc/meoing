@@ -61,7 +61,7 @@ test("rejects target drift against the independently pinned project ref", async 
   assert.equal(requests, 0);
 });
 
-test("uses separate parameterized statements to configure and then verify identity", async () => {
+test("uses separate validated statements with the current Management API body", async () => {
   const requests = [];
   const responses = [
     Response.json([
@@ -106,9 +106,12 @@ test("uses separate parameterized statements to configure and then verify identi
   }
 
   const configureBody = JSON.parse(requests[0].init.body);
-  assert.deepEqual(configureBody.parameters, ["staging", PROJECT_REF]);
-  assert.equal(configureBody.read_only, false);
+  assert.deepEqual(Object.keys(configureBody), ["query"]);
   assert.match(configureBody.query, /on conflict \(singleton\) do update/i);
+  assert.match(
+    configureBody.query,
+    /values \(true, 'staging'::text, 'abcdefghijklmnopqrst'::text\)/i,
+  );
   assert.match(
     configureBody.query,
     /where identity\.environment = excluded\.environment/i,
@@ -116,11 +119,10 @@ test("uses separate parameterized statements to configure and then verify identi
   assert.doesNotMatch(configureBody.query, /assert_database_identity/i);
 
   const verifyBody = JSON.parse(requests[1].init.body);
-  assert.deepEqual(verifyBody.parameters, ["staging", PROJECT_REF]);
-  assert.equal(verifyBody.read_only, true);
+  assert.deepEqual(Object.keys(verifyBody), ["query"]);
   assert.match(
     verifyBody.query,
-    /private\.assert_database_identity\(\s*\$1::text,\s*\$2::text\s*\)/i,
+    /private\.assert_database_identity\(\s*'staging'::text,\s*'abcdefghijklmnopqrst'::text\s*\)/i,
   );
 });
 

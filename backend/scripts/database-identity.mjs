@@ -61,10 +61,8 @@ function containsExactlyOneIdentity(value, environment, projectRef) {
 async function executeDatabaseQuery({
   accessToken,
   fetchImplementation,
-  parameters,
   projectRef,
   query,
-  readOnly,
   requestTimeoutMilliseconds,
 }) {
   const response = await fetchImplementation(
@@ -76,11 +74,7 @@ async function executeDatabaseQuery({
         authorization: `Bearer ${accessToken}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify({
-        parameters,
-        query,
-        read_only: readOnly,
-      }),
+      body: JSON.stringify({ query }),
       signal: AbortSignal.timeout(requestTimeoutMilliseconds),
     },
   );
@@ -95,6 +89,10 @@ async function executeDatabaseQuery({
   } catch {
     throw new Error("Supabase database identity configuration returned invalid JSON");
   }
+}
+
+function postgresTextLiteral(value) {
+  return `'${value.replaceAll("'", "''")}'`;
 }
 
 export async function configureHostedDatabaseIdentity({
@@ -115,11 +113,14 @@ export async function configureHostedDatabaseIdentity({
     "SUPABASE_ACCESS_TOKEN is required",
   );
 
-  const parameters = [environment, projectRef];
+  // The Management API query endpoint accepts a query string rather than a
+  // separate parameters array. Both values are allowlisted above and are
+  // still quoted defensively before interpolation.
+  const environmentLiteral = postgresTextLiteral(environment);
+  const projectRefLiteral = postgresTextLiteral(projectRef);
   const configuredPayload = await executeDatabaseQuery({
     accessToken,
     fetchImplementation,
-    parameters,
     projectRef,
     query: `
       insert into private.deployment_identity as identity (
@@ -127,7 +128,7 @@ export async function configureHostedDatabaseIdentity({
         environment,
         supabase_project_ref
       )
-      values (true, $1::text, $2::text)
+      values (true, ${environmentLiteral}::text, ${projectRefLiteral}::text)
       on conflict (singleton) do update
       set configured_at = identity.configured_at
       where identity.environment = excluded.environment
@@ -137,7 +138,6 @@ export async function configureHostedDatabaseIdentity({
         'supabaseProjectRef', supabase_project_ref
       ) as identity
     `,
-    readOnly: false,
     requestTimeoutMilliseconds,
   });
   assert(
@@ -151,15 +151,13 @@ export async function configureHostedDatabaseIdentity({
   const verifiedPayload = await executeDatabaseQuery({
     accessToken,
     fetchImplementation,
-    parameters,
     projectRef,
     query: `
       select private.assert_database_identity(
-        $1::text,
-        $2::text
+        ${environmentLiteral}::text,
+        ${projectRefLiteral}::text
       ) as identity
     `,
-    readOnly: true,
     requestTimeoutMilliseconds,
   });
   assert(
