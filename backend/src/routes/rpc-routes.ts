@@ -40,6 +40,8 @@ import {
   LanguageCodeSchema,
   LanguageStatsSchema,
   LessonCreateSchema,
+  LessonCreateDocumentSchema,
+  LessonDocumentSchema,
   LessonParamSchema,
   LessonSchema,
   MeSchema,
@@ -109,8 +111,10 @@ interface RpcEndpoint {
   readonly params?: ObjectSchema;
   readonly query?: ObjectSchema;
   readonly body?: ObjectSchema;
+  readonly documentBody?: ObjectSchema;
   readonly headers?: ObjectSchema;
   readonly response: Schema;
+  readonly documentResponse?: Schema;
   readonly prepare?: (
     input: EndpointInput,
   ) => PreparedEndpointInput | Promise<PreparedEndpointInput>;
@@ -941,8 +945,10 @@ const endpoints: readonly RpcEndpoint[] = [
     tags: ["Lessons"],
     operation: "lessonCreate",
     body: LessonCreateSchema,
+    documentBody: LessonCreateDocumentSchema,
     headers: IdempotencyHeaderSchema,
     response: LessonSchema,
+    documentResponse: LessonDocumentSchema,
   },
   {
     method: "GET",
@@ -954,6 +960,7 @@ const endpoints: readonly RpcEndpoint[] = [
     operation: "lessonGet",
     params: LessonParamSchema,
     response: LessonSchema,
+    documentResponse: LessonDocumentSchema,
   },
   {
     method: "DELETE",
@@ -966,6 +973,7 @@ const endpoints: readonly RpcEndpoint[] = [
     params: LessonParamSchema,
     body: ExpectedRevisionSchema,
     response: LessonSchema,
+    documentResponse: LessonDocumentSchema,
   },
   {
     method: "POST",
@@ -978,6 +986,7 @@ const endpoints: readonly RpcEndpoint[] = [
     params: LessonParamSchema,
     body: ExpectedRevisionSchema,
     response: LessonSchema,
+    documentResponse: LessonDocumentSchema,
   },
   {
     method: "POST",
@@ -990,6 +999,7 @@ const endpoints: readonly RpcEndpoint[] = [
     params: LessonParamSchema,
     body: ExpectedRevisionSchema,
     response: LessonSchema,
+    documentResponse: LessonDocumentSchema,
   },
   {
     method: "POST",
@@ -1148,6 +1158,8 @@ function success<T>(c: Context<AppBindings>, data: T) {
 }
 
 function documentEndpoint(app: OpenAPIHono<AppBindings>, endpoint: RpcEndpoint): void {
+  const documentBody = endpoint.documentBody ?? endpoint.body;
+  const documentResponse = endpoint.documentResponse ?? endpoint.response;
   app.openAPIRegistry.registerPath({
     method: endpoint.method.toLowerCase() as Lowercase<HttpMethod>,
     path: endpoint.documentPath ?? endpoint.path,
@@ -1159,13 +1171,13 @@ function documentEndpoint(app: OpenAPIHono<AppBindings>, endpoint: RpcEndpoint):
       ...(endpoint.params ? { params: endpoint.params } : {}),
       ...(endpoint.query ? { query: endpoint.query } : {}),
       ...(endpoint.headers ? { headers: endpoint.headers } : {}),
-      ...(endpoint.body
+      ...(documentBody
         ? {
             body: {
               required: true,
               content: {
                 "application/json": {
-                  schema: endpoint.body,
+                  schema: documentBody,
                 },
               },
             },
@@ -1177,7 +1189,7 @@ function documentEndpoint(app: OpenAPIHono<AppBindings>, endpoint: RpcEndpoint):
         description: "Successful response",
         content: {
           "application/json": {
-            schema: successSchema(endpoint.response),
+            schema: successSchema(documentResponse),
           },
         },
       },

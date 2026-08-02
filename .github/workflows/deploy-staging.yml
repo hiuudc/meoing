@@ -45,6 +45,35 @@ jobs:
           MEOING_DATABASE_ENVIRONMENT: staging
           MEOING_EXPECTED_SUPABASE_PROJECT_REF: sdwuwmyrbdaarxokxmsf
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+      - name: Verify API secret bindings
+        shell: bash
+        run: |
+          set -euo pipefail
+          configured_secrets="$(
+            npx wrangler secret list \
+              --config wrangler.api.jsonc \
+              --env staging \
+              --format json
+          )"
+          for required_secret in \
+            R2_ACCESS_KEY_ID \
+            R2_SECRET_ACCESS_KEY \
+            INVITE_TOKEN_SECRET \
+            TURNSTILE_SECRET_KEY
+          do
+            jq -e \
+              --arg required_secret "$required_secret" \
+              'any(.[]; .name == $required_secret and .type == "secret_text")' \
+              <<<"$configured_secrets" >/dev/null ||
+              {
+                echo "The staging API Worker is missing ${required_secret}." >&2
+                exit 1
+              }
+          done
+        working-directory: backend
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       - name: Verify maintenance secret binding
         shell: bash
         run: |

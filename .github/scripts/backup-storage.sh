@@ -21,6 +21,59 @@ backup_require_sha256() {
   fi
 }
 
+backup_require_supabase_project_ref() {
+  local name="$1"
+  local value="$2"
+  if [[ ! "$value" =~ ^[a-z0-9]{20}$ ]]; then
+    echo "${name} must be a 20-character lowercase Supabase project ref" >&2
+    return 1
+  fi
+}
+
+backup_assert_tls_database_url() {
+  local database_url="$1"
+  case "$database_url" in
+    postgres://* | postgresql://*) ;;
+    *)
+      echo "SUPABASE_PRODUCTION_DB_URL must be a PostgreSQL URL" >&2
+      return 1
+      ;;
+  esac
+
+  local query_string="${database_url#*\?}"
+  if [[ "$query_string" == "$database_url" ]]; then
+    echo "SUPABASE_PRODUCTION_DB_URL must explicitly set sslmode=require or sslmode=verify-full" >&2
+    return 1
+  fi
+
+  local sslmode=""
+  local sslmode_count=0
+  local parameter
+  local -a parameters=()
+  IFS='&' read -r -a parameters <<< "$query_string"
+  for parameter in "${parameters[@]}"; do
+    if [[ "${parameter%%=*}" == "sslmode" ]]; then
+      sslmode="${parameter#*=}"
+      sslmode_count=$((sslmode_count + 1))
+    fi
+  done
+
+  if [[ "$sslmode_count" -ne 1 || ( "$sslmode" != "require" && "$sslmode" != "verify-full" ) ]]; then
+    echo "SUPABASE_PRODUCTION_DB_URL must explicitly set exactly one sslmode=require or sslmode=verify-full" >&2
+    return 1
+  fi
+}
+
+backup_assert_production_database_identity() {
+  local expected_project_ref="$1"
+  local actual_identity="$2"
+  local expected_identity="production/${expected_project_ref}/tls=true"
+  if [[ "$actual_identity" != "$expected_identity" ]]; then
+    echo "SUPABASE_PRODUCTION_DB_URL does not match the pinned production database identity with TLS" >&2
+    return 1
+  fi
+}
+
 backup_list_objects_json() {
   local prefix="$1"
   local continuation_token=""

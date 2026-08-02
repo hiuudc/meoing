@@ -4,6 +4,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { experimental_readRawConfig } from "wrangler";
 
 const DEPLOY_ENVIRONMENTS = ["staging", "production"];
+const API_REQUIRED_SECRETS = [
+  "R2_ACCESS_KEY_ID",
+  "R2_SECRET_ACCESS_KEY",
+  "INVITE_TOKEN_SECRET",
+  "TURNSTILE_SECRET_KEY",
+];
 const ALERT_DESTINATION = "hiuudc@gmail.com";
 const ALERT_SENDER = "no-reply@auth.meoing.com";
 const IMMUTABLE_ACTION_REFS = new Map([
@@ -43,7 +49,7 @@ function assertBootstrapStepsDoNotReceiveSecrets(workflow, label) {
 function namedStep(workflow, name) {
   const marker = `      - name: ${name}`;
   const start = workflow.indexOf(marker);
-  if (start < 0) throw new Error(`resume workflow is missing the ${name} step`);
+  if (start < 0) throw new Error(`workflow is missing the ${name} step`);
   const next = workflow.indexOf("\n      - ", start + marker.length);
   return workflow.slice(start, next < 0 ? workflow.length : next);
 }
@@ -96,6 +102,26 @@ export function assertApiConfigDoesNotManagePublicRoutes(rawConfig) {
   }
 }
 
+export function assertApiConfigRequiresSecrets(rawConfig) {
+  const configurations = [
+    ["top-level", rawConfig],
+    ...DEPLOY_ENVIRONMENTS.map((environment) => [
+      environment,
+      rawConfig?.env?.[environment],
+    ]),
+  ];
+  const expected = [...API_REQUIRED_SECRETS].sort();
+  for (const [label, configuration] of configurations) {
+    const required = configuration?.secrets?.required;
+    const actual = Array.isArray(required) ? [...required].sort() : [];
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+      throw new Error(
+        `${label} API config must require exactly these secrets: ${expected.join(", ")}`,
+      );
+    }
+  }
+}
+
 export function assertCostGuardEmailIsDestinationLocked(rawConfig) {
   for (const environment of DEPLOY_ENVIRONMENTS) {
     const bindings = rawConfig?.env?.[environment]?.send_email;
@@ -132,6 +158,230 @@ export function assertDeployWorkflowUsesBoundaryCheck(
   }
   if (/wrangler[^\r\n]*(?:--routes?\b|triggers\s+deploy\b)/i.test(workflow)) {
     throw new Error(`${label} must not manage routes through Wrangler CLI flags`);
+  }
+}
+
+function assertDeployVerifiesApiSecrets(workflow, environment) {
+  const step = namedStep(workflow, "Verify API secret bindings");
+  const requiredFragments = [
+    "npx wrangler secret list",
+    "--config wrangler.api.jsonc",
+    `--env ${environment}`,
+    "--format json",
+    "for required_secret in",
+    "--arg required_secret",
+    '.name == $required_secret and .type == "secret_text"',
+  ];
+  for (const fragment of requiredFragments) {
+    if (!step.includes(fragment)) {
+      throw new Error(
+        `${environment} API secret check is incomplete: missing ${fragment}`,
+      );
+    }
+  }
+  for (const secret of API_REQUIRED_SECRETS) {
+    if (!step.includes(secret)) {
+      throw new Error(`${environment} API secret check must require ${secret}`);
+    }
+  }
+  assertExactSecrets(
+    step,
+    ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"],
+    `${environment} API secret check`,
+  );
+
+  const checkIndex = workflow.indexOf("      - name: Verify API secret bindings");
+  const migrationIndex = workflow.indexOf(
+    `      - name: Apply ${environment} migrations`,
+  );
+  const deployIndex = workflow.indexOf("      - name: Deploy API Worker");
+  if (
+    checkIndex < 0 ||
+    migrationIndex < 0 ||
+    deployIndex < 0 ||
+    checkIndex > migrationIndex ||
+    checkIndex > deployIndex
+  ) {
+    throw new Error(
+      `${environment} API secrets must be verified before database mutation and API deploy`,
+    );
+  }
+}
+
+export function assertStagingDeployVerifiesApiSecrets(workflow) {
+  assertDeployVerifiesApiSecrets(workflow, "staging");
+}
+
+export function assertProductionDeployVerifiesApiSecrets(workflow) {
+  assertDeployVerifiesApiSecrets(workflow, "production");
+}
+
+export function assertProductionDeployVerifiesWebBoundaryAndSmoke(workflow) {
+  const smoke = namedStep(workflow, "Production smoke test");
+  const requiredFragments = [
+    'expected_web_origin="https://meoing.com"',
+    'if [[ "$MEOI_WEB_ORIGINS" != "$expected_web_origin" ]]',
+    'for page_path in "/" "/auth/callback" "/privacy" "/terms"; do',
+    "curl --silent --show-error --fail --location",
+    "--retry 5 --retry-all-errors --retry-delay 5",
+    '"${expected_web_origin}${page_path}"',
+    '"${expected_web_origin}/release.json?release=${RELEASE_SHA}"',
+    '.environment == $environment and .commitSha == $commit_sha',
+    "MEOI_WEB_ORIGINS: ${{ vars.MEOI_WEB_ORIGINS }}",
+    "RELEASE_SHA: ${{ steps.release.outputs.release_sha }}",
+  ];
+  for (const fragment of requiredFragments) {
+    if (!smoke.includes(fragment)) {
+      throw new Error(
+        `production web smoke is incomplete: missing ${fragment}`,
+      );
+    }
+  }
+
+  const pagesDeployIndex = workflow.indexOf(
+    "      - name: Deploy production Pages",
+  );
+  const smokeIndex = workflow.indexOf("      - name: Production smoke test");
+  if (
+    pagesDeployIndex < 0 ||
+    smokeIndex < 0 ||
+    pagesDeployIndex > smokeIndex
+  ) {
+    throw new Error(
+      "production web smoke must run after the production Pages deploy",
+    );
+  }
+}
+
+export function assertProductionReleaseInfrastructureGates(
+  workflow,
+  costGuardVerifier,
+) {
+  const corsStep = namedStep(workflow, "Apply and verify production R2 CORS");
+  for (const fragment of [
+    "npx wrangler r2 bucket cors set",
+    'bucket_name="meoing-files-production"',
+    "--file config/r2-cors.production.json",
+    "--force",
+    "/r2/buckets/${bucket_name}/cors",
+    "--slurpfile expected config/r2-cors.production.json",
+    ".success == true and .result == $expected[0]",
+  ]) {
+    if (!corsStep.includes(fragment)) {
+      throw new Error(`production R2 CORS gate is incomplete: missing ${fragment}`);
+    }
+  }
+  assertExactSecrets(
+    corsStep,
+    ["CLOUDFLARE_R2_CORS_TOKEN", "CLOUDFLARE_ACCOUNT_ID"],
+    "production R2 CORS gate",
+  );
+
+  const markerStep = namedStep(workflow, "Write production release marker");
+  for (const fragment of [
+    '--arg environment "production"',
+    '--arg commit_sha "$RELEASE_SHA"',
+    "{environment: $environment, commitSha: $commit_sha}",
+    "> public/release.json",
+    "RELEASE_SHA: ${{ steps.release.outputs.release_sha }}",
+  ]) {
+    if (!markerStep.includes(fragment)) {
+      throw new Error(`production release marker is incomplete: missing ${fragment}`);
+    }
+  }
+  if (containsSecretExpression(markerStep)) {
+    throw new Error("production release marker must not receive provider secrets");
+  }
+
+  for (const fragment of [
+    'worker_name="meoing-cost-guard-production"',
+    "--config wrangler.cost-guard.jsonc",
+    "--env production",
+    '["ALERT_RECIPIENT", "CLOUDFLARE_COST_GUARD_TOKEN"]',
+    'bucket_name == "meoing-cost-guard-production"',
+    'text == "production"',
+    "text == $expected_domains",
+    '/workers/scripts/${worker_name}/schedules',
+    '[.result.schedules[].cron] == ["*/5 * * * *"]',
+    "/workers/domains",
+    "node scripts/cost-guard-resume-r2.mjs",
+    "download-state",
+    '--output "$state_file"',
+    '.status == "NORMAL"',
+    ".consecutiveMetricFailures == 0",
+    ".lastUsage != null",
+    "fromdateiso8601) >= (now - 900)",
+  ]) {
+    if (!costGuardVerifier.includes(fragment)) {
+      throw new Error(
+        `production Cost Guard verifier is incomplete: missing ${fragment}`,
+      );
+    }
+  }
+  if (/wrangler\s+r2\s+object/i.test(costGuardVerifier)) {
+    throw new Error(
+      "production Cost Guard state must use bucket-scoped S3 credentials, not Wrangler native R2 access",
+    );
+  }
+
+  const preflightStep = namedStep(
+    workflow,
+    "Verify production Cost Guard preflight",
+  );
+  const postflightStep = namedStep(
+    workflow,
+    "Verify production Cost Guard postflight",
+  );
+  const expectedGuardStepFragments = [
+    "bash ../.github/scripts/verify-production-cost-guard.sh",
+    "COST_GUARD_ENVIRONMENT: production",
+    "R2_COST_GUARD_ACCESS_KEY_ID: ${{ secrets.R2_COST_GUARD_STATE_READ_ACCESS_KEY_ID }}",
+    "R2_COST_GUARD_SECRET_ACCESS_KEY: ${{ secrets.R2_COST_GUARD_STATE_READ_SECRET_ACCESS_KEY }}",
+  ];
+  for (const guardStep of [preflightStep, postflightStep]) {
+    for (const fragment of expectedGuardStepFragments) {
+      if (!guardStep.includes(fragment)) {
+        throw new Error(
+          `production Cost Guard workflow gate is incomplete: missing ${fragment}`,
+        );
+      }
+    }
+    assertExactSecrets(
+      guardStep,
+      [
+        "CLOUDFLARE_API_TOKEN",
+        "CLOUDFLARE_ACCOUNT_ID",
+        "R2_COST_GUARD_STATE_READ_ACCESS_KEY_ID",
+        "R2_COST_GUARD_STATE_READ_SECRET_ACCESS_KEY",
+      ],
+      "production Cost Guard workflow gate",
+    );
+  }
+
+  const corsIndex = workflow.indexOf("      - name: Apply and verify production R2 CORS");
+  const migrationIndex = workflow.indexOf("      - name: Apply production migrations");
+  const markerIndex = workflow.indexOf("      - name: Write production release marker");
+  const buildIndex = workflow.indexOf("      - name: Build web and production extension");
+  const pgTapIndex = workflow.indexOf(
+    "      - name: Run production-release pgTAP/RLS tests",
+  );
+  const smokeIndex = workflow.indexOf("      - name: Production smoke test");
+  const preflightIndex = workflow.indexOf(
+    "      - name: Verify production Cost Guard preflight",
+  );
+  const postflightIndex = workflow.indexOf(
+    "      - name: Verify production Cost Guard postflight",
+  );
+  if (
+    pgTapIndex < 0 || preflightIndex < 0 || pgTapIndex > preflightIndex ||
+    corsIndex < 0 || preflightIndex > corsIndex ||
+    migrationIndex < 0 || corsIndex > migrationIndex ||
+    markerIndex < 0 || buildIndex < 0 || markerIndex > buildIndex ||
+    smokeIndex < 0 || postflightIndex < 0 || smokeIndex > postflightIndex
+  ) {
+    throw new Error(
+      "production infrastructure gates must finish local tests, run Cost Guard preflight before CORS/migration, write the marker before build, and run Cost Guard postflight after smoke",
+    );
   }
 }
 
@@ -311,6 +561,7 @@ async function main() {
   );
   const { rawConfig } = experimental_readRawConfig({ config: configPath });
   assertApiConfigDoesNotManagePublicRoutes(rawConfig);
+  assertApiConfigRequiresSecrets(rawConfig);
   const costGuardConfigPath = fileURLToPath(
     new URL("../wrangler.cost-guard.jsonc", import.meta.url),
   );
@@ -331,6 +582,13 @@ async function main() {
       url: new URL("../../.github/workflows/deploy-production.yml", import.meta.url),
     },
   ];
+  const productionCostGuardVerifier = await readFile(
+    new URL(
+      "../../.github/scripts/verify-production-cost-guard.sh",
+      import.meta.url,
+    ),
+    "utf8",
+  );
   for (const workflow of workflows) {
     const source = await readFile(workflow.url, "utf8");
     assertDeployWorkflowUsesBoundaryCheck(
@@ -342,6 +600,14 @@ async function main() {
     if (workflow.environment === "staging") {
       assertStagingDeployUsesTrustedPush(source);
       assertStagingDeployScopesCredentials(source);
+      assertStagingDeployVerifiesApiSecrets(source);
+    } else {
+      assertProductionDeployVerifiesApiSecrets(source);
+      assertProductionDeployVerifiesWebBoundaryAndSmoke(source);
+      assertProductionReleaseInfrastructureGates(
+        source,
+        productionCostGuardVerifier,
+      );
     }
   }
   const resumeWorkflow = await readFile(
@@ -355,7 +621,7 @@ async function main() {
   );
   assertImmutableActionRefs(ciWorkflow, "CI workflow");
   process.stdout.write(
-    "Cost Guard boundaries verified: route-free deploys, trusted staging trigger, scoped resume credentials, and locked alert destination.\n",
+    "Production boundaries verified: route-free deploys, fail-closed API secrets, exact R2 CORS, release-SHA smoke, live Cost Guard, trusted staging trigger, scoped resume credentials, and locked alert destination.\n",
   );
 }
 

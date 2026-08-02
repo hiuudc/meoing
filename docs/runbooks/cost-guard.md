@@ -280,6 +280,12 @@ Cloudflare's native REST API does not accept bucket-scoped object tokens and wou
 broader account-level R2 authority. Bucket and object keys are fixed in the checked-in helper;
 they are never workflow inputs or secrets.
 
+The protected production release workflow uses another bucket-scoped S3 credential with
+Object Read-only access to `meoing-cost-guard-production`. It calls the same fixed-key helper
+to prove a fresh NORMAL state both before the first production mutation and after smoke. It
+must not expose the read/write resume credential, write the state object, use native Wrangler
+R2 object access, or turn that read into a resume path.
+
 The workflow exposes the R2 pair only to the state-download and marker-upload steps. The
 GraphQL recheck receives only the Analytics Read token. Checkout, Node setup, confirmation,
 and dependency installation receive no provider secret. Third-party Actions are pinned to

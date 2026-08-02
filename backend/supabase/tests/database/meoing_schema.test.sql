@@ -22,7 +22,7 @@ grant meoing_runtime to meoing_pgtap_executor
 grant usage on schema extensions to meoing_runtime;
 grant execute on all functions in schema extensions to meoing_runtime;
 
-select plan(148);
+select plan(149);
 
 select ok(
   case
@@ -335,6 +335,34 @@ insert into app.username_reservations (
 )
 values ('admin', 'permanent', 'pgTAP fixture')
 on conflict (username) do nothing;
+
+select is(
+  (
+    select array_agg(username order by username)
+    from app.username_reservations
+    where reservation_type = 'permanent'
+  ),
+  array[
+    'admin',
+    'administrator',
+    'api',
+    'everyone',
+    'help',
+    'meoi',
+    'meoing',
+    'moderator',
+    'null',
+    'official',
+    'root',
+    'security',
+    'staff',
+    'support',
+    'system',
+    'undefined',
+    'www'
+  ]::text[],
+  'hosted migrations install the complete permanent username reservation policy'
+);
 
 insert into auth.users (
   id,

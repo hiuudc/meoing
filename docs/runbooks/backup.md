@@ -28,6 +28,10 @@ runner.
 ## Backup policy
 
 - Dump application data and the Supabase Auth data needed to recover users.
+- Before opening the exported snapshot, require the database URL to contain exactly one
+  `sslmode=require` or `sslmode=verify-full`, prove that the current PostgreSQL session uses
+  TLS, and match `private.deployment_identity` to `production` plus the independently pinned
+  Supabase project ref. A staging URL or an unencrypted session must fail before `pg_dump`.
 - Reproduce database structure from committed migrations.
 - Encrypt the tar archive with the configured age recipient before any upload.
 - Format-v2 encrypted manifests contain the exact R2 object key. The uploader records the
@@ -54,9 +58,12 @@ and do not bypass the verified-weekly gate for legacy daily deletion.
 
 The `production-backup` GitHub environment must restrict deployments to `main`. The
 workflows also fail a non-`main` runtime ref, but that check is defense in depth and cannot
-replace the environment deployment-branch policy. Store these secrets there:
+replace the environment deployment-branch policy. Define the non-secret
+`EXPECTED_SUPABASE_PROJECT_REF` variable independently from the database URL, and store
+these secrets there:
 
-- `SUPABASE_PRODUCTION_DB_URL`
+- `SUPABASE_PRODUCTION_DB_URL`, using the production direct/session connection with an
+  explicit `sslmode=require` or `sslmode=verify-full`
 - `BACKUP_AGE_RECIPIENT`
 - `BACKUP_AGE_IDENTITY`
 - `R2_BACKUP_READ_ACCESS_KEY_ID` / `R2_BACKUP_READ_SECRET_ACCESS_KEY`: bucket-scoped

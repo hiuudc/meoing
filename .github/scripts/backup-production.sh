@@ -6,6 +6,7 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/backup-storage.sh"
 
 : "${SUPABASE_PRODUCTION_DB_URL:?SUPABASE_PRODUCTION_DB_URL is required}"
+: "${EXPECTED_SUPABASE_PROJECT_REF:?EXPECTED_SUPABASE_PROJECT_REF is required}"
 : "${BACKUP_AGE_RECIPIENT:?BACKUP_AGE_RECIPIENT is required}"
 : "${R2_BACKUP_ENDPOINT:?R2_BACKUP_ENDPOINT is required}"
 : "${R2_BACKUP_BUCKET:?R2_BACKUP_BUCKET is required}"
@@ -19,11 +20,38 @@ case "$BACKUP_KIND" in
     ;;
 esac
 
+backup_require_supabase_project_ref \
+  "EXPECTED_SUPABASE_PROJECT_REF" \
+  "$EXPECTED_SUPABASE_PROJECT_REF"
+backup_assert_tls_database_url "$SUPABASE_PRODUCTION_DB_URL"
+
 maximum_allocation_bytes="${BACKUP_MAX_ALLOCATION_BYTES:-3221225472}"
 backup_require_uint "BACKUP_MAX_ALLOCATION_BYTES" "$maximum_allocation_bytes"
 allocation_before_bytes="$(backup_allocation_bytes)"
 backup_assert_projected_allocation "$allocation_before_bytes" 0 "$maximum_allocation_bytes" > /dev/null
 echo "Backup allocation preflight: ${allocation_before_bytes} of ${maximum_allocation_bytes} bytes"
+
+database_identity="$(
+  psql "$SUPABASE_PRODUCTION_DB_URL" \
+    --set ON_ERROR_STOP=1 \
+    --no-psqlrc \
+    --quiet \
+    --tuples-only \
+    --no-align \
+    --command "
+      select identity.environment
+        || '/' || identity.supabase_project_ref
+        || '/tls=' || connection.ssl::text
+      from private.deployment_identity as identity
+      cross join pg_catalog.pg_stat_ssl as connection
+      where identity.singleton
+        and connection.pid = pg_backend_pid()
+    "
+)"
+backup_assert_production_database_identity \
+  "$EXPECTED_SUPABASE_PROJECT_REF" \
+  "$database_identity"
+echo "Production database identity and TLS preflight passed"
 
 backup_dir="$(mktemp -d)"
 snapshot_holder_pid=""

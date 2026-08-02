@@ -1980,50 +1980,91 @@ export const LessonPayloadSchema = z
   )
   .pipe(LessonPayloadStructureSchema);
 
+function addLessonCreateConsistencyIssues(
+  lesson: {
+    unitId: string;
+    title: string;
+    payload: { unitId: string; title: string };
+  },
+  addIssue: (issue: { code: "custom"; path: string[]; message: string }) => void,
+): void {
+  if (lesson.payload.unitId !== lesson.unitId) {
+    addIssue({
+      code: "custom",
+      path: ["payload", "unitId"],
+      message: "Lesson payload unitId must match the API unitId",
+    });
+  }
+  if (lesson.payload.title !== lesson.title) {
+    addIssue({
+      code: "custom",
+      path: ["payload", "title"],
+      message: "Lesson payload title must match the API title",
+    });
+  }
+}
+
+const LessonCreateBaseFields = {
+  collectionId: UuidSchema,
+  unitId: UuidSchema,
+  unitRevision: z.number().int().positive(),
+  title: z.string().trim().min(1).max(200),
+  languageCode: LanguageCodeSchema,
+};
+
 export const LessonCreateSchema = z
   .object({
-    collectionId: UuidSchema,
-    unitId: UuidSchema,
-    unitRevision: z.number().int().positive(),
-    title: z.string().trim().min(1).max(200),
-    languageCode: LanguageCodeSchema,
+    ...LessonCreateBaseFields,
     payload: LessonPayloadSchema,
   })
   .superRefine((lesson, context) => {
-    if (lesson.payload.unitId !== lesson.unitId) {
-      context.addIssue({
-        code: "custom",
-        path: ["payload", "unitId"],
-        message: "Lesson payload unitId must match the API unitId",
-      });
-    }
-    if (lesson.payload.title !== lesson.title) {
-      context.addIssue({
-        code: "custom",
-        path: ["payload", "title"],
-        message: "Lesson payload title must match the API title",
-      });
-    }
+    addLessonCreateConsistencyIssues(lesson, (issue) => context.addIssue(issue));
   });
+
+// Keep the OpenAPI contract structural while runtime validation performs the
+// raw-input complexity preflight before parsing the deeply nested lesson.
+export const LessonCreateDocumentSchema = z
+  .object({
+    ...LessonCreateBaseFields,
+    payload: LessonPayloadStructureSchema,
+  })
+  .superRefine((lesson, context) => {
+    addLessonCreateConsistencyIssues(lesson, (issue) => context.addIssue(issue));
+  });
+
+const LessonResponsePrefixFields = {
+  id: UuidSchema,
+  collectionId: UuidSchema,
+  unitId: UuidSchema,
+  unitRevision: z.number().int().positive(),
+  ownerId: UuidSchema,
+  status: z.enum(["draft", "published"]),
+  schemaVersion: z.literal(8),
+  title: z.string(),
+  languageCode: LanguageCodeSchema,
+};
+
+const LessonResponseSuffixFields = {
+  revision: z.number().int().positive(),
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+  deletedAt: TimestampSchema.nullable(),
+  publishedAt: TimestampSchema.nullable(),
+  publishedBy: UuidSchema.nullable(),
+};
 
 export const LessonSchema = z
   .object({
-    id: UuidSchema,
-    collectionId: UuidSchema,
-    unitId: UuidSchema,
-    unitRevision: z.number().int().positive(),
-    ownerId: UuidSchema,
-    status: z.enum(["draft", "published"]),
-    schemaVersion: z.literal(8),
-    title: z.string(),
-    languageCode: LanguageCodeSchema,
+    ...LessonResponsePrefixFields,
     payload: LessonPayloadSchema,
-    revision: z.number().int().positive(),
-    createdAt: TimestampSchema,
-    updatedAt: TimestampSchema,
-    deletedAt: TimestampSchema.nullable(),
-    publishedAt: TimestampSchema.nullable(),
-    publishedBy: UuidSchema.nullable(),
+    ...LessonResponseSuffixFields,
+  });
+
+export const LessonDocumentSchema = z
+  .object({
+    ...LessonResponsePrefixFields,
+    payload: LessonPayloadStructureSchema,
+    ...LessonResponseSuffixFields,
   })
   .openapi("Lesson");
 

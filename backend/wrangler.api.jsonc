@@ -6,6 +6,14 @@
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": false,
   "preview_urls": false,
+  "secrets": {
+    "required": [
+      "R2_ACCESS_KEY_ID",
+      "R2_SECRET_ACCESS_KEY",
+      "INVITE_TOKEN_SECRET",
+      "TURNSTILE_SECRET_KEY"
+    ]
+  },
   "placement": {
     "mode": "smart"
   },
@@ -80,6 +88,14 @@
       "account_id": "29e80074abc5eb106165d2349db7ca56",
       "workers_dev": false,
       "preview_urls": false,
+      "secrets": {
+        "required": [
+          "R2_ACCESS_KEY_ID",
+          "R2_SECRET_ACCESS_KEY",
+          "INVITE_TOKEN_SECRET",
+          "TURNSTILE_SECRET_KEY"
+        ]
+      },
       "placement": {
         "region": "aws:ap-northeast-1"
       },
@@ -130,6 +146,14 @@
     "production": {
       "workers_dev": false,
       "preview_urls": false,
+      "secrets": {
+        "required": [
+          "R2_ACCESS_KEY_ID",
+          "R2_SECRET_ACCESS_KEY",
+          "INVITE_TOKEN_SECRET",
+          "TURNSTILE_SECRET_KEY"
+        ]
+      },
       "limits": {
         "cpu_ms": 20,
         "subrequests": 16

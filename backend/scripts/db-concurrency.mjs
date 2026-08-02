@@ -22,6 +22,7 @@ const secondMemberId = randomUUID();
 const userIds = [ownerId, firstMemberId, secondMemberId];
 const storageAssetIds = [randomUUID(), randomUUID()];
 const storagePrefix = `concurrency/${runId}`;
+const usernamePolicyLockTarget = `lock.${runId}`;
 const inviteTokenHash = createHash("sha256")
   .update(randomBytes(32))
   .digest("hex");
@@ -211,6 +212,94 @@ async function seedUsers(client) {
   } catch (error) {
     await rollbackQuietly(client);
     throw error;
+  }
+}
+
+async function waitForUsernameMutationLock(client, applicationName) {
+  let lastObservation = [];
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const result = await client.query(
+      `
+        select state, wait_event_type, wait_event
+        from pg_catalog.pg_stat_activity
+        where application_name = $1::text
+      `,
+      [applicationName],
+    );
+    lastObservation = result.rows;
+    if (result.rows[0]?.wait_event_type === "Lock") return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(
+    `username mutation ${JSON.stringify(applicationName)} did not wait for the migration table lock: ${JSON.stringify(lastObservation)}`,
+  );
+}
+
+async function exercisePermanentUsernamePolicyLock(client) {
+  const runtimeClient = new Client(
+    clientConfig("username-lock", { runtime: true }),
+  );
+  let policyTransactionOpen = false;
+  let usernameAttempt;
+
+  try {
+    await runtimeClient.connect();
+    const applicationNameResult = await runtimeClient.query(
+      "select current_setting('application_name') as application_name",
+    );
+    const applicationName = applicationNameResult.rows[0]?.application_name;
+    assert.equal(
+      applicationName,
+      `meoing-db-concurrency-username-lock-${runId}`,
+      "username race client must keep its unique application name",
+    );
+    await client.query("begin");
+    policyTransactionOpen = true;
+    await client.query("lock table app.profiles in access exclusive mode");
+    await client.query(
+      "delete from app.username_reservations where username = $1::text",
+      [usernamePolicyLockTarget],
+    );
+
+    usernameAttempt = runAsRuntime(
+      runtimeClient,
+      firstMemberId,
+      "select private.api_change_username(jsonb_build_object('username', $1::text)) as value",
+      [usernamePolicyLockTarget],
+    );
+    await waitForUsernameMutationLock(client, applicationName);
+
+    await client.query(
+      `
+        insert into app.username_reservations (
+          username,
+          reservation_type,
+          user_id,
+          expires_at,
+          reason
+        ) values ($1::text, 'permanent', null, null, 'concurrency_test')
+      `,
+      [usernamePolicyLockTarget],
+    );
+    await client.query("commit");
+    policyTransactionOpen = false;
+
+    const settled = await Promise.allSettled([usernameAttempt]);
+    assert.equal(
+      settled[0]?.status,
+      "rejected",
+      "a username mutation released after the policy lock must see the new reservation",
+    );
+    assert.equal(
+      settled[0]?.reason?.message,
+      "USERNAME_UNAVAILABLE",
+      "the blocked username mutation must fail with USERNAME_UNAVAILABLE",
+    );
+    return { usernamePolicyLock: "enforced" };
+  } finally {
+    if (policyTransactionOpen) await rollbackQuietly(client);
+    if (usernameAttempt) await Promise.allSettled([usernameAttempt]);
+    await runtimeClient.end();
   }
 }
 
@@ -489,6 +578,10 @@ async function cleanup(client) {
       [storagePrefix, storageAssetIds],
     );
     await client.query(
+      "delete from app.username_reservations where username = $1::text",
+      [usernamePolicyLockTarget],
+    );
+    await client.query(
       "delete from auth.users where id = any($1::uuid[])",
       [userIds],
     );
@@ -535,6 +628,7 @@ async function main() {
     runtimeLoginCreated = true;
     await grantRuntimeLogin(setupClient);
     await seedUsers(setupClient);
+    const usernameSummary = await exercisePermanentUsernamePolicyLock(setupClient);
     await runtimeSetupClient.connect();
     runtimeSetupConnected = true;
     await createMaxUseInvite(runtimeSetupClient);
@@ -543,7 +637,7 @@ async function main() {
     await seedStorageBudget(setupClient);
     const storageAttempts = await exerciseStorageRace();
     const storageSummary = await verifyStorageRace(setupClient, storageAttempts);
-    summary = { ...inviteSummary, ...storageSummary };
+    summary = { ...usernameSummary, ...inviteSummary, ...storageSummary };
   } catch (error) {
     primaryError = error;
   } finally {

@@ -33,6 +33,51 @@ GitHub environments:
 - `SUPABASE_PROJECT_REF`
 - `SUPABASE_DB_PASSWORD`
 
+Production additionally requires:
+
+- `CLOUDFLARE_R2_CORS_TOKEN`
+- `R2_COST_GUARD_STATE_READ_ACCESS_KEY_ID`
+- `R2_COST_GUARD_STATE_READ_SECRET_ACCESS_KEY`
+
+The production `CLOUDFLARE_API_TOKEN` is an ordinary release credential, not a
+domain-operator or Cost Guard runtime credential. Scope it to this Meoing account
+and only the capabilities exercised by the checked-in workflow:
+
+- deploy and inspect the three existing Worker services, including their secret
+  names, settings and schedules;
+- deploy the existing production Pages project;
+- read the Workers custom-domain inventory used by the release gate.
+
+Do not grant DNS edit, zone administration, billing edit, account administration,
+database access, or permission to attach/detach Worker routes or custom domains.
+Where Cloudflare combines a needed capability with a
+broader edit permission, record that limitation and validate operationally that
+the release workflow contains no domain mutation; the separate domain operator
+and Cost Guard tokens remain the only credentials used for domain changes. Before
+storing the token in GitHub, run positive canaries for the operations above and
+negative canaries for custom-domain mutation. Re-run the canaries after every
+permission change or rotation.
+
+Store `CLOUDFLARE_R2_CORS_TOKEN` separately in the production GitHub environment.
+It is exposed only to the exact apply/read-back step for
+`meoing-files-production`. Scope it to R2 configuration edit on the Meoing
+account and grant no Workers, Pages, DNS, billing or account-administration
+permissions. If Cloudflare cannot restrict R2 configuration authority to one
+bucket, record the resulting account-wide R2 configuration/deletion capability
+as a provider limitation, keep the token out of every other step, and verify the
+workflow's static boundary before each release. Never reuse this token for R2
+object access or backup retention.
+
+The production GitHub environment also stores
+`R2_COST_GUARD_STATE_READ_ACCESS_KEY_ID` and
+`R2_COST_GUARD_STATE_READ_SECRET_ACCESS_KEY`. Create this as a separate R2 S3
+Object Read-only credential restricted to exactly
+`meoing-cost-guard-production`; it is not the read/write resume credential. The
+release workflow maps it to the fixed S3 helper only while downloading
+`cost-guard/state.json`. Its positive canary must read that object, while reads
+from every other state, asset and backup bucket must fail. This keeps the
+ordinary Cloudflare API token free of account-wide R2 object-read authority.
+
 The protected production environment must also define the non-secret
 `EXPECTED_SUPABASE_PROJECT_REF` variable. It is an independently administered
 deployment pin: the workflow compares it with the secret before `supabase link`
@@ -136,6 +181,97 @@ Configure and review the sampled database signals and provider-side 70%/85%
 quota alerts described in [observability.md](observability.md). The repository
 does not claim those provider alerts exist until their dashboard configuration
 and notification test have been recorded.
+
+## One-time production hostname and Pages bootstrap
+
+The ordinary production workflow assumes that the production Worker service, API custom
+domain and Pages project already exist. This section is the one-time bootstrap for a new
+production environment. It is not a recurring release path and it must not weaken the
+route-free deployment boundary enforced by `npm run cost-guard:deploy-boundary`.
+
+This is an attended manual operator procedure; the repository intentionally has no reusable
+`production-bootstrap` workflow that could retain domain-attachment authority. Record the
+user's explicit production approval and keep two credentials separate at the command/session
+boundary:
+
+- the ordinary deploy credential is exposed only to the route-free Worker/Pages deployment
+  and release-verification steps described above and must not be used to create, attach or
+  restore a Worker route or custom domain;
+- a dedicated, short-lived domain operator credential is exposed only to the exact custom
+  domain inventory and attach steps. Do not expose it to checkout, dependency installation,
+  builds, migrations or ordinary Worker deployment. If Cloudflare cannot narrow the token to
+  one hostname, retain an exact before/after inventory and revoke the token immediately after
+  bootstrap.
+
+The bootstrap must use one exact 40-character commit SHA that is reachable from `main` and
+has a successful `push` CI run. Checkout that SHA detached and use it for every build and
+deployment below; do not rebuild from a moving branch tip.
+
+1. Provision the private production R2 bucket and both cache-disabled Hyperdrive
+   configurations. Replace the reviewed production placeholders in the Wrangler files, then
+   apply [`../../backend/config/r2-cors.production.json`](../../backend/config/r2-cors.production.json)
+   to `meoing-files-production` and verify `r2.dev` plus R2 custom domains remain disabled.
+2. Create the production Pages project once, with `main` as its production branch, and set
+   the protected `CLOUDFLARE_PAGES_PROJECT` variable to that exact project name. Do not reuse
+   the staging project. Reserve `meoing.com` for this project; attach it after the first
+   same-SHA Pages deployment and verify the active certificate and proxied DNS record.
+3. Before any hosted migration or Worker deploy, query the live secret inventory with
+   `wrangler secret list --format json` and confirm all four API secrets exist on
+   `meoing-api-production` and `SUPABASE_SECRET_KEY` exists on
+   `meoing-maintenance-production`. The maintenance key must be an environment-specific
+   `sb_secret_...` value and must pass the Auth Admin canary. A missing binding is a stop
+   condition, not a reason to put a credential in Wrangler vars. Wrangler's
+   `secrets.required` declaration documents/typechecks the binding shape; it is not accepted
+   as proof of live secret presence.
+4. Run the production database target check, apply migrations, and configure the exact
+   deployment identity. From the detached release SHA, deploy the API Worker with only:
+
+   ```powershell
+   npx wrangler deploy --config wrangler.api.jsonc --env production
+   ```
+
+   Do not pass `--route`, `--routes`, or a trigger override, and do not add `route`/`routes`
+   to any API Wrangler environment. Verify the resulting service is exactly
+   `meoing-api-production`, with `workers.dev` and preview URLs disabled, before attaching a
+   public hostname.
+5. In the separately authorized domain-operator step, obtain a fresh live custom-domain
+   inventory, require that `api.meoing.com` is absent, and attach exactly this pair through
+   the Workers Custom Domains API:
+
+   ```text
+   api.meoing.com -> meoing-api-production
+   ```
+
+   Reject an existing hostname mapped to any other service. Re-read the provider inventory
+   and require exactly one matching pair, no unexpected production API route, and both
+   `workers.dev` and preview URLs still disabled. Record sanitized request IDs, timestamps and
+   the before/after mapping in the restricted change record.
+6. Deploy the maintenance Worker and the first Pages build from the same release SHA. Attach
+   `meoing.com` to the production Pages project, verify its certificate/DNS, and confirm the
+   frontend origin exactly matches the API and R2 CORS allowlists.
+7. Complete every production gate in [cost-guard.md](cost-guard.md): preserve the attended
+   staging warning/STOP/idempotent-resume evidence, create the production state bucket and
+   two live secrets, deploy `meoing-cost-guard-production`, and verify the live Cron is
+   exactly `*/5 * * * *`, its topology contains exactly the staging and production API
+   mappings, and a scheduled `cost_guard_checked` run writes a fresh NORMAL state. The
+   ordinary API workflow deliberately does not deploy the controller, but it does fail unless
+   this exact live topology, Cron and fresh state are present. Install the separate read-only
+   production state credential described above before enabling the release workflow.
+8. Dispatch the canonical **Deploy production** workflow with that same SHA. Its API deploy
+   remains route-free and first runs a fresh Cost Guard preflight before any production
+   mutation. It then preserves the audited custom-domain mapping, reapplies and reads back
+   exact R2 CORS only after all local tests pass, redeploys Pages, proves `meoing.com` serves
+   that release SHA, and repeats the live Cost Guard check as a postflight. A different SHA
+   or a changed domain inventory requires a new reviewed bootstrap attempt.
+9. Run the credentialed production acceptance in [acceptance.md](acceptance.md). It must use
+   canary accounts to prove production Turnstile signup/recovery, invite preview/acceptance,
+   an R2 upload/finalize/download cycle against `meoing-files-production`, and denial of a
+   cross-owner asset. Secret-name inventory and `/health/*` do not validate secret values.
+   Delete the marked canaries and their assets after the checks. A green deployment workflow
+   alone is not production acceptance.
+10. Revoke the short-lived bootstrap domain credential. After the production Cost Guard owns
+   both API mappings, never use this procedure to bypass a STOPPED state or manually reattach
+   a detached domain; only the approved Cost Guard resume workflow may restore it.
 
 Production deployment is manual through the protected GitHub `production`
 environment. If the API release fails, roll back the Worker version. Database

@@ -2,20 +2,40 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   assertApiConfigDoesNotManagePublicRoutes,
+  assertApiConfigRequiresSecrets,
   assertCostGuardEmailIsDestinationLocked,
   assertDeployWorkflowUsesBoundaryCheck,
   assertImmutableActionRefs,
+  assertProductionDeployVerifiesApiSecrets,
+  assertProductionDeployVerifiesWebBoundaryAndSmoke,
+  assertProductionReleaseInfrastructureGates,
   assertResumeWorkflowScopesCredentials,
+  assertStagingDeployVerifiesApiSecrets,
   assertStagingDeployScopesCredentials,
   assertStagingDeployUsesTrustedPush,
 } from "./verify-cost-guard-deploy-boundary.mjs";
 
+const requiredApiSecrets = [
+  "R2_ACCESS_KEY_ID",
+  "R2_SECRET_ACCESS_KEY",
+  "INVITE_TOKEN_SECRET",
+  "TURNSTILE_SECRET_KEY",
+];
 const safeConfig = {
   workers_dev: false,
   preview_urls: false,
+  secrets: { required: requiredApiSecrets },
   env: {
-    staging: { workers_dev: false, preview_urls: false },
-    production: { workers_dev: false, preview_urls: false },
+    staging: {
+      workers_dev: false,
+      preview_urls: false,
+      secrets: { required: requiredApiSecrets },
+    },
+    production: {
+      workers_dev: false,
+      preview_urls: false,
+      secrets: { required: requiredApiSecrets },
+    },
   },
 };
 
@@ -66,6 +86,34 @@ test("ordinary API config omits every Wrangler-managed public route", () => {
   );
 });
 
+test("API config declares every runtime secret as required in each environment", () => {
+  assert.doesNotThrow(() => assertApiConfigRequiresSecrets(safeConfig));
+  assert.throws(
+    () => assertApiConfigRequiresSecrets({
+      ...safeConfig,
+      env: {
+        ...safeConfig.env,
+        production: {
+          ...safeConfig.env.production,
+          secrets: {
+            required: requiredApiSecrets.filter(
+              (secret) => secret !== "TURNSTILE_SECRET_KEY",
+            ),
+          },
+        },
+      },
+    }),
+    /production API config must require exactly these secrets/,
+  );
+  assert.throws(
+    () => assertApiConfigRequiresSecrets({
+      ...safeConfig,
+      secrets: { required: [...requiredApiSecrets, "TURNSTILE_SECRET_KEY"] },
+    }),
+    /top-level API config must require exactly these secrets/,
+  );
+});
+
 test("Cost Guard email binding is locked to the verified destination", () => {
   const binding = {
     name: "ALERT_EMAIL",
@@ -103,6 +151,211 @@ test("deploy workflow must run the guard before the route-free deploy", () => {
       "staging",
     ),
     /must not manage routes/,
+  );
+});
+
+test("production verifies all API secrets before migrations and deploy", () => {
+  const secretCheck = `
+      - name: Verify API secret bindings
+        run: |
+          npx wrangler secret list \\
+            --config wrangler.api.jsonc \\
+            --env production \\
+            --format json
+          for required_secret in \\
+            R2_ACCESS_KEY_ID \\
+            R2_SECRET_ACCESS_KEY \\
+            INVITE_TOKEN_SECRET \\
+            TURNSTILE_SECRET_KEY
+          do
+            jq -e \\
+              --arg required_secret "$required_secret" \\
+              'any(.[]; .name == $required_secret and .type == "secret_text")'
+          done
+        env:
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+`;
+  const migration = "      - name: Apply production migrations\n";
+  const deploy = "      - name: Deploy API Worker\n";
+  assert.doesNotThrow(() =>
+    assertProductionDeployVerifiesApiSecrets(secretCheck + migration + deploy)
+  );
+  assert.throws(
+    () => assertProductionDeployVerifiesApiSecrets(
+      (secretCheck + migration + deploy).replace(
+        "TURNSTILE_SECRET_KEY",
+        "UNEXPECTED_SECRET",
+      ),
+    ),
+    /must require TURNSTILE_SECRET_KEY/,
+  );
+  assert.throws(
+    () => assertProductionDeployVerifiesApiSecrets(migration + secretCheck + deploy),
+    /before database mutation and API deploy/,
+  );
+});
+
+test("staging verifies all API secrets before migrations and deploy", () => {
+  const secretCheck = `
+      - name: Verify API secret bindings
+        run: |
+          npx wrangler secret list \\
+            --config wrangler.api.jsonc \\
+            --env staging \\
+            --format json
+          for required_secret in \\
+            R2_ACCESS_KEY_ID \\
+            R2_SECRET_ACCESS_KEY \\
+            INVITE_TOKEN_SECRET \\
+            TURNSTILE_SECRET_KEY
+          do
+            jq -e \\
+              --arg required_secret "$required_secret" \\
+              'any(.[]; .name == $required_secret and .type == "secret_text")'
+          done
+        env:
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+`;
+  const migration = "      - name: Apply staging migrations\n";
+  const deploy = "      - name: Deploy API Worker\n";
+  assert.doesNotThrow(() =>
+    assertStagingDeployVerifiesApiSecrets(secretCheck + migration + deploy)
+  );
+  assert.throws(
+    () => assertStagingDeployVerifiesApiSecrets(migration + secretCheck + deploy),
+    /before database mutation and API deploy/,
+  );
+});
+
+test("production locks the extension origin and smokes every public web entrypoint", () => {
+  const pagesDeploy = "      - name: Deploy production Pages\n";
+  const smoke = `
+      - name: Production smoke test
+        run: |
+          expected_web_origin="https://meoing.com"
+          if [[ "$MEOI_WEB_ORIGINS" != "$expected_web_origin" ]]; then
+            exit 1
+          fi
+          for page_path in "/" "/auth/callback" "/privacy" "/terms"; do
+            curl --silent --show-error --fail --location \\
+              --retry 5 --retry-all-errors --retry-delay 5 \\
+              "\${expected_web_origin}\${page_path}" \\
+              --output /dev/null
+          done
+          curl "\${expected_web_origin}/release.json?release=\${RELEASE_SHA}"
+          .environment == $environment and .commitSha == $commit_sha
+        env:
+          MEOI_WEB_ORIGINS: \${{ vars.MEOI_WEB_ORIGINS }}
+          RELEASE_SHA: \${{ steps.release.outputs.release_sha }}
+`;
+  assert.doesNotThrow(() =>
+    assertProductionDeployVerifiesWebBoundaryAndSmoke(pagesDeploy + smoke)
+  );
+  assert.throws(
+    () => assertProductionDeployVerifiesWebBoundaryAndSmoke(
+      (pagesDeploy + smoke).replace(
+        'expected_web_origin="https://meoing.com"',
+        'expected_web_origin="https://staging.meoing.com"',
+      ),
+    ),
+    /production web smoke is incomplete/,
+  );
+  assert.throws(
+    () => assertProductionDeployVerifiesWebBoundaryAndSmoke(
+      (pagesDeploy + smoke).replace(' "/terms"', ""),
+    ),
+    /production web smoke is incomplete/,
+  );
+  assert.throws(
+    () => assertProductionDeployVerifiesWebBoundaryAndSmoke(smoke + pagesDeploy),
+    /must run after the production Pages deploy/,
+  );
+});
+
+test("production proves exact R2 CORS, release SHA, and live Cost Guard", () => {
+  const cors = `
+      - name: Apply and verify production R2 CORS
+        run: |
+          bucket_name="meoing-files-production"
+          npx wrangler r2 bucket cors set "$bucket_name" \\
+            --file config/r2-cors.production.json \\
+            --force
+          curl "/r2/buckets/\${bucket_name}/cors"
+          jq --slurpfile expected config/r2-cors.production.json \\
+            '.success == true and .result == $expected[0]'
+        env:
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_R2_CORS_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+`;
+  const marker = `
+      - name: Write production release marker
+        run: |
+          jq --arg environment "production" \\
+            --arg commit_sha "$RELEASE_SHA" \\
+            '{environment: $environment, commitSha: $commit_sha}' \\
+            > public/release.json
+        env:
+          RELEASE_SHA: \${{ steps.release.outputs.release_sha }}
+`;
+  const guardStep = (phase) => `
+      - name: Verify production Cost Guard ${phase}
+        run: bash ../.github/scripts/verify-production-cost-guard.sh
+        env:
+          COST_GUARD_ENVIRONMENT: production
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_COST_GUARD_ACCESS_KEY_ID: \${{ secrets.R2_COST_GUARD_STATE_READ_ACCESS_KEY_ID }}
+          R2_COST_GUARD_SECRET_ACCESS_KEY: \${{ secrets.R2_COST_GUARD_STATE_READ_SECRET_ACCESS_KEY }}
+`;
+  const guardVerifier = `
+    worker_name="meoing-cost-guard-production"
+    npx wrangler secret list --config wrangler.cost-guard.jsonc --env production
+    ["ALERT_RECIPIENT", "CLOUDFLARE_COST_GUARD_TOKEN"]
+    bucket_name == "meoing-cost-guard-production"
+    text == "production"
+    text == $expected_domains
+    curl /workers/scripts/\${worker_name}/schedules
+    [.result.schedules[].cron] == ["*/5 * * * *"]
+    curl /workers/domains
+    node scripts/cost-guard-resume-r2.mjs download-state --output "$state_file"
+    .status == "NORMAL"
+    .consecutiveMetricFailures == 0
+    .lastUsage != null
+    fromdateiso8601) >= (now - 900)
+  `;
+  const pgTap = "      - name: Run production-release pgTAP/RLS tests\n";
+  const migration = "      - name: Apply production migrations\n";
+  const build = "      - name: Build web and production extension\n";
+  const smoke = "      - name: Production smoke test\n";
+  const safe =
+    marker + build + pgTap + guardStep("preflight") + cors + migration +
+    smoke + guardStep("postflight");
+  assert.doesNotThrow(() =>
+    assertProductionReleaseInfrastructureGates(safe, guardVerifier),
+  );
+  assert.throws(
+    () => assertProductionReleaseInfrastructureGates(
+      safe.replace("--force", ""),
+      guardVerifier,
+    ),
+    /production R2 CORS gate is incomplete/,
+  );
+  assert.throws(
+    () => assertProductionReleaseInfrastructureGates(
+      marker + build + pgTap + cors + guardStep("preflight") + migration +
+        smoke + guardStep("postflight"),
+      guardVerifier,
+    ),
+    /production infrastructure gates must finish local tests/,
+  );
+  assert.throws(
+    () => assertProductionReleaseInfrastructureGates(
+      safe,
+      `${guardVerifier}\nnpx wrangler r2 object get bucket/key`,
+    ),
+    /bucket-scoped S3 credentials/,
   );
 });
 

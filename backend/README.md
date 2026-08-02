@@ -109,9 +109,12 @@ npx wrangler secret put ALERT_RECIPIENT --config wrangler.cost-guard.jsonc --env
 ```
 
 Repeat with `--env production`. Use a dedicated `sb_secret_...` key for each environment.
-The maintenance Wrangler configuration declares this binding as required, so deploy fails
-closed when it is absent. Every scheduled run also checks the `sb_secret_` format and makes
-a read-only Supabase Auth Admin canary request before cleanup. Confirm a
+The Wrangler configurations declare the expected API and maintenance bindings for type
+generation and local tooling. That declaration is not a provider-side deployment guard.
+The hosted staging/production workflows therefore query the live Worker secret inventory
+and stop before migrations or deployment if an API secret or `SUPABASE_SECRET_KEY` is
+absent. Every scheduled maintenance run also checks the `sb_secret_` format and makes a
+read-only Supabase Auth Admin canary request before cleanup. Confirm a
 `maintenance_complete` event after secret rotation before revoking the previous key. The API
 Worker must never receive a Supabase secret key.
 

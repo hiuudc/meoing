@@ -41,6 +41,41 @@ if backup_assert_projected_allocation 4001 0 4000 > /dev/null 2>&1; then
   fail "existing allocation above the limit must fail before backup"
 fi
 
+backup_require_supabase_project_ref \
+  "EXPECTED_SUPABASE_PROJECT_REF" \
+  "abcdefghijklmnopqrst"
+if backup_require_supabase_project_ref \
+  "EXPECTED_SUPABASE_PROJECT_REF" \
+  "not-a-project-ref" > /dev/null 2>&1; then
+  fail "production backup project ref must be independently pinned"
+fi
+backup_assert_tls_database_url \
+  'postgresql://postgres:secret@db.example.invalid/postgres?sslmode=require'
+backup_assert_tls_database_url \
+  'postgres://postgres:secret@db.example.invalid/postgres?application_name=backup&sslmode=verify-full'
+for insecure_database_url in \
+  'postgresql://postgres:secret@db.example.invalid/postgres' \
+  'postgresql://postgres:secret@db.example.invalid/postgres?sslmode=disable' \
+  'postgresql://postgres:secret@db.example.invalid/postgres?sslmode=prefer' \
+  'postgresql://postgres:secret@db.example.invalid/postgres?sslmode=require&sslmode=verify-full'; do
+  if backup_assert_tls_database_url "$insecure_database_url" > /dev/null 2>&1; then
+    fail "production backup URL must reject missing, weak, or duplicate sslmode"
+  fi
+done
+backup_assert_production_database_identity \
+  "abcdefghijklmnopqrst" \
+  "production/abcdefghijklmnopqrst/tls=true"
+if backup_assert_production_database_identity \
+  "abcdefghijklmnopqrst" \
+  "staging/abcdefghijklmnopqrst/tls=true" > /dev/null 2>&1; then
+  fail "production backup must reject a staging database marker"
+fi
+if backup_assert_production_database_identity \
+  "abcdefghijklmnopqrst" \
+  "production/abcdefghijklmnopqrst/tls=false" > /dev/null 2>&1; then
+  fail "production backup must reject a non-TLS database session"
+fi
+
 latest_record="$(backup_latest_record_from_json weekly/ < "$weekly_fixture")"
 IFS=$'\t' read -r latest_key latest_modified latest_size <<< "$latest_record"
 assert_equal "weekly/meoing-2026-08-24T02-23-00Z.tar.age" "$latest_key" "latest key by LastModified"
@@ -189,7 +224,8 @@ assert_equal "3220" "$bucket_allocation" "entire backup bucket allocation"
 export FAKE_BUCKET_FIXTURE="${script_dir}/fixtures/bucket-over-limit.json"
 if BACKUP_KIND=weekly \
   BACKUP_MAX_ALLOCATION_BYTES=3221225472 \
-  SUPABASE_PRODUCTION_DB_URL='postgresql://backup.invalid/postgres' \
+  SUPABASE_PRODUCTION_DB_URL='postgresql://backup.invalid/postgres?sslmode=require' \
+  EXPECTED_SUPABASE_PROJECT_REF='abcdefghijklmnopqrst' \
   BACKUP_AGE_RECIPIENT='age1test' \
     bash "${script_dir}/../backup-production.sh" > "${mock_root}/over-limit.out" 2>&1; then
   fail "backup creation must fail its whole-bucket preflight above 3 GiB"
@@ -475,6 +511,8 @@ grep --fixed-strings --quiet 'R2_BACKUP_READ_ACCESS_KEY_ID' "$freshness_workflow
   || fail "freshness monitor must use its read-only credential"
 grep --fixed-strings --quiet 'R2_BACKUP_WRITE_ACCESS_KEY_ID' "$backup_workflow" \
   || fail "backup upload must use its dedicated writer credential"
+grep --fixed-strings --quiet 'EXPECTED_SUPABASE_PROJECT_REF: ${{ vars.EXPECTED_SUPABASE_PROJECT_REF }}' "$backup_workflow" \
+  || fail "backup workflow must pin the production Supabase project independently"
 grep --fixed-strings --quiet 'R2_BACKUP_RETENTION_ACCESS_KEY_ID' "$backup_workflow" \
   || fail "automatic retention must use its dedicated credential"
 grep --fixed-strings --quiet 'R2_BACKUP_VERIFY_ACCESS_KEY_ID' "$restore_workflow" \
@@ -510,6 +548,10 @@ grep --fixed-strings --quiet -- "--if-none-match '*'" "$backup_script" \
   || fail "new backup uploads must use an atomic create-only precondition"
 grep --fixed-strings --quiet 'formatVersion: 2' "$backup_script" \
   || fail "new encrypted manifests must bind format-v2 identity fields"
+grep --fixed-strings --quiet 'private.deployment_identity' "$backup_script" \
+  || fail "backup creation must query the database deployment identity before snapshot export"
+grep --fixed-strings --quiet 'pg_catalog.pg_stat_ssl' "$backup_script" \
+  || fail "backup creation must prove the PostgreSQL session uses TLS"
 if grep --fixed-strings --quiet 'prune_prefix' "$backup_script"; then
   fail "backup creation script must not prune before restore"
 fi
