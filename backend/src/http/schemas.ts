@@ -477,6 +477,16 @@ interface PersistedImageIssue {
   path: Array<string | number>;
 }
 
+function isExternalImageUrl(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+
 function findPersistedImageIssue(value: unknown): PersistedImageIssue | null {
   const pending: Array<{ path: Array<string | number>; value: unknown }> = [{
     path: [],
@@ -494,15 +504,25 @@ function findPersistedImageIssue(value: unknown): PersistedImageIssue | null {
     if (!current.value || typeof current.value !== "object") continue;
     const record = current.value as Record<string, unknown>;
     if (record.type === "meoi-image") {
-      if (typeof record.assetId !== "string" || !UuidSchema.safeParse(record.assetId).success) {
+      const hasAssetId = Object.hasOwn(record, "assetId");
+      const hasSource = Object.hasOwn(record, "src") && record.src !== "";
+      if (hasAssetId && hasSource) {
         return {
-          message: "Persisted image nodes require a valid assetId",
-          path: [...current.path, "assetId"],
+          message: "Persisted image nodes must use either an assetId or an HTTPS source URL",
+          path: [...current.path, "src"],
         };
       }
-      if (record.src !== undefined && record.src !== "") {
+      if (hasAssetId) {
+        if (typeof record.assetId !== "string" || !UuidSchema.safeParse(record.assetId).success
+          || (record.src !== undefined && record.src !== "")) {
+          return {
+            message: "Persisted image nodes require a valid assetId with no source URL",
+            path: [...current.path, "assetId"],
+          };
+        }
+      } else if (!isExternalImageUrl(record.src)) {
         return {
-          message: "Persisted image nodes may not contain a source URL",
+          message: "Persisted external image nodes require a valid HTTPS source URL",
           path: [...current.path, "src"],
         };
       }

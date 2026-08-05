@@ -17,8 +17,6 @@ import {
 export type DocumentTransferFormat = "json" | "html" | "markdown";
 export type EmbedProvider = "youtube" | "twitter" | "figma";
 
-const IMAGE_DATA_URL = /^data:image\/(?:png|jpeg|webp|gif);base64,[a-z0-9+/=\s]+$/i;
-const IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 const SAFE_LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:", "tel:"]);
 const SAFE_MEDIA_PROTOCOLS = new Set(["http:", "https:"]);
 const ASSET_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -49,40 +47,18 @@ export function sanitizeLinkUrl(value: string): string | null {
   return url && SAFE_LINK_PROTOCOLS.has(url.protocol) ? url.toString() : null;
 }
 
-export function sanitizeImageDataSource(value: string): string | null {
-  const trimmed = value.trim();
-  return IMAGE_DATA_URL.test(trimmed) ? trimmed.replace(/\s+/g, "") : null;
+export function sanitizeExternalImageUrl(value: string): string | null {
+  const url = parseAbsoluteUrl(value);
+  if (!url || url.protocol !== "https:" || url.username || url.password) return null;
+  return url.toString();
 }
 
 export function resolveAuthorizedImageSource(value: string, assetId: string): string {
-  const dataSource = sanitizeImageDataSource(value);
-  if (dataSource) return dataSource;
-  if (!ASSET_UUID.test(assetId)) return "";
-  const trimmed = value.trim();
-  const url = parseAbsoluteUrl(trimmed);
-  return url && SAFE_MEDIA_PROTOCOLS.has(url.protocol) ? url.toString() : "";
-}
-
-export function isSupportedImageFile(file: Pick<File, "type">): boolean {
-  return IMAGE_MIME_TYPES.has(file.type.toLowerCase());
-}
-
-export function readImageFileAsDataUrl(file: File): Promise<string> {
-  if (!isSupportedImageFile(file)) {
-    return Promise.reject(new Error("Choose a PNG, JPEG, WebP, or GIF image."));
+  if (ASSET_UUID.test(assetId)) {
+    const url = parseAbsoluteUrl(value);
+    return url && SAFE_MEDIA_PROTOCOLS.has(url.protocol) ? url.toString() : "";
   }
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error("The image could not be read."));
-    reader.onload = () => {
-      const source = typeof reader.result === "string"
-        ? sanitizeImageDataSource(reader.result)
-        : null;
-      if (!source) reject(new Error("The selected file is not a supported image."));
-      else resolve(source);
-    };
-    reader.readAsDataURL(file);
-  });
+  return sanitizeExternalImageUrl(value) ?? "";
 }
 
 export function detectEmbedProvider(value: string): EmbedProvider | null {
@@ -178,8 +154,13 @@ export function importEditorContent(
         Object.entries(record).map(([key, child]) => [key, sanitizeImportedImages(child)]),
       );
       if (record.type === "meoi-image") {
+        const assetId = typeof record.assetId === "string" && ASSET_UUID.test(record.assetId)
+          ? record.assetId
+          : "";
+        if (assetId) sanitized.assetId = assetId;
+        else delete sanitized.assetId;
         sanitized.src = typeof record.src === "string"
-          ? sanitizeImageDataSource(record.src) ?? ""
+          ? resolveAuthorizedImageSource(record.src, assetId)
           : "";
       }
       return sanitized;

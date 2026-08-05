@@ -27,11 +27,9 @@ describe("Lexical file assets", () => {
       },
     });
 
-    const stored = JSON.parse(await prepareLexicalDocumentForStorage(
-      apiWithPost(post),
-      content,
-      "collection-1",
-    )) as { root: { children: Array<Record<string, unknown>> } };
+    const stored = JSON.parse(await prepareLexicalDocumentForStorage(content)) as {
+      root: { children: Array<Record<string, unknown>> };
+    };
 
     expect(stored.root.children[0]).toMatchObject({
       type: "meoi-image",
@@ -41,30 +39,8 @@ describe("Lexical file assets", () => {
     expect(post).not.toHaveBeenCalled();
   });
 
-  it("uploads a data image as a collection-scoped private asset", async () => {
-    const post = vi.fn()
-      .mockResolvedValueOnce({
-        data: {
-          assetId: "asset-new",
-          uploadUrl: "https://r2.example/upload",
-          headers: { "x-upload-token": "signed" },
-        },
-      })
-      .mockResolvedValueOnce({ data: { status: "ready" } });
-    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      if (String(input).startsWith("data:")) {
-        return new Response(new Uint8Array([137, 80, 78, 71]), { status: 200 });
-      }
-      expect(String(input)).toBe("https://r2.example/upload");
-      expect(init?.method).toBe("PUT");
-      expect(new Headers(init?.headers).get("x-upload-token")).toBe("signed");
-      return new Response(null, { status: 200 });
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const onUploaded = vi.fn();
-
-    const stored = JSON.parse(await prepareLexicalDocumentForStorage(
-      apiWithPost(post),
+  it("rejects local data images instead of uploading them to R2", async () => {
+    await expect(prepareLexicalDocumentForStorage(
       JSON.stringify({
         root: {
           children: [{
@@ -73,52 +49,26 @@ describe("Lexical file assets", () => {
           }],
         },
       }),
-      "collection-1",
-      onUploaded,
-    )) as { root: { children: Array<Record<string, unknown>> } };
-
-    expect(post).toHaveBeenNthCalledWith(
-      1,
-      "/v1/files/uploads",
-      expect.objectContaining({
-        collectionId: "collection-1",
-        filename: "embedded-image.png",
-        mimeType: "image/png",
-        size: 4,
-      }),
-      expect.any(String),
-    );
-    expect(post).toHaveBeenNthCalledWith(
-      2,
-      "/v1/files/asset-new/finalize",
-      expect.objectContaining({ sha256: expect.stringMatching(/^[a-f0-9]{64}$/) }),
-      expect.any(String),
-    );
-    expect(stored.root.children[0]).toMatchObject({
-      type: "meoi-image",
-      assetId: "asset-new",
-      src: "",
-    });
-    expect(onUploaded).toHaveBeenCalledWith("asset-new");
+    )).rejects.toThrow("Document images must use a valid HTTPS image URL.");
   });
 
-  it("rejects an external image URL instead of persisting a collaborator-visible request", async () => {
-    const post = vi.fn();
-
-    await expect(prepareLexicalDocumentForStorage(
-      apiWithPost(post),
+  it("persists a valid HTTPS image URL without calling the files API", async () => {
+    const stored = JSON.parse(await prepareLexicalDocumentForStorage(
       JSON.stringify({
         root: {
           children: [{
             type: "meoi-image",
-            src: "https://tracker.example/pixel.png?viewer=canary",
+            src: "https://images.example.test/pixel.png?viewer=canary",
           }],
         },
       }),
-      "collection-1",
-    )).rejects.toThrow("Document images must be uploaded before they can be saved.");
+    )) as { root: { children: Array<Record<string, unknown>> } };
 
-    expect(post).not.toHaveBeenCalled();
+    expect(stored.root.children[0]).toMatchObject({
+      type: "meoi-image",
+      src: "https://images.example.test/pixel.png?viewer=canary",
+    });
+    expect(stored.root.children[0]).not.toHaveProperty("assetId");
   });
 
   it("hydrates one signed URL per asset even when the document reuses it", async () => {
@@ -146,7 +96,7 @@ describe("Lexical file assets", () => {
     ]);
   });
 
-  it("removes legacy external image sources that have no authorized asset", async () => {
+  it("keeps an external HTTPS image source when hydrating a document", async () => {
     const post = vi.fn();
 
     const hydrated = JSON.parse(await hydrateLexicalDocumentForEditing(
@@ -163,7 +113,7 @@ describe("Lexical file assets", () => {
 
     expect(hydrated.root.children[0]).toMatchObject({
       type: "meoi-image",
-      src: "",
+      src: "https://tracker.example/legacy.png?viewer=canary",
     });
     expect(post).not.toHaveBeenCalled();
   });

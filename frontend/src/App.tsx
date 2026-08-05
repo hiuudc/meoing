@@ -213,7 +213,6 @@ export function App() {
   async function submitEditor(fields: Record<string, string>): Promise<string | null> {
     if (!editor) return "The editor is no longer available.";
     if (!api) return "The API is not available.";
-    const uploadedAssetIds: string[] = [];
     try {
       if (editor.type === "collection") {
         const currentProfile = normalizeLearningProfile(editor.value?.learningProfile);
@@ -280,12 +279,7 @@ export function App() {
         if (editor.type === "document") {
           const rawContent = fields.content.trim();
           const content = rawContent
-            ? await prepareLexicalDocumentForStorage(
-              api,
-              rawContent,
-              state.units[unitId].collectionId,
-              (assetId) => uploadedAssetIds.push(assetId),
-            )
+            ? await prepareLexicalDocumentForStorage(rawContent)
             : "";
           const document: Document = {
             id: editor.value?.id ?? makeId("document"),
@@ -326,9 +320,6 @@ export function App() {
       closeEditor();
       return null;
     } catch (error) {
-      await Promise.allSettled(uploadedAssetIds.map((assetId) => (
-        api.delete(`/v1/files/${encodeURIComponent(assetId)}`)
-      )));
       if (error instanceof ApiError && error.code === "REVISION_CONFLICT") {
         await refreshWorkspace();
         return "Another teacher changed this resource. Saving this stale draft is blocked so it cannot overwrite a different JSON item. Copy your entered changes, close the editor, reopen the latest item, and merge them there.";

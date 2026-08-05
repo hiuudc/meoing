@@ -52,11 +52,22 @@ describe("persisted unit document images", () => {
     }
   });
 
-  it("rejects external image URLs and image nodes without an asset reference", () => {
+  it("accepts external HTTPS image URLs but rejects unsafe or ambiguous image sources", () => {
+    expect(UnitDocumentSchema.safeParse({
+      title: "External image",
+      content: {
+        root: {
+          children: [{ type: "meoi-image", src: "https://images.example.test/pixel.png" }],
+        },
+      },
+    }).success).toBe(true);
+
     for (const image of [
-      { type: "meoi-image", src: "https://tracker.example/pixel.png" },
+      { type: "meoi-image", src: "http://tracker.example/pixel.png" },
+      { type: "meoi-image", src: "data:image/png;base64,iVBORw==" },
       { type: "meoi-image", assetId: validAssetId, src: "https://signed.example/temporary" },
       { type: "meoi-image", assetId: "not-a-uuid", src: "" },
+      { type: "meoi-image" },
     ]) {
       expect(UnitDocumentSchema.safeParse({
         title: "Unsafe image",

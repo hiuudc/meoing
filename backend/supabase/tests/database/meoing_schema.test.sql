@@ -22,7 +22,7 @@ grant meoing_runtime to meoing_pgtap_executor
 grant usage on schema extensions to meoing_runtime;
 grant execute on all functions in schema extensions to meoing_runtime;
 
-select plan(149);
+select plan(150);
 
 select ok(
   case
@@ -921,24 +921,11 @@ select throws_ok(
   'a user cannot authorize download of an asset from another collection'
 );
 
-select throws_ok(
-  format(
-    $query$select private.api_unit_create(
-      jsonb_build_object(
-        'collectionId', %L,
-        'name', 'External image only',
-        'languageCode', 'en',
-        'words', '[]'::jsonb,
-        'phrases', '[]'::jsonb,
-        'sentences', '[]'::jsonb,
-        'documents', '[{"title":"Unsafe","content":{"root":{"children":[{"type":"meoi-image","src":"https://tracker.example/pixel.png"}]}}}]'::jsonb
-      )
-    )$query$,
-    (select value from test_ids where key = 'collection_one')
+select ok(
+  private.unit_documents_have_safe_images(
+    '[{"title":"External","content":{"root":{"children":[{"type":"meoi-image","src":"https://images.example.test/pixel.png"}]}}}]'::jsonb
   ),
-  '23514',
-  null,
-  'unit creation rejects a persisted external image without an asset ID'
+  'unit documents allow a persisted external HTTPS image without an asset ID'
 );
 
 select throws_ok(
@@ -968,6 +955,15 @@ select is(
   ),
   '[{"title":"Legacy","content":{"root":{"children":[{"type":"meoi-image","assetId":"50000000-0000-4000-8000-000000000001","altText":"kept"}]}}}]'::jsonb,
   'legacy cleanup strips src while retaining an authorized asset-backed image'
+);
+
+select is(
+  private.sanitize_unit_documents_images(
+    '[{"title":"External","content":{"root":{"children":[{"type":"meoi-image","src":"https://images.example.test/pixel.png","altText":"kept"}]}}}]'::jsonb,
+    (select value from test_ids where key = 'collection_one')
+  ),
+  '[{"title":"External","content":{"root":{"children":[{"type":"meoi-image","src":"https://images.example.test/pixel.png","altText":"kept"}]}}}]'::jsonb,
+  'image sanitizer preserves an external HTTPS image'
 );
 
 select ok(
@@ -1292,7 +1288,7 @@ select lives_ok(
     )$$,
     (select value from test_ids where key = 'unit_legacy_image')
   ),
-  'restoring a legacy snapshot sanitizes an external-only image'
+  'restoring a snapshot preserves an external HTTPS image'
 );
 
 select is(
@@ -1301,8 +1297,8 @@ select is(
     from app.units
     where id = (select value from test_ids where key = 'unit_legacy_image')
   ),
-  '[{"title":"Legacy","content":{"root":{"children":[]}}}]'::jsonb,
-  'legacy restore removes the unsafe image while preserving surrounding content'
+  '[{"title":"Legacy","content":{"root":{"children":[{"type":"meoi-image","src":"https://tracker.example/pixel.png"}]}}}]'::jsonb,
+  'restore keeps a valid external HTTPS image'
 );
 
 delete from app.units

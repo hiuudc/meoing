@@ -22,11 +22,9 @@ import {
   $getNodeByKey,
   $getRoot,
   $getSelection,
-  COMMAND_PRIORITY_EDITOR,
   type EditorState,
   type NodeKey,
 } from "lexical";
-import { DRAG_DROP_PASTE } from "@lexical/rich-text";
 import {
   $deleteTableColumnAtSelection,
   $deleteTableRowAtSelection,
@@ -37,10 +35,9 @@ import {
   TableCellNode,
   TableNode,
 } from "@lexical/table";
-import { $getNearestNodeOfType, $insertNodeToNearestRoot } from "@lexical/utils";
-import { deriveDocumentPlainText, readImageFileAsDataUrl } from "./editorUtils";
+import { $getNearestNodeOfType } from "@lexical/utils";
+import { deriveDocumentPlainText } from "./editorUtils";
 import { SlashMenuPlugin } from "./InsertMenu";
-import { $createImageNode } from "./nodes/ImageNode";
 import type { DocumentEditorValue } from "../DocumentEditor";
 
 interface EditorPluginsProps {
@@ -69,7 +66,6 @@ export function EditorPlugins({
       <MarkdownShortcutPlugin />
       <SlashMenuPlugin language={language} />
       <CodeHighlightPlugin />
-      <ImageDropPlugin />
       <TableCellActionsPlugin contextBarElement={contextBarElement} readOnly={readOnly} />
       <DocumentOutline onClose={onCloseToc} visible={tocVisible} />
       {anchorElement && !readOnly ? <DraggableBlocksPlugin anchorElement={anchorElement} /> : null}
@@ -114,31 +110,6 @@ function CodeHighlightPlugin() {
       unregister?.();
     };
   }, [editor]);
-
-  return null;
-}
-
-function ImageDropPlugin() {
-  const [editor] = useLexicalComposerContext();
-
-  useEffect(() => editor.registerCommand(
-    DRAG_DROP_PASTE,
-    (files) => {
-      const supportedFiles = files.filter((file) => (
-        ["image/png", "image/jpeg", "image/webp", "image/gif"].includes(file.type)
-      ));
-      if (!supportedFiles.length) return false;
-      void Promise.all(supportedFiles.map(readImageFileAsDataUrl)).then((sources) => {
-        editor.update(() => {
-          for (const source of sources) {
-            $insertNodeToNearestRoot($createImageNode(source, "", ""));
-          }
-        });
-      });
-      return true;
-    },
-    COMMAND_PRIORITY_EDITOR,
-  ), [editor]);
 
   return null;
 }

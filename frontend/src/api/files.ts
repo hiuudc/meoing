@@ -1,4 +1,5 @@
 import type { ApiClient } from "./client";
+import { sanitizeExternalImageUrl } from "../components/document-editor/editorUtils";
 
 interface UploadInitialization {
   assetId: string;
@@ -11,7 +12,6 @@ interface DownloadAuthorization {
   downloadUrl?: string;
 }
 
-const DATA_IMAGE = /^data:(image\/(?:png|jpeg|webp|gif));base64,/i;
 const PROFILE_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 
@@ -58,27 +58,6 @@ async function uploadBlob(
   return initialized.data.assetId;
 }
 
-async function uploadDataImage(
-  api: ApiClient,
-  source: string,
-  collectionId: string,
-  onUploaded?: (assetId: string) => void,
-): Promise<string> {
-  const match = DATA_IMAGE.exec(source);
-  if (!match) throw new Error("Only PNG, JPEG, WebP and GIF data images can be uploaded.");
-  const blob = await fetch(source).then((response) => response.blob());
-  const mimeType = match[1].toLowerCase();
-  const extension = mimeType.split("/")[1].replace("jpeg", "jpg");
-  return uploadBlob(
-    api,
-    blob,
-    `embedded-image.${extension}`,
-    mimeType,
-    collectionId,
-    onUploaded,
-  );
-}
-
 export async function uploadProfileImage(
   api: ApiClient,
   file: File,
@@ -93,15 +72,12 @@ export async function uploadProfileImage(
 }
 
 async function prepareNodeForStorage(
-  api: ApiClient,
   value: unknown,
-  collectionId: string,
-  onUploaded?: (assetId: string) => void,
 ): Promise<unknown> {
   if (Array.isArray(value)) {
     const prepared: unknown[] = [];
     for (const item of value) {
-      prepared.push(await prepareNodeForStorage(api, item, collectionId, onUploaded));
+      prepared.push(await prepareNodeForStorage(item));
     }
     return prepared;
   }
@@ -109,7 +85,7 @@ async function prepareNodeForStorage(
 
   const next: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value)) {
-    next[key] = await prepareNodeForStorage(api, child, collectionId, onUploaded);
+    next[key] = await prepareNodeForStorage(child);
   }
   if (value.type === "meoi-image") {
     const assetId = typeof value.assetId === "string" ? value.assetId : "";
@@ -117,25 +93,24 @@ async function prepareNodeForStorage(
     if (assetId) {
       next.assetId = assetId;
       next.src = "";
-    } else if (DATA_IMAGE.test(source)) {
-      next.assetId = await uploadDataImage(api, source, collectionId, onUploaded);
-      next.src = "";
     } else {
-      throw new Error("Document images must be uploaded before they can be saved.");
+      const externalSource = sanitizeExternalImageUrl(source);
+      if (!externalSource) {
+        throw new Error("Document images must use a valid HTTPS image URL.");
+      }
+      delete next.assetId;
+      next.src = externalSource;
     }
   }
   return next;
 }
 
 export async function prepareLexicalDocumentForStorage(
-  api: ApiClient,
   serializedContent: string,
-  collectionId: string,
-  onUploaded?: (assetId: string) => void,
 ): Promise<string> {
   if (!serializedContent.trim()) return serializedContent;
   const parsed = JSON.parse(serializedContent) as unknown;
-  const prepared = await prepareNodeForStorage(api, parsed, collectionId, onUploaded);
+  const prepared = await prepareNodeForStorage(parsed);
   return JSON.stringify(prepared);
 }
 
@@ -158,8 +133,8 @@ async function hydrateNodeForEditing(
     next[key] = await hydrateNodeForEditing(api, child, cache);
   }
   if (value.type === "meoi-image") {
-    next.src = "";
     if (typeof value.assetId === "string" && value.assetId) {
+      next.src = "";
       let url = cache.get(value.assetId);
       if (!url) {
         const response = await api.post<DownloadAuthorization>(
@@ -170,6 +145,10 @@ async function hydrateNodeForEditing(
         cache.set(value.assetId, url);
       }
       next.src = url;
+    } else if (typeof value.src === "string") {
+      next.src = sanitizeExternalImageUrl(value.src) ?? "";
+    } else {
+      next.src = "";
     }
   }
   return next;

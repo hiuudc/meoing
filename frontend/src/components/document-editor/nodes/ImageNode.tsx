@@ -1,5 +1,5 @@
-import { useRef, useState, type ReactNode } from "react";
-import { ImagePlus, Trash2, Upload } from "lucide-react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { ImagePlus, Link2, Trash2 } from "lucide-react";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import {
   $applyNodeReplacement,
@@ -13,11 +13,7 @@ import {
   type SerializedLexicalNode,
   type Spread,
 } from "lexical";
-import {
-  readImageFileAsDataUrl,
-  resolveAuthorizedImageSource,
-  sanitizeImageDataSource,
-} from "../editorUtils";
+import { resolveAuthorizedImageSource, sanitizeExternalImageUrl } from "../editorUtils";
 
 export type SerializedImageNode = Spread<{
   assetId?: string;
@@ -29,6 +25,7 @@ export type SerializedImageNode = Spread<{
 }, SerializedLexicalNode>;
 
 interface ImageEditorProps {
+  assetId: string;
   altText: string;
   caption: string;
   height: number;
@@ -43,6 +40,7 @@ function clampDimension(value: number, fallback: number): number {
 }
 
 function ImageEditor({
+  assetId,
   altText,
   caption,
   height,
@@ -52,7 +50,11 @@ function ImageEditor({
 }: ImageEditorProps) {
   const [editor] = useLexicalComposerContext();
   const [error, setError] = useState("");
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [sourceInput, setSourceInput] = useState(() => (assetId ? "" : src));
+
+  useEffect(() => {
+    setSourceInput(assetId ? "" : src);
+  }, [assetId, src]);
 
   function updateNode(update: (node: ImageNode) => void) {
     editor.update(() => {
@@ -61,15 +63,16 @@ function ImageEditor({
     });
   }
 
-  async function loadFile(file: File | undefined) {
-    if (!file) return;
-    try {
-      const nextSource = await readImageFileAsDataUrl(file);
-      updateNode((node) => node.setSource(nextSource));
-      setError("");
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "The image could not be loaded.");
+  function applySource(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const nextSource = sanitizeExternalImageUrl(sourceInput);
+    if (!nextSource) {
+      setError("Use a valid HTTPS image URL.");
+      return;
     }
+    updateNode((node) => node.setSource(nextSource));
+    setSourceInput(nextSource);
+    setError("");
   }
 
   return (
@@ -79,6 +82,8 @@ function ImageEditor({
           src={src}
           alt={altText}
           referrerPolicy="no-referrer"
+          onError={() => setError("This image could not be loaded. Check the HTTPS image URL.")}
+          onLoad={() => setError("")}
           style={{
             width: `${width}px`,
             ...(height > 0 ? { height: `${height}px` } : {}),
@@ -87,27 +92,24 @@ function ImageEditor({
       ) : (
         <div className="document-image-placeholder">
           <ImagePlus size={28} />
-          <span>Add an image from your device</span>
+          <span>Paste an HTTPS image URL</span>
         </div>
       )}
       <div className="document-node-controls document-image-controls">
-        <div className="document-image-source-row">
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            aria-label="Upload image"
-            title="Upload image"
-          >
-            <Upload size={16} />
+        <form className="document-image-source-row" onSubmit={applySource}>
+          <label>
+            <span>{assetId ? "Replace with image URL" : "Image URL"}</span>
+            <input
+              type="url"
+              value={sourceInput}
+              onChange={(event) => setSourceInput(event.target.value)}
+              placeholder="https://example.com/image.jpg"
+            />
+          </label>
+          <button type="submit" aria-label="Apply image URL" title="Apply image URL">
+            <Link2 size={16} />
           </button>
-          <input
-            ref={fileInputRef}
-            className="visually-hidden"
-            type="file"
-            accept="image/png,image/jpeg,image/webp,image/gif"
-            onChange={(event) => void loadFile(event.target.files?.[0])}
-          />
-        </div>
+        </form>
         <div className="document-image-fields">
           <label>
             <span>Alt text</span>
@@ -237,6 +239,7 @@ export class ImageNode extends DecoratorNode<ReactNode> {
   decorate(): ReactNode {
     return (
       <ImageEditor
+        assetId={this.getAssetId()}
         altText={this.getAltText()}
         caption={this.getCaption()}
         height={this.getHeight()}
@@ -306,7 +309,7 @@ export class ImageNode extends DecoratorNode<ReactNode> {
 
   setSource(value: string): this {
     const writable = this.getWritable();
-    writable.__src = sanitizeImageDataSource(value) ?? "";
+    writable.__src = sanitizeExternalImageUrl(value) ?? "";
     writable.__assetId = "";
     return this;
   }
