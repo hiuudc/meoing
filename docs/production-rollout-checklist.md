@@ -1,5 +1,7 @@
 # Meoing production rollout checklist
 
+> Production đang tạm dừng để tiếp tục hoàn thiện website. Xem trạng thái bàn giao tại [production-pause-handoff.md](./production-pause-handoff.md).
+
 > Cập nhật lần cuối: 2026-08-05 (Asia/Bangkok).  
 > Chỉ đánh dấu `[x]` khi đã có kiểm chứng trực tiếp trên hạ tầng production.
 
