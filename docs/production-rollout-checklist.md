@@ -26,7 +26,8 @@
 - [x] Gửi invite canary qua Cloudflare SMTP; Supabase Auth ghi nhận `200` và user có marker `app_metadata.meoing_acceptance`.
 - [ ] Kiểm tra email xác minh bằng canary có `app_metadata.meoing_acceptance`.
 - [ ] Kiểm tra password reset bằng canary có marker.
-- [ ] Xóa idempotent canary và dữ liệu app liên quan; xác nhận link cũ không còn dùng được.
+- [x] Xóa canary invite có marker và profile cascade; xác minh Auth user/profile không còn tồn tại.
+- [ ] Xác nhận trực tiếp invite link cũ không còn dùng được.
 - [ ] Bật Google provider trên Supabase production, với callback `https://rckeolmhsnkpcamlheds.supabase.co/auth/v1/callback` trong Google OAuth client.
 - [ ] Kiểm tra đăng nhập Google production và callback về `https://meoing.com/auth/callback`.
 - [x] Xác nhận Auth email rate limit production tối đa 2 email/giờ.
