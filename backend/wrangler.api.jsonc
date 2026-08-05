@@ -161,9 +161,9 @@
       "vars": {
         "APP_ENV": "production",
         "CORS_ORIGINS": "https://meoing.com",
-        "SUPABASE_URL": "https://PRODUCTION_PROJECT_REF.supabase.co",
+        "SUPABASE_URL": "https://rckeolmhsnkpcamlheds.supabase.co",
         "SUPABASE_JWT_AUDIENCE": "authenticated",
-        "R2_ACCOUNT_ID": "REPLACE_WITH_ACCOUNT_ID",
+        "R2_ACCOUNT_ID": "29e80074abc5eb106165d2349db7ca56",
         "R2_BUCKET_NAME": "meoing-files-production",
         "PRESIGNED_UPLOAD_TTL_SECONDS": "900",
         "PRESIGNED_DOWNLOAD_TTL_SECONDS": "300"
@@ -171,7 +171,7 @@
       "hyperdrive": [
         {
           "binding": "HYPERDRIVE",
-          "id": "00000000000000000000000000000000"
+          "id": "1d9dcc0ba6474d8d82ad9d00cad366f1"
         }
       ],
       "r2_buckets": [

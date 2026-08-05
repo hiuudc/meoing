@@ -93,12 +93,12 @@
       },
       "vars": {
         "APP_ENV": "production",
-        "SUPABASE_URL": "https://PRODUCTION_PROJECT_REF.supabase.co"
+        "SUPABASE_URL": "https://rckeolmhsnkpcamlheds.supabase.co"
       },
       "hyperdrive": [
         {
           "binding": "HYPERDRIVE",
-          "id": "00000000000000000000000000000000"
+          "id": "4ae6e154d94946aeb19c6340cc8f3872"
         }
       ],
       "r2_buckets": [
