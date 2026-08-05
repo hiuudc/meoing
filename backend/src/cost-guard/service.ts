@@ -38,7 +38,9 @@ export interface CostGuardDependencies {
 }
 
 const defaultDependencies: CostGuardDependencies = {
-  fetcher: fetch,
+  // Workerd's global fetch requires its original receiver. Dependencies are
+  // invoked as properties below, so preserve the global call shape in an arrow.
+  fetcher: (...args) => fetch(...args),
   now: () => new Date(),
   newResumeAttemptId: () => crypto.randomUUID(),
 };
@@ -52,6 +54,24 @@ function log(
   if (level === "error") console.error(payload);
   else if (level === "warn") console.warn(payload);
   else console.log(payload);
+}
+
+function safeInternalError(error: unknown): {
+  errorName: string;
+  errorMessage: string;
+} {
+  if (!(error instanceof Error)) {
+    return { errorName: "UnknownError", errorMessage: "Unknown error" };
+  }
+  // This Worker never needs request data in its operational logs. Preserve only a
+  // bounded diagnostic message and redact credential-shaped values defensively.
+  return {
+    errorName: error.name,
+    errorMessage: error.message
+      .replace(/Bearer\s+\S+/gi, "Bearer [redacted]")
+      .replace(/\b(?:sb_secret_[A-Za-z0-9._-]+|[A-Za-z0-9_-]{35,})\b/g, "[redacted]")
+      .slice(0, 240),
+  };
 }
 
 async function tryDeleteResumeMarker(
@@ -359,9 +379,10 @@ export async function runCostGuard(
       measuredAt: checkedAt,
     });
   } catch (error) {
+    const detail = safeInternalError(error);
     log("error", "cost_guard_metrics_failed", {
       environment: config.environment,
-      errorName: error instanceof Error ? error.name : "UnknownError",
+      ...detail,
     });
   }
 
