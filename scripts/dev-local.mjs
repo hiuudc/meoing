@@ -15,6 +15,18 @@ export function parseNodeMajor(version) {
   return Number.parseInt(version.split(".")[0], 10);
 }
 
+export function npmInvocation(args, platform = process.platform) {
+  if (platform !== "win32") {
+    return { args, command: npmExecutable(platform), shell: false };
+  }
+
+  return {
+    args: [],
+    command: [npmExecutable(platform), ...args].join(" "),
+    shell: true,
+  };
+}
+
 export function validatePreflight({
   root = projectRoot,
   nodeVersion = process.versions.node,
@@ -47,9 +59,11 @@ export function workerEnvironment(environment = process.env) {
 
 function runCommand(label, args, environment = process.env) {
   return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn(npmExecutable(), args, {
+    const invocation = npmInvocation(args);
+    const child = spawn(invocation.command, invocation.args, {
       cwd: projectRoot,
       env: environment,
+      shell: invocation.shell,
       stdio: "inherit",
     });
 
@@ -67,9 +81,11 @@ function runCommand(label, args, environment = process.env) {
 }
 
 function startDevProcess(label, args, environment) {
-  const child = spawn(npmExecutable(), args, {
+  const invocation = npmInvocation(args);
+  const child = spawn(invocation.command, invocation.args, {
     cwd: projectRoot,
     env: environment,
+    shell: invocation.shell,
     stdio: "inherit",
   });
 

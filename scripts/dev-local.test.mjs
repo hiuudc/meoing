@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {
   npmExecutable,
+  npmInvocation,
   parseNodeMajor,
   validatePreflight,
   workerEnvironment,
@@ -56,5 +57,15 @@ test("keeps an explicit Hyperdrive connection and supplies a local default", () 
 test("uses the platform appropriate npm executable", () => {
   assert.equal(npmExecutable("win32"), "npm.cmd");
   assert.equal(npmExecutable("linux"), "npm");
+  assert.deepEqual(npmInvocation(["--version"], "win32"), {
+    args: [],
+    command: "npm.cmd --version",
+    shell: true,
+  });
+  assert.deepEqual(npmInvocation(["--version"], "linux"), {
+    args: ["--version"],
+    command: "npm",
+    shell: false,
+  });
   assert.equal(parseNodeMajor("22.15.1"), 22);
 });
