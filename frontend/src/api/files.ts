@@ -12,6 +12,15 @@ interface DownloadAuthorization {
   downloadUrl?: string;
 }
 
+export async function authorizeFileDownload(api: ApiClient, assetId: string): Promise<string> {
+  const response = await api.post<DownloadAuthorization>(
+    `/v1/files/${encodeURIComponent(assetId)}/download`,
+  );
+  const url = response.data.downloadUrl ?? response.data.url;
+  if (!url) throw new Error("The API did not return an authorized asset URL.");
+  return url;
+}
+
 const PROFILE_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 
@@ -137,11 +146,7 @@ async function hydrateNodeForEditing(
       next.src = "";
       let url = cache.get(value.assetId);
       if (!url) {
-        const response = await api.post<DownloadAuthorization>(
-          `/v1/files/${encodeURIComponent(value.assetId)}/download`,
-        );
-        url = response.data.downloadUrl ?? response.data.url;
-        if (!url) throw new Error("The API did not return an authorized asset URL.");
+        url = await authorizeFileDownload(api, value.assetId);
         cache.set(value.assetId, url);
       }
       next.src = url;

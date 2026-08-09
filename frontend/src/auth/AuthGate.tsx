@@ -1,4 +1,4 @@
-import { useCallback, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { apiErrorMessage } from "../api/client";
 import { useAuth } from "./AuthProvider";
 import { Turnstile } from "./Turnstile";
@@ -29,6 +29,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const [password, setPassword] = useState("");
   const [passwordConfirmation, setPasswordConfirmation] = useState("");
   const [username, setUsername] = useState("");
+  const [displayName, setDisplayName] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -36,6 +37,19 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const [turnstileRevision, setTurnstileRevision] = useState(0);
   const setChallengeToken = useCallback((token: string | null) => setTurnstileToken(token), []);
   const turnstileSiteKey = auth.turnstileSiteKey;
+
+  useEffect(() => {
+    if (auth.currentUser?.profile.username || displayName) return;
+    const currentName = auth.currentUser?.profile.displayName?.trim();
+    const metadata = auth.session?.user.user_metadata;
+    const providerName = typeof metadata?.full_name === "string"
+      ? metadata.full_name.trim()
+      : typeof metadata?.name === "string"
+        ? metadata.name.trim()
+        : "";
+    const suggestedName = currentName && currentName !== "Meoing User" ? currentName : providerName;
+    if (suggestedName) setDisplayName(suggestedName.slice(0, 64));
+  }, [auth.currentUser?.profile.displayName, auth.currentUser?.profile.username, auth.session, displayName]);
 
   function resetChallenge() {
     setTurnstileToken(null);
@@ -284,15 +298,36 @@ export function AuthGate({ children }: { children: ReactNode }) {
   if (!auth.currentUser?.profile.username) {
     const normalizedUsername = username.trim().toLowerCase();
     const usernameValid = USERNAME_PATTERN.test(normalizedUsername);
+    const normalizedDisplayName = displayName.trim();
+    const displayNameValid = normalizedDisplayName.length >= 1 && normalizedDisplayName.length <= 64;
     return (
-      <AuthCard title="Choose your username" subtitle="This is your permanent identity across collections.">
+      <AuthCard title="Complete your profile" subtitle="Choose the name and username people will see in shared collections.">
         <form
           className="auth-form"
           onSubmit={(event) => {
             event.preventDefault();
-            if (usernameValid) void run(() => auth.completeUsername(normalizedUsername));
+            if (usernameValid && displayNameValid) {
+              void run(() => auth.completeProfile({
+                username: normalizedUsername,
+                displayName: normalizedDisplayName,
+              }));
+            }
           }}
         >
+          <label>
+            <span>Name</span>
+            <input
+              type="text"
+              name="display-name"
+              value={displayName}
+              onChange={(event) => setDisplayName(event.target.value)}
+              autoComplete="name"
+              minLength={1}
+              maxLength={64}
+              required
+              disabled={busy}
+            />
+          </label>
           <label>
             <span>Username</span>
             <input
@@ -311,7 +346,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
           </label>
           <small id="username-help">3–32 lowercase letters, numbers, dots or underscores. Consecutive dots are not allowed.</small>
           {error ? <p className="auth-alert" role="alert">{error}</p> : null}
-          <button className="auth-primary" type="submit" disabled={busy || !usernameValid}>
+          <button className="auth-primary" type="submit" disabled={busy || !usernameValid || !displayNameValid}>
             Continue to Meoing
           </button>
         </form>

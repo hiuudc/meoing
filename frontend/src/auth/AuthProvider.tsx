@@ -22,12 +22,18 @@ export interface CurrentUser {
   effectivePermissions?: string[];
 }
 
+interface CompleteProfileInput {
+  username: string;
+  displayName: string;
+}
+
 interface AuthContextValue {
   session: Session | null;
   currentUser: CurrentUser | null;
   loading: boolean;
   passwordRecovery: boolean;
   configurationError: string | null;
+  hasPassword: boolean;
   turnstileSiteKey?: string;
   api: ApiClient | null;
   signIn(email: string, password: string): Promise<void>;
@@ -36,9 +42,16 @@ interface AuthContextValue {
   sendPasswordReset(email: string, turnstileToken?: string): Promise<void>;
   resendVerification(email: string, turnstileToken?: string): Promise<void>;
   updatePassword(password: string): Promise<void>;
+  verifyCurrentPassword(password: string): Promise<void>;
+  sendReauthenticationCode(): Promise<void>;
+  sendEmailOtp(): Promise<void>;
+  verifyEmailOtp(code: string): Promise<void>;
+  changeEmail(email: string): Promise<void>;
+  changePassword(currentPassword: string, newPassword: string): Promise<void>;
+  setPasswordWithCode(password: string, code: string): Promise<void>;
   signOut(): Promise<void>;
   refreshCurrentUser(): Promise<void>;
-  completeUsername(username: string): Promise<void>;
+  completeProfile(input: CompleteProfileInput): Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -53,6 +66,12 @@ function authCallbackUrl(flow?: "recovery"): string {
   if (inviteToken) callback.searchParams.set("invite", inviteToken);
   if (flow) callback.searchParams.set("flow", flow);
   return callback.toString();
+}
+
+function sessionHasPassword(session: Session | null): boolean {
+  if (!session) return false;
+  if (session.user.user_metadata.meoing_has_password === true) return true;
+  return session.user.app_metadata.provider === "email";
 }
 
 function normalizeCurrentUser(data: unknown, session: Session): CurrentUser {
@@ -195,6 +214,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     loading,
     passwordRecovery,
     configurationError,
+    hasPassword: sessionHasPassword(session),
     turnstileSiteKey,
     api,
     async signIn(email, password) {
@@ -250,6 +270,80 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (error) throw error;
       setPasswordRecovery(false);
     },
+    async verifyCurrentPassword(password) {
+      if (!supabase || !session?.user.email) throw new Error("Password verification is unavailable.");
+      const expectedUserId = session.user.id;
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: session.user.email,
+        password,
+      });
+      if (error) throw error;
+      if (data.user?.id !== expectedUserId) throw new Error("The password belongs to a different account.");
+    },
+    async sendReauthenticationCode() {
+      if (!supabase) throw new Error("Authentication is not configured.");
+      const { error } = await supabase.auth.reauthenticate();
+      if (error) throw error;
+    },
+    async sendEmailOtp() {
+      if (!supabase || !session?.user.email) throw new Error("Email verification is unavailable.");
+      const { error } = await supabase.auth.signInWithOtp({
+        email: session.user.email,
+        options: {
+          shouldCreateUser: false,
+          emailRedirectTo: authCallbackUrl(),
+        },
+      });
+      if (error) throw error;
+    },
+    async verifyEmailOtp(code) {
+      if (!supabase || !session?.user.email) throw new Error("Email verification is unavailable.");
+      const expectedUserId = session.user.id;
+      const { data, error } = await supabase.auth.verifyOtp({
+        email: session.user.email,
+        token: code.trim(),
+        type: "email",
+      });
+      if (error) throw error;
+      if (data.user?.id !== expectedUserId) throw new Error("The code belongs to a different account.");
+    },
+    async changeEmail(email) {
+      if (!supabase) throw new Error("Authentication is not configured.");
+      const { error } = await supabase.auth.updateUser(
+        { email: email.trim().toLowerCase() },
+        { emailRedirectTo: authCallbackUrl() },
+      );
+      if (error) throw error;
+    },
+    async changePassword(currentPassword, newPassword) {
+      if (!supabase || !session?.user.email) throw new Error("Password changes are unavailable.");
+      const expectedUserId = session.user.id;
+      const verification = await supabase.auth.signInWithPassword({
+        email: session.user.email,
+        password: currentPassword,
+      });
+      if (verification.error) throw verification.error;
+      if (verification.data.user?.id !== expectedUserId) {
+        throw new Error("The password belongs to a different account.");
+      }
+      const { error } = await supabase.auth.updateUser({
+        password: newPassword,
+        current_password: currentPassword,
+      });
+      if (error) throw error;
+    },
+    async setPasswordWithCode(password, code) {
+      if (!supabase) throw new Error("Authentication is not configured.");
+      const { error } = await supabase.auth.updateUser({
+        password,
+        nonce: code.trim(),
+        data: {
+          ...session?.user.user_metadata,
+          meoing_has_password: true,
+        },
+      });
+      if (error) throw error;
+    },
     async signOut() {
       if (!supabase) return;
       const signingOutUserId = currentUser?.profile.id;
@@ -262,9 +356,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setPasswordRecovery(false);
     },
     refreshCurrentUser,
-    async completeUsername(username) {
+    async completeProfile(input) {
       if (!api) throw new Error("The API is not configured.");
-      await api.patch("/v1/me/profile", { username });
+      await api.patch("/v1/me/profile", {
+        username: input.username,
+        displayName: input.displayName,
+      });
       await refreshCurrentUser();
     },
   }), [

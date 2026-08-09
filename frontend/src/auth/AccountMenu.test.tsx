@@ -27,6 +27,7 @@ vi.mock("./AuthProvider", () => ({
       email: "meoi@example.test",
     },
     refreshCurrentUser: mocks.refreshCurrentUser,
+    hasPassword: true,
     signOut: mocks.signOut,
   }),
 }));
@@ -41,7 +42,6 @@ beforeEach(() => {
   mocks.clearProgressOutboxForUser.mockResolvedValue(2);
   mocks.post.mockResolvedValue({ data: {} });
   mocks.refreshCurrentUser.mockResolvedValue(undefined);
-  vi.spyOn(window, "confirm").mockReturnValue(true);
 });
 
 afterEach(async () => {
@@ -53,7 +53,7 @@ afterEach(async () => {
 });
 
 describe("AccountMenu", () => {
-  it("uses the sidebar profile row as the account trigger and exposes sign out from its menu", async () => {
+  it("opens account settings directly from the sidebar profile row without a menu", async () => {
     document.body.innerHTML = '<div id="mount"></div>';
     root = createRoot(document.querySelector("#mount")!);
     await act(async () => root!.render(createElement(AccountMenu)));
@@ -64,10 +64,12 @@ describe("AccountMenu", () => {
     expect(accountButton?.textContent).toContain("@meoi.user");
 
     await act(async () => accountButton!.click());
-    const signOutButton = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'))
-      .find((candidate) => candidate.textContent?.trim() === "Sign out");
-    expect(signOutButton).toBeDefined();
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    expect(document.body.textContent).toContain("Main Profile");
 
+    const signOutButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+      .find((candidate) => candidate.textContent?.trim() === "Log out");
     await act(async () => signOutButton!.click());
     expect(mocks.signOut).toHaveBeenCalledOnce();
   });
@@ -81,10 +83,22 @@ describe("AccountMenu", () => {
     if (!accountButton) throw new Error("Account menu button was not rendered.");
     await act(async () => accountButton.click());
 
-    const deleteButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
-      .find((candidate) => candidate.textContent?.includes("Delete account"));
+    const privacyButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+      .find((candidate) => candidate.textContent?.includes("Data & Privacy"));
+    await act(async () => privacyButton!.click());
+
+    const deleteButton = document.querySelector<HTMLButtonElement>(".account-danger-zone .danger-button");
     if (!deleteButton) throw new Error("Delete account button was not rendered.");
     await act(async () => deleteButton.click());
+
+    const confirmation = document.querySelector<HTMLInputElement>('.account-action-modal input');
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      setter?.call(confirmation, "DELETE");
+      confirmation?.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const confirmDelete = document.querySelector<HTMLButtonElement>(".account-action-modal .danger-button");
+    await act(async () => confirmDelete!.click());
 
     expect(mocks.post).toHaveBeenCalledWith("/v1/me/deletion", { confirmation: "DELETE" });
     expect(mocks.clearProgressOutboxForUser).toHaveBeenCalledWith(
@@ -102,10 +116,20 @@ describe("AccountMenu", () => {
     await act(async () => {
       document.querySelector<HTMLButtonElement>(".app-account-button")?.click();
     });
-    const deleteButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
-      .find((candidate) => candidate.textContent?.includes("Delete account"));
+    const privacyButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+      .find((candidate) => candidate.textContent?.includes("Data & Privacy"));
+    await act(async () => privacyButton!.click());
+    const deleteButton = document.querySelector<HTMLButtonElement>(".account-danger-zone .danger-button");
     if (!deleteButton) throw new Error("Delete account button was not rendered.");
     await act(async () => deleteButton.click());
+    const confirmation = document.querySelector<HTMLInputElement>('.account-action-modal input');
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      setter?.call(confirmation, "DELETE");
+      confirmation?.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const confirmDelete = document.querySelector<HTMLButtonElement>(".account-action-modal .danger-button");
+    await act(async () => confirmDelete!.click());
 
     expect(mocks.post).toHaveBeenCalledOnce();
     expect(mocks.refreshCurrentUser).toHaveBeenCalledOnce();

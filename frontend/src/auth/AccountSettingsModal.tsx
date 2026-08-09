@@ -1,50 +1,76 @@
-import { Check, LoaderCircle, UserRound, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import {
+  AtSign,
+  Camera,
+  Database,
+  KeyRound,
+  LoaderCircle,
+  LogOut,
+  Mail,
+  ShieldCheck,
+  UserRound,
+  X,
+} from "lucide-react";
+import { useState, type FormEvent } from "react";
 import { apiErrorMessage } from "../api/client";
 import { uploadProfileImage } from "../api/files";
-import {
-  changeUsername,
-  checkUsernameAvailability,
-  updateMainProfile,
-} from "../api/profile";
+import { updateMainProfile } from "../api/profile";
 import { AnimatedModal } from "../components/AnimatedModal";
+import {
+  DeleteAccountDialog,
+  EmailDialog,
+  PasswordDialog,
+  UsernameDialog,
+} from "./AccountSettingsDialogs";
 import { useAuth } from "./AuthProvider";
-
-const USERNAME_PATTERN = /^(?!.*\.\.)[a-z0-9._]{3,32}$/;
+import { ProfileAvatar } from "./ProfileAvatar";
 
 interface AccountSettingsModalProps {
   onClose: () => void;
 }
 
-type AvailabilityState = "idle" | "checking" | "available" | "unavailable";
+type AccountSection = "profile" | "account" | "security" | "privacy";
+type AccountDialog = "username" | "email" | "password" | "delete" | null;
+
+const SECTIONS: Array<{
+  id: AccountSection;
+  label: string;
+  icon: typeof UserRound;
+}> = [
+  { id: "profile", label: "Main Profile", icon: UserRound },
+  { id: "account", label: "Account Info", icon: AtSign },
+  { id: "security", label: "Password & Security", icon: KeyRound },
+  { id: "privacy", label: "Data & Privacy", icon: ShieldCheck },
+];
 
 export function AccountSettingsModal({ onClose }: AccountSettingsModalProps) {
   const auth = useAuth();
   const profile = auth.currentUser?.profile;
+  const [section, setSection] = useState<AccountSection>("profile");
+  const [dialog, setDialog] = useState<AccountDialog>(null);
   const [displayName, setDisplayName] = useState(profile?.displayName ?? "");
   const [bio, setBio] = useState(profile?.bio ?? "");
   const [avatarAssetId, setAvatarAssetId] = useState(profile?.avatarAssetId ?? "");
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
-  const [username, setUsername] = useState(profile?.username ?? "");
-  const [availability, setAvailability] = useState<AvailabilityState>("idle");
   const [profileBusy, setProfileBusy] = useState(false);
-  const [usernameBusy, setUsernameBusy] = useState(false);
+  const [signOutBusy, setSignOutBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
-  const normalizedUsername = username.trim().toLowerCase();
-  const usernameValid = USERNAME_PATTERN.test(normalizedUsername);
-  const usernameChanged = normalizedUsername !== profile?.username;
-  const cooldownEndsAt = useMemo(() => {
-    if (!profile?.usernameChangedAt) return null;
-    const end = new Date(profile.usernameChangedAt);
-    end.setDate(end.getDate() + 7);
-    return end > new Date() ? end : null;
-  }, [profile?.usernameChangedAt]);
+  if (!profile) return null;
 
-  async function saveProfile(event: React.FormEvent<HTMLFormElement>) {
+  function closeTopLayer() {
+    if (dialog) setDialog(null);
+    else onClose();
+  }
+
+  function showSuccess(message: string) {
+    setError("");
+    setNotice(message);
+  }
+
+  async function saveProfile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!auth.api || !profile || !displayName.trim()) return;
+    if (!auth.api || !displayName.trim()) return;
     let uploadedAssetId: string | null = null;
     setProfileBusy(true);
     setError("");
@@ -59,7 +85,7 @@ export function AccountSettingsModal({ onClose }: AccountSettingsModalProps) {
         displayName: displayName.trim(),
         bio: bio.trim() || null,
         avatarAssetId: nextAvatarAssetId,
-        expectedRevision: profile.revision ?? 0,
+        expectedRevision: profile?.revision ?? 0,
       });
       setAvatarAssetId(nextAvatarAssetId ?? "");
       setAvatarFile(null);
@@ -75,175 +101,194 @@ export function AccountSettingsModal({ onClose }: AccountSettingsModalProps) {
     }
   }
 
-  async function checkAvailability() {
-    if (!auth.api || !usernameValid || !usernameChanged) return;
-    setAvailability("checking");
+  async function signOut() {
+    setSignOutBusy(true);
     setError("");
-    setNotice("");
     try {
-      const response = await checkUsernameAvailability(auth.api, normalizedUsername);
-      setAvailability(response.data.available ? "available" : "unavailable");
+      await auth.signOut();
+      onClose();
     } catch (caught) {
-      setAvailability("idle");
       setError(apiErrorMessage(caught));
+      setSignOutBusy(false);
     }
   }
 
-  async function saveUsername() {
-    if (
-      !auth.api
-      || !usernameValid
-      || !usernameChanged
-      || availability !== "available"
-      || cooldownEndsAt
-    ) return;
-    setUsernameBusy(true);
-    setError("");
-    setNotice("");
-    try {
-      await changeUsername(auth.api, normalizedUsername);
-      await auth.refreshCurrentUser();
-      setAvailability("idle");
-      setNotice("Username changed. Your previous username remains reserved for 30 days.");
-    } catch (caught) {
-      setError(apiErrorMessage(caught));
-    } finally {
-      setUsernameBusy(false);
-    }
-  }
-
-  if (!profile) return null;
+  const currentDisplayName = auth.currentUser?.profile.displayName || displayName || profile.username || "Meoing learner";
 
   return (
     <AnimatedModal
       open
-      onClose={onClose}
+      onClose={closeTopLayer}
       labelledBy="account-settings-title"
-      backdropClassName="modal-backdrop"
+      backdropClassName="modal-backdrop account-settings-backdrop"
       panelClassName="account-settings-modal"
     >
-      <header className="modal-header">
-        <div>
-          <p>Your account</p>
-          <h2 id="account-settings-title">Main profile</h2>
+      <aside className="account-settings-sidebar">
+        <div className="account-settings-identity">
+          <ProfileAvatar
+            api={auth.api}
+            assetId={avatarAssetId}
+            displayName={displayName || currentDisplayName}
+            file={avatarFile}
+            className="account-settings-avatar"
+          />
+          <span>
+            <strong>{currentDisplayName}</strong>
+            <small>@{profile.username}</small>
+          </span>
         </div>
-        <button type="button" aria-label="Close account settings" onClick={onClose}>
-          <X size={18} />
+        <nav aria-label="Account settings">
+          {SECTIONS.map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              type="button"
+              className={section === id ? "is-active" : undefined}
+              aria-current={section === id ? "page" : undefined}
+              onClick={() => setSection(id)}
+            >
+              <Icon size={18} /> {label}
+            </button>
+          ))}
+        </nav>
+        <button className="account-settings-logout" type="button" disabled={signOutBusy} onClick={() => void signOut()}>
+          <LogOut size={18} /> {signOutBusy ? "Logging out..." : "Log out"}
         </button>
-      </header>
+      </aside>
 
-      <div className="account-settings-body">
-        {error ? <p className="auth-alert" role="alert">{error}</p> : null}
-        {notice ? <p className="auth-notice" role="status">{notice}</p> : null}
+      <section className="account-settings-main">
+        <header className="account-settings-topbar">
+          <h2 id="account-settings-title">Account</h2>
+          <button type="button" aria-label="Close account settings" onClick={closeTopLayer}><X size={24} /></button>
+        </header>
+        <div className="account-settings-content">
+          {error ? <p className="auth-alert" role="alert">{error}</p> : null}
+          {notice ? <p className="auth-notice" role="status">{notice}</p> : null}
 
-        <form className="account-settings-section" onSubmit={(event) => void saveProfile(event)}>
-          <div className="account-settings-heading">
-            <UserRound size={19} />
-            <div>
-              <h3>Public details</h3>
-              <p>Your main profile is visible only to people who share a collection with you.</p>
-            </div>
-          </div>
-          <label>
-            Display name
-            <input
-              value={displayName}
-              maxLength={64}
-              required
-              onChange={(event) => setDisplayName(event.target.value)}
-            />
-          </label>
-          <label>
-            Bio
-            <textarea
-              value={bio}
-              maxLength={500}
-              rows={3}
-              onChange={(event) => setBio(event.target.value)}
-            />
-          </label>
-          <label>
-            Avatar image
-            <input
-              type="file"
-              accept="image/png,image/jpeg,image/webp,image/gif"
-              onChange={(event) => setAvatarFile(event.target.files?.[0] ?? null)}
-            />
-            <small>
-              {avatarFile?.name ?? (avatarAssetId ? "A private main-profile avatar is set." : "No avatar set.")}
-            </small>
-          </label>
-          {avatarAssetId || avatarFile ? (
-            <button
-              className="account-settings-clear"
-              type="button"
-              onClick={() => {
-                setAvatarAssetId("");
-                setAvatarFile(null);
-              }}
-            >
-              Clear avatar
-            </button>
+          {section === "profile" ? (
+            <form className="account-settings-page" onSubmit={(event) => void saveProfile(event)}>
+              <div className="account-settings-page-heading">
+                <p>Profile</p>
+                <h3>Main Profile</h3>
+                <span>This is how people see you in shared collections.</span>
+              </div>
+              <div className="account-profile-editor">
+                <ProfileAvatar
+                  api={auth.api}
+                  assetId={avatarAssetId}
+                  displayName={displayName || currentDisplayName}
+                  file={avatarFile}
+                  className="account-profile-avatar-preview"
+                />
+                <label className="secondary-button account-avatar-picker">
+                  <Camera size={17} /> Change avatar
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/gif"
+                    onChange={(event) => setAvatarFile(event.target.files?.[0] ?? null)}
+                  />
+                </label>
+                {avatarAssetId || avatarFile ? (
+                  <button className="account-settings-clear" type="button" onClick={() => {
+                    setAvatarAssetId("");
+                    setAvatarFile(null);
+                  }}>
+                    Remove avatar
+                  </button>
+                ) : null}
+              </div>
+              <label>Name
+                <input
+                  value={displayName}
+                  minLength={1}
+                  maxLength={64}
+                  required
+                  onChange={(event) => setDisplayName(event.target.value)}
+                />
+              </label>
+              <label>Bio
+                <textarea value={bio} maxLength={500} rows={5} onChange={(event) => setBio(event.target.value)} />
+                <small>{bio.length}/500</small>
+              </label>
+              <div className="account-settings-actions">
+                <button className="primary-button" type="submit" disabled={profileBusy || !displayName.trim()}>
+                  {profileBusy ? <LoaderCircle className="spin" size={16} /> : null} Save changes
+                </button>
+              </div>
+            </form>
           ) : null}
-          <div className="account-settings-actions">
-            <button className="primary-button" type="submit" disabled={profileBusy || !displayName.trim()}>
-              {profileBusy ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />}
-              Save profile
-            </button>
-          </div>
-        </form>
 
-        <section className="account-settings-section">
-          <div className="account-settings-heading">
-            <span className="profile-avatar">@</span>
-            <div>
-              <h3>Username</h3>
-              <p>3–32 lowercase letters, numbers, dots or underscores; consecutive dots are not allowed.</p>
+          {section === "account" ? (
+            <div className="account-settings-page">
+              <div className="account-settings-page-heading">
+                <p>Account</p>
+                <h3>Account Info</h3>
+                <span>Manage the credentials associated with your account.</span>
+              </div>
+              <div className="account-settings-rows">
+                <div>
+                  <AtSign size={19} />
+                  <span><strong>Username</strong><small>@{profile.username}</small></span>
+                  <button className="secondary-button" type="button" onClick={() => setDialog("username")}>Edit</button>
+                </div>
+                <div>
+                  <Mail size={19} />
+                  <span><strong>Email</strong><small>{auth.currentUser?.email ?? "Unavailable"}</small></span>
+                  <button className="secondary-button" type="button" onClick={() => setDialog("email")}>Edit</button>
+                </div>
+              </div>
             </div>
-          </div>
-          <label>
-            Username
-            <input
-              value={username}
-              minLength={3}
-              maxLength={32}
-              pattern="(?!.*\.\.)[a-z0-9._]{3,32}"
-              onChange={(event) => {
-                setUsername(event.target.value.toLowerCase());
-                setAvailability("idle");
-              }}
-            />
-          </label>
-          {cooldownEndsAt ? (
-            <p className="account-settings-help">
-              Username changes unlock on {cooldownEndsAt.toLocaleString()}.
-            </p>
-          ) : availability === "available" ? (
-            <p className="account-settings-available" role="status">@{normalizedUsername} is available.</p>
-          ) : availability === "unavailable" ? (
-            <p className="auth-alert" role="alert">@{normalizedUsername} is unavailable.</p>
           ) : null}
-          <div className="account-settings-actions">
-            <button
-              className="secondary-button"
-              type="button"
-              disabled={!usernameValid || !usernameChanged || availability === "checking" || Boolean(cooldownEndsAt)}
-              onClick={() => void checkAvailability()}
-            >
-              {availability === "checking" ? "Checking…" : "Check availability"}
-            </button>
-            <button
-              className="primary-button"
-              type="button"
-              disabled={usernameBusy || availability !== "available" || Boolean(cooldownEndsAt)}
-              onClick={() => void saveUsername()}
-            >
-              {usernameBusy ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />}
-              Change username
-            </button>
-          </div>
-        </section>
-      </div>
+
+          {section === "security" ? (
+            <div className="account-settings-page">
+              <div className="account-settings-page-heading">
+                <p>Security</p>
+                <h3>Password & Security</h3>
+                <span>Use a unique password and verify sensitive account changes.</span>
+              </div>
+              <div className="account-settings-rows">
+                <div>
+                  <KeyRound size={19} />
+                  <span>
+                    <strong>Password</strong>
+                    <small>{auth.hasPassword ? "A password is set for this account." : "Add password sign-in to this OAuth account."}</small>
+                  </span>
+                  <button className="secondary-button" type="button" onClick={() => setDialog("password")}>
+                    {auth.hasPassword ? "Update" : "Set password"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {section === "privacy" ? (
+            <div className="account-settings-page">
+              <div className="account-settings-page-heading">
+                <p>Privacy</p>
+                <h3>Data & Privacy</h3>
+                <span>Review Meoing policies and manage your account data.</span>
+              </div>
+              <div className="account-settings-links">
+                <a href="/privacy.html" target="_blank" rel="noreferrer"><ShieldCheck size={19} /> Privacy policy</a>
+                <a href="/terms.html" target="_blank" rel="noreferrer"><Database size={19} /> Terms of service</a>
+                <a href="/delete-data.html" target="_blank" rel="noreferrer"><Database size={19} /> Deletion policy</a>
+              </div>
+              <div className="account-danger-zone">
+                <div>
+                  <strong>Delete account</strong>
+                  <p>Schedule permanent account deletion. Access locks immediately and can be restored for 30 days.</p>
+                </div>
+                <button className="danger-button" type="button" onClick={() => setDialog("delete")}>Delete account</button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </section>
+
+      {dialog === "username" ? <UsernameDialog onClose={() => setDialog(null)} onSuccess={showSuccess} /> : null}
+      {dialog === "email" ? <EmailDialog onClose={() => setDialog(null)} onSuccess={showSuccess} /> : null}
+      {dialog === "password" ? <PasswordDialog onClose={() => setDialog(null)} onSuccess={showSuccess} /> : null}
+      {dialog === "delete" ? <DeleteAccountDialog onClose={() => setDialog(null)} onSuccess={showSuccess} /> : null}
     </AnimatedModal>
   );
 }
