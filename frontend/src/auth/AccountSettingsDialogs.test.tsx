@@ -91,6 +91,18 @@ afterEach(async () => {
 });
 
 describe("Account settings security dialogs", () => {
+  it("uses a structured action footer and autofocuses the verification action", async () => {
+    await render(EmailDialog);
+    const sendCode = button("Send verification code");
+    const close = document.querySelector<HTMLButtonElement>('[aria-label="Close Change your email"]');
+
+    expect(document.querySelector(".account-action-body")).not.toBeNull();
+    expect(document.querySelector(".account-action-footer")).not.toBeNull();
+    expect(sendCode.hasAttribute("data-modal-autofocus")).toBe(true);
+    expect(sendCode.classList.contains("primary-button")).toBe(true);
+    expect(close?.hasAttribute("data-modal-autofocus")).toBe(false);
+  });
+
   it("verifies the current password before changing a username", async () => {
     await render(UsernameDialog);
     const inputs = document.querySelectorAll<HTMLInputElement>("input");

@@ -53,6 +53,25 @@ afterEach(async () => {
 });
 
 describe("AccountMenu", () => {
+  it("keeps primary and destructive settings actions visibly enabled", async () => {
+    document.body.innerHTML = '<div id="mount"></div>';
+    root = createRoot(document.querySelector("#mount")!);
+    await act(async () => root!.render(createElement(AccountMenu)));
+    await act(async () => document.querySelector<HTMLButtonElement>(".app-account-button")!.click());
+
+    const saveButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+      .find((candidate) => candidate.textContent?.trim() === "Save changes");
+    expect(saveButton?.classList.contains("primary-button")).toBe(true);
+    expect(saveButton?.disabled).toBe(false);
+
+    const privacyButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+      .find((candidate) => candidate.textContent?.includes("Data & Privacy"));
+    await act(async () => privacyButton!.click());
+    const deleteButton = document.querySelector<HTMLButtonElement>(".account-danger-zone .danger-button");
+    expect(deleteButton?.textContent?.trim()).toBe("Delete account");
+    expect(deleteButton?.disabled).toBe(false);
+  });
+
   it("opens account settings directly from the sidebar profile row without a menu", async () => {
     document.body.innerHTML = '<div id="mount"></div>';
     root = createRoot(document.querySelector("#mount")!);
@@ -65,6 +84,7 @@ describe("AccountMenu", () => {
 
     await act(async () => accountButton!.click());
     expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(document.querySelector(".account-settings-backdrop")?.closest(".account-menu")).toBeNull();
     expect(document.querySelector('[role="menu"]')).toBeNull();
     expect(document.body.textContent).toContain("Main Profile");
 
@@ -72,6 +92,24 @@ describe("AccountMenu", () => {
       .find((candidate) => candidate.textContent?.trim() === "Log out");
     await act(async () => signOutButton!.click());
     expect(mocks.signOut).toHaveBeenCalledOnce();
+  });
+
+  it("closes a security dialog before closing account settings on Escape", async () => {
+    document.body.innerHTML = '<div id="mount"></div>';
+    root = createRoot(document.querySelector("#mount")!);
+    await act(async () => root!.render(createElement(AccountMenu)));
+    await act(async () => document.querySelector<HTMLButtonElement>(".app-account-button")!.click());
+
+    const accountInfoButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+      .find((candidate) => candidate.textContent?.includes("Account Info"));
+    await act(async () => accountInfoButton!.click());
+    const editButtons = Array.from(document.querySelectorAll<HTMLButtonElement>(".account-settings-rows button"));
+    await act(async () => editButtons[1].click());
+
+    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(2);
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+    expect(document.body.textContent).toContain("Account Info");
   });
 
   it("clears only that user's pending progress after account deletion is accepted", async () => {

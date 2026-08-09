@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { createPortal } from "react-dom";
 import { AccountSettingsModal } from "./AccountSettingsModal";
 import { useAuth } from "./AuthProvider";
 import { ProfileAvatar } from "./ProfileAvatar";
@@ -9,6 +10,7 @@ export function AccountMenu() {
   const profile = auth.currentUser?.profile;
   const displayName = profile?.displayName || profile?.username || "Meoing learner";
   const username = profile?.username ? `@${profile.username}` : "Signed in";
+  const portalTarget = document.querySelector<HTMLElement>(".app-shell") ?? document.body;
 
   return (
     <div className="account-menu">
@@ -30,7 +32,9 @@ export function AccountMenu() {
           <small>{username}</small>
         </span>
       </button>
-      {settingsOpen ? <AccountSettingsModal onClose={() => setSettingsOpen(false)} /> : null}
+      {settingsOpen
+        ? createPortal(<AccountSettingsModal onClose={() => setSettingsOpen(false)} />, portalTarget)
+        : null}
     </div>
   );
 }

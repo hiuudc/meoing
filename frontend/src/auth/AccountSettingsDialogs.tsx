@@ -32,7 +32,7 @@ function ActionDialog({ title, description, onClose, children }: ActionDialogPro
         </div>
         <button type="button" aria-label={`Close ${title}`} onClick={onClose}><X size={22} /></button>
       </header>
-      {children}
+      <div className="account-action-body">{children}</div>
     </AnimatedModal>
   );
 }
@@ -141,7 +141,7 @@ export function UsernameDialog({ onClose, onSuccess }: SettingsDialogProps) {
         {availability === "available" ? <p className="auth-notice">@{normalizedUsername} is available.</p> : null}
         {availability === "unavailable" ? <p className="auth-alert">@{normalizedUsername} is unavailable.</p> : null}
         {error ? <p className="auth-alert" role="alert">{error}</p> : null}
-        <div className="account-action-buttons">
+        <div className="account-action-footer">
           <button className="secondary-button" type="button" onClick={onClose}>Cancel</button>
           <button
             className="secondary-button"
@@ -206,9 +206,15 @@ export function EmailDialog({ onClose, onSuccess }: SettingsDialogProps) {
       {!codeSent ? (
         <div className="account-action-form">
           {error ? <p className="auth-alert" role="alert">{error}</p> : null}
-          <div className="account-action-buttons">
+          <div className="account-action-footer">
             <button className="secondary-button" type="button" onClick={onClose}>Cancel</button>
-            <button className="primary-button" type="button" disabled={busy} onClick={() => void sendCode()}>
+            <button
+              className="primary-button"
+              type="button"
+              data-modal-autofocus
+              disabled={busy}
+              onClick={() => void sendCode()}
+            >
               Send verification code
             </button>
           </div>
@@ -222,7 +228,7 @@ export function EmailDialog({ onClose, onSuccess }: SettingsDialogProps) {
             <input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
           </label>
           {error ? <p className="auth-alert" role="alert">{error}</p> : null}
-          <div className="account-action-buttons">
+          <div className="account-action-footer">
             <button className="secondary-button" type="button" onClick={onClose}>Cancel</button>
             <button className="primary-button" type="submit" disabled={busy || !code.trim() || !email.trim()}>Done</button>
           </div>
@@ -280,9 +286,17 @@ export function PasswordDialog({ onClose, onSuccess }: SettingsDialogProps) {
       <ActionDialog title="Create a password" description="Verify your email before adding a password to this account." onClose={onClose}>
         <div className="account-action-form">
           {error ? <p className="auth-alert" role="alert">{error}</p> : null}
-          <div className="account-action-buttons">
+          <div className="account-action-footer">
             <button className="secondary-button" type="button" onClick={onClose}>Cancel</button>
-            <button className="primary-button" type="button" disabled={busy} onClick={() => void sendCode()}>Send verification code</button>
+            <button
+              className="primary-button"
+              type="button"
+              data-modal-autofocus
+              disabled={busy}
+              onClick={() => void sendCode()}
+            >
+              Send verification code
+            </button>
           </div>
         </div>
       </ActionDialog>
@@ -314,7 +328,7 @@ export function PasswordDialog({ onClose, onSuccess }: SettingsDialogProps) {
         {confirmation && newPassword !== confirmation ? <p className="auth-alert">Passwords do not match.</p> : null}
         {auth.hasPassword && currentPassword && newPassword === currentPassword ? <p className="auth-alert">Choose a password different from your current password.</p> : null}
         {error ? <p className="auth-alert" role="alert">{error}</p> : null}
-        <div className="account-action-buttons">
+        <div className="account-action-footer">
           <button className="secondary-button" type="button" onClick={onClose}>Cancel</button>
           <button className="primary-button" type="submit" disabled={busy || !passwordValid || (!auth.hasPassword && !code.trim())}>Done</button>
         </div>
@@ -355,7 +369,7 @@ export function DeleteAccountDialog({ onClose, onSuccess }: SettingsDialogProps)
           <input data-modal-autofocus value={confirmation} onChange={(event) => setConfirmation(event.target.value)} required />
         </label>
         {error ? <p className="auth-alert" role="alert">{error}</p> : null}
-        <div className="account-action-buttons">
+        <div className="account-action-footer">
           <button className="secondary-button" type="button" onClick={onClose}>Cancel</button>
           <button className="danger-button" type="submit" disabled={busy || confirmation !== "DELETE"}>Delete account</button>
         </div>
