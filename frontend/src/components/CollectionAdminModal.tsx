@@ -1,6 +1,7 @@
 import {
   BookOpen,
   Check,
+  CircleHelp,
   Clipboard,
   FileClock,
   Link2,
@@ -49,15 +50,21 @@ import {
   type MemberProgress,
 } from "../api/collectionAdmin";
 import type { Collection } from "../types";
+import type { CollectionQuestionSettings, LearningProfile } from "../learning/types";
 import { AnimatedModal } from "./AnimatedModal";
+import { CollectionQuestionSettingsPanel } from "./CollectionQuestionSettingsModal";
 
-type AdminTab = "members" | "roles" | "invites" | "audit" | "lessons";
+export type AdminTab = "questions" | "members" | "roles" | "invites" | "audit" | "lessons";
 
 export interface CollectionAdminModalProps {
   collection: Collection;
   api: ApiClient;
   currentUserId: string;
   effectivePermissions: readonly CollectionPermission[];
+  learningProfile: LearningProfile;
+  questionSettings?: CollectionQuestionSettings;
+  initialTab?: AdminTab;
+  onSaveQuestionSettings: (settings: CollectionQuestionSettings) => void | Promise<void>;
   onClose: () => void;
   onChanged: () => void | Promise<void>;
 }
@@ -86,6 +93,7 @@ interface ProgressDetailState {
 }
 
 const ADMIN_TABS: readonly TabDefinition[] = [
+  { id: "questions", label: "Questions", icon: CircleHelp, permission: "manage_collection" },
   { id: "members", label: "Members", icon: Users },
   { id: "roles", label: "Roles", icon: Shield },
   { id: "invites", label: "Invites", icon: Link2, permission: "manage_invites" },
@@ -174,6 +182,10 @@ export function CollectionAdminModal({
   api,
   currentUserId,
   effectivePermissions,
+  learningProfile,
+  questionSettings,
+  initialTab = "questions",
+  onSaveQuestionSettings,
   onClose,
   onChanged,
 }: CollectionAdminModalProps) {
@@ -182,7 +194,7 @@ export function CollectionAdminModal({
     () => ADMIN_TABS.filter((tab) => !tab.permission || permissions.has(tab.permission)),
     [permissions],
   );
-  const [activeTab, setActiveTab] = useState<AdminTab>("members");
+  const [activeTab, setActiveTab] = useState<AdminTab>(initialTab);
   const [members, setMembers] = useState<CollectionMember[]>([]);
   const [roles, setRoles] = useState<CollectionRole[]>([]);
   const [invites, setInvites] = useState<CollectionInvite[]>([]);
@@ -232,7 +244,10 @@ export function CollectionAdminModal({
 
   useEffect(() => {
     progressRequestId.current += 1;
-    setActiveTab("members");
+    const preferredTab = availableTabs.some((tab) => tab.id === initialTab)
+      ? initialTab
+      : availableTabs[0]?.id;
+    if (preferredTab) setActiveTab(preferredTab);
     setMembers([]);
     setRoles([]);
     setInvites([]);
@@ -249,7 +264,7 @@ export function CollectionAdminModal({
     setProfileTargetUserId("");
     setError(null);
     setNotice(null);
-  }, [collection.id]);
+  }, [availableTabs, collection.id, initialTab]);
 
   useEffect(() => {
     const targetUserId = profileTargetUserId || currentUserId;
@@ -264,7 +279,8 @@ export function CollectionAdminModal({
 
   useEffect(() => {
     if (availableTabs.some((tab) => tab.id === activeTab)) return;
-    setActiveTab("members");
+    const firstAvailableTab = availableTabs[0]?.id;
+    if (firstAvailableTab) setActiveTab(firstAvailableTab);
   }, [activeTab, availableTabs]);
 
   useEffect(() => {
@@ -274,7 +290,9 @@ export function CollectionAdminModal({
 
     async function loadActiveTab() {
       try {
-        if (activeTab === "members") {
+        if (activeTab === "questions") {
+          return;
+        } else if (activeTab === "members") {
           const [memberResponse, roleResponse] = await Promise.all([
             listCollectionMembers(api, collection.id, null, controller.signal),
             listCollectionRoles(api, collection.id, null, controller.signal),
@@ -738,6 +756,14 @@ export function CollectionAdminModal({
                 <LoaderCircle className="spin" size={22} />
                 <span>Loading {activeTab}…</span>
               </div>
+            ) : null}
+
+            {!loading && activeTab === "questions" ? (
+              <CollectionQuestionSettingsPanel
+                collection={{ ...collection, questionSettings }}
+                profile={learningProfile}
+                onSave={onSaveQuestionSettings}
+              />
             ) : null}
 
             {!loading && activeTab === "members" ? (

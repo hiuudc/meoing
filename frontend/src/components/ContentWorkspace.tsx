@@ -39,7 +39,9 @@ interface ContentWorkspaceProps {
   onOpenMobileNavigation: () => void;
   onSelectKind: (kind: ContentKind) => void;
   onCreate: () => void;
+  onCreateUnit: () => void;
   canCreate?: boolean;
+  canCreateUnit?: boolean;
   canEdit?: boolean;
   canDelete?: boolean;
   onEditDocument: (document: Document) => void;
@@ -59,7 +61,9 @@ export function ContentWorkspace({
   onOpenMobileNavigation,
   onSelectKind,
   onCreate,
+  onCreateUnit,
   canCreate = true,
+  canCreateUnit = true,
   canEdit = true,
   canDelete = true,
   onEditDocument,
@@ -119,12 +123,34 @@ export function ContentWorkspace({
             <div>
               <p className="section-kicker">Unit workspace</p>
               <h1>{unit ? cleanUnitName(unit.name) : "Choose a unit"}</h1>
-              <p>{unit?.description ?? "Select or create a unit to start collecting your study material."}</p>
+              <p id={!unit ? "content-create-requirement" : undefined}>
+                {unit?.description
+                  ?? (canCreateUnit
+                    ? "Documents and study items belong to a unit. Create or select one to continue."
+                    : "Documents and study items belong to a unit. Select an existing unit to continue.")}
+              </p>
             </div>
-            <button className="primary-button" type="button" onClick={onCreate} disabled={!unit || !canCreate}>
-              <Plus size={16} />
-              <span>New {activeKind}</span>
-            </button>
+            {unit ? (
+              <button className="primary-button" type="button" onClick={onCreate} disabled={!canCreate}>
+                <Plus size={16} />
+                <span>New {activeKind}</span>
+              </button>
+            ) : canCreateUnit ? (
+              <button className="primary-button" type="button" onClick={onCreateUnit}>
+                <Plus size={16} />
+                <span>Create unit</span>
+              </button>
+            ) : (
+              <button
+                className="primary-button"
+                type="button"
+                disabled
+                aria-describedby="content-create-requirement"
+              >
+                <Plus size={16} />
+                <span>New {activeKind}</span>
+              </button>
+            )}
           </div>
 
           <div className="content-toolbar">

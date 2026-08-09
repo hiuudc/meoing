@@ -429,6 +429,69 @@ describe("Meoing API Worker", () => {
     ]);
   });
 
+  it("requires and forwards atomic collection appearance and learning settings", async () => {
+    const collectionId = "25112aab-e87b-4cb6-8bd2-74ee8274fb83";
+    const repository = new RecordingRepository({
+      collectionCreate: {
+        id: collectionId,
+        name: "Japanese",
+        description: null,
+        ownerId: USER_ID,
+        deletedAt: null,
+        createdAt: "2026-07-30T10:00:00.000Z",
+        updatedAt: "2026-07-30T10:00:00.000Z",
+        revision: 1,
+        effectivePermissions: ["manage_collection"],
+      },
+    });
+    const body = {
+      name: "Japanese",
+      appearance: { icon: "J", accent: "#8b7cf6" },
+      learningProfile: {
+        targetLanguage: "Japanese",
+        sourceLanguage: "English",
+        interfaceLanguage: "en",
+        level: "elementary",
+        dailyQuestionGoal: 12,
+        lessonQuestionCount: 10,
+        speakingEnabled: true,
+        preferredFormats: ["singleChoice"],
+        coachingStyle: "gentle",
+      },
+    };
+
+    const missingSettings = await request(appWith(repository), "/v1/collections", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer test",
+        "content-type": "application/json",
+        "idempotency-key": "collection-create-missing-settings",
+      },
+      body: JSON.stringify({ name: "Incomplete" }),
+    });
+    expect(missingSettings.status).toBe(400);
+    expect(repository.calls).toHaveLength(0);
+
+    const response = await request(appWith(repository), "/v1/collections", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer test",
+        "content-type": "application/json",
+        "idempotency-key": "collection-create-atomic-settings",
+      },
+      body: JSON.stringify(body),
+    });
+    expect(response.status).toBe(200);
+    expect(repository.calls).toEqual([{
+      operation: "collectionCreate",
+      actorId: USER_ID,
+      input: {
+        ...body,
+        idempotencyKey: "collection-create-atomic-settings",
+      },
+    }]);
+  });
+
   it("returns a structured authentication failure", async () => {
     const app = createApiApp({
       jwtVerifier: async () => {

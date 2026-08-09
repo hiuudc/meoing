@@ -1,10 +1,14 @@
 import { useState } from "react";
 import { createPortal } from "react-dom";
-import { AccountSettingsModal } from "./AccountSettingsModal";
+import { AccountSettingsModal, type AccountAppearanceController } from "./AccountSettingsModal";
 import { useAuth } from "./AuthProvider";
 import { ProfileAvatar } from "./ProfileAvatar";
 
-export function AccountMenu() {
+interface AccountMenuProps {
+  appearance?: AccountAppearanceController;
+}
+
+export function AccountMenu({ appearance }: AccountMenuProps) {
   const auth = useAuth();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const profile = auth.currentUser?.profile;
@@ -33,7 +37,10 @@ export function AccountMenu() {
         </span>
       </button>
       {settingsOpen
-        ? createPortal(<AccountSettingsModal onClose={() => setSettingsOpen(false)} />, portalTarget)
+        ? createPortal(
+            <AccountSettingsModal appearance={appearance} onClose={() => setSettingsOpen(false)} />,
+            portalTarget,
+          )
         : null}
     </div>
   );

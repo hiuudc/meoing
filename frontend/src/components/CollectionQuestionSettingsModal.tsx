@@ -1,5 +1,6 @@
-import { X } from "lucide-react";
+import { LoaderCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { apiErrorMessage } from "../api/client";
 import { LESSON_QUESTION_FORMAT_DEFINITIONS, QUESTION_FORMAT_REGISTRY } from "../learning/questionRegistry";
 import {
   getEffectiveCollectionQuestionSettings,
@@ -15,13 +16,11 @@ import type {
   QuestionFormat,
 } from "../learning/types";
 import type { Collection } from "../types";
-import { AnimatedModal } from "./AnimatedModal";
 
-interface CollectionQuestionSettingsModalProps {
-  collection: Collection | null;
+interface CollectionQuestionSettingsPanelProps {
+  collection: Collection;
   profile: LearningProfile;
-  onClose: () => void;
-  onSave: (settings: CollectionQuestionSettings) => void;
+  onSave: (settings: CollectionQuestionSettings) => void | Promise<void>;
 }
 
 function initialAnswer(question: LessonQuestion): QuestionAnswer {
@@ -56,30 +55,6 @@ function QuestionPreview({
   );
 }
 
-function PreviewColumn({
-  disabled,
-  format,
-  language,
-  previewId,
-}: {
-  disabled: boolean;
-  format: QuestionFormat;
-  language: string;
-  previewId: string;
-}) {
-  return (
-    <div className="question-preview-column">
-      <QuestionPreview
-        key={`${previewId}:${format}`}
-        disabled={disabled}
-        format={format}
-        language={language}
-        previewId={previewId}
-      />
-    </div>
-  );
-}
-
 type QuestionFormatDefinition = (typeof LESSON_QUESTION_FORMAT_DEFINITIONS)[number];
 
 interface QuestionFormatState {
@@ -98,13 +73,7 @@ function QuestionFormatCard({
   language: string;
   onToggle: (format: QuestionFormat, enabled: boolean) => void;
 }) {
-  const {
-    definition,
-    enabled,
-    languageUnavailable,
-    speakingUnavailable,
-  } = formatState;
-
+  const { definition, enabled, languageUnavailable, speakingUnavailable } = formatState;
   return (
     <article
       className={`question-format-card ${enabled ? "is-enabled" : "is-disabled"}`}
@@ -127,34 +96,37 @@ function QuestionFormatCard({
       <p>{definition.description}</p>
       {speakingUnavailable ? <small>Collection speaking is disabled.</small> : null}
       {languageUnavailable ? <small>Available only when learning Chinese, Japanese, or Korean.</small> : null}
-      <PreviewColumn
-        disabled={!enabled}
-        format={definition.id}
-        language={language}
-        previewId={`format-preview-${definition.id}`}
-      />
+      <div className="question-preview-column">
+        <QuestionPreview
+          key={`${definition.id}:${enabled}`}
+          disabled={!enabled}
+          format={definition.id}
+          language={language}
+          previewId={`format-preview-${definition.id}`}
+        />
+      </div>
     </article>
   );
 }
 
-export function CollectionQuestionSettingsModal({
+export function CollectionQuestionSettingsPanel({
   collection,
   profile,
-  onClose,
   onSave,
-}: CollectionQuestionSettingsModalProps) {
-  const [retainedCollection, setRetainedCollection] = useState(collection);
+}: CollectionQuestionSettingsPanelProps) {
   const [questionSettings, setQuestionSettings] = useState<CollectionQuestionSettings>(
-    () => getEffectiveCollectionQuestionSettings(collection?.questionSettings, profile),
+    () => getEffectiveCollectionQuestionSettings(collection.questionSettings, profile),
   );
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const pendingFormatFocusRef = useRef<QuestionFormat | null>(null);
-  const activeCollection = collection ?? retainedCollection;
 
   useEffect(() => {
-    if (!collection) return;
-    setRetainedCollection(collection);
     setQuestionSettings(getEffectiveCollectionQuestionSettings(collection.questionSettings, profile));
-  }, [collection, profile]);
+    setError("");
+    setNotice("");
+  }, [collection.id, collection.questionSettings, profile]);
 
   useEffect(() => {
     const format = pendingFormatFocusRef.current;
@@ -164,8 +136,6 @@ export function CollectionQuestionSettingsModal({
       `[data-question-format="${format}"] input[type="checkbox"]`,
     )?.focus();
   }, [questionSettings.enabledFormats]);
-
-  if (!activeCollection) return null;
 
   const errors = validateCollectionQuestionSettings(questionSettings, profile);
   const formatStates: QuestionFormatState[] = LESSON_QUESTION_FORMAT_DEFINITIONS.map((definition) => {
@@ -182,8 +152,10 @@ export function CollectionQuestionSettingsModal({
   });
   const enabledFormats = formatStates.filter((formatState) => formatState.enabled);
   const disabledFormats = formatStates.filter((formatState) => !formatState.enabled);
+
   function updateFormatEnabled(format: QuestionFormat, enabled: boolean) {
     pendingFormatFocusRef.current = format;
+    setNotice("");
     setQuestionSettings((current) => ({
       ...current,
       enabledFormats: enabled
@@ -192,98 +164,78 @@ export function CollectionQuestionSettingsModal({
     }));
   }
 
-  function submit(event: React.FormEvent<HTMLFormElement>) {
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (errors.length) return;
-    onSave(questionSettings);
+    if (errors.length || saving) return;
+    setSaving(true);
+    setError("");
+    setNotice("");
+    try {
+      await onSave(questionSettings);
+      setNotice("Question settings saved.");
+    } catch (saveError) {
+      setError(apiErrorMessage(saveError));
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
-    <AnimatedModal
-      open={Boolean(collection)}
-      onClose={onClose}
-      labelledBy="collection-question-settings-title"
-      backdropClassName="modal-backdrop question-settings-backdrop"
-      panelClassName="question-settings-modal"
-    >
-      <form onSubmit={submit}>
-        <header className="question-settings-header">
-          <div>
-            <p>Collection question settings</p>
-            <h2 id="collection-question-settings-title">{activeCollection.name}</h2>
-          </div>
-          <button className="icon-button" type="button" aria-label="Close question settings" onClick={onClose}>
-            <X size={20} />
-          </button>
-        </header>
-
-        <div className="question-settings-content">
-          <section className="collection-question-settings" aria-label="Question configuration">
-            <div className="question-settings-summary">
-              <div><span>Lesson size</span><strong>{profile.lessonQuestionCount} questions</strong></div>
-              <div><span>Enabled formats</span><strong>{enabledFormats.length}/{LESSON_QUESTION_FORMAT_DEFINITIONS.length}</strong></div>
-            </div>
-
-            <div className="settings-section-heading">
-              <div>
-                <h3>Question formats</h3>
-                <p>Enable at least five formats, including one local and one AI-graded format.</p>
-              </div>
-            </div>
-            <div className="question-format-groups">
-              {([
-                {
-                  id: "enabled-question-formats",
-                  label: "Enabled formats",
-                  formats: enabledFormats,
-                  emptyMessage: "No formats are enabled.",
-                },
-                {
-                  id: "disabled-question-formats",
-                  label: "Disabled formats",
-                  formats: disabledFormats,
-                  emptyMessage: "All available formats are enabled.",
-                },
-              ] as const).map((group) => (
-                <section className="question-format-group" aria-labelledby={`${group.id}-title`} key={group.id}>
-                  <div className="question-format-group-heading">
-                    <h4 id={`${group.id}-title`}>{group.label}</h4>
-                    <span>{group.formats.length}</span>
-                  </div>
-                  {group.formats.length ? (
-                    <div className="question-format-grid">
-                      {group.formats.map((formatState) => (
-                        <QuestionFormatCard
-                          key={formatState.definition.id}
-                          formatState={formatState}
-                          language={profile.targetLanguage}
-                          onToggle={updateFormatEnabled}
-                        />
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="question-format-empty">{group.emptyMessage}</p>
-                  )}
-                </section>
-              ))}
-            </div>
-
-            {errors.length ? (
-              <div className="question-settings-validation" role="alert">
-                <strong>Resolve these settings before saving:</strong>
-                <ul>{errors.map((error) => <li key={error}>{error}</li>)}</ul>
-              </div>
-            ) : (
-              <p className="question-settings-valid">These settings fit the collection lesson size.</p>
-            )}
-          </section>
+    <form className="collection-question-settings collection-question-settings-panel" onSubmit={(event) => void submit(event)}>
+      <div className="collection-admin-section-heading">
+        <div>
+          <h3>Question formats</h3>
+          <p>Configure which formats future lessons in {collection.name} may use.</p>
         </div>
+      </div>
 
-        <footer className="question-settings-footer">
-          <button className="secondary-button" type="button" onClick={onClose}>Cancel</button>
-          <button className="primary-button" type="submit" disabled={errors.length > 0}>Save changes</button>
-        </footer>
-      </form>
-    </AnimatedModal>
+      <div className="question-settings-summary">
+        <div><span>Lesson size</span><strong>{profile.lessonQuestionCount} questions</strong></div>
+        <div><span>Enabled formats</span><strong>{enabledFormats.length}/{LESSON_QUESTION_FORMAT_DEFINITIONS.length}</strong></div>
+      </div>
+
+      <p className="question-settings-guidance">Enable at least five formats, including one local and one AI-graded format.</p>
+      <div className="question-format-groups">
+        {([
+          { id: "enabled-question-formats", label: "Enabled formats", formats: enabledFormats, empty: "No formats are enabled." },
+          { id: "disabled-question-formats", label: "Disabled formats", formats: disabledFormats, empty: "All available formats are enabled." },
+        ] as const).map((group) => (
+          <section className="question-format-group" aria-labelledby={`${group.id}-title`} key={group.id}>
+            <div className="question-format-group-heading">
+              <h4 id={`${group.id}-title`}>{group.label}</h4>
+              <span>{group.formats.length}</span>
+            </div>
+            {group.formats.length ? (
+              <div className="question-format-grid">
+                {group.formats.map((formatState) => (
+                  <QuestionFormatCard
+                    key={formatState.definition.id}
+                    formatState={formatState}
+                    language={profile.targetLanguage}
+                    onToggle={updateFormatEnabled}
+                  />
+                ))}
+              </div>
+            ) : <p className="question-format-empty">{group.empty}</p>}
+          </section>
+        ))}
+      </div>
+
+      {errors.length ? (
+        <div className="question-settings-validation" role="alert">
+          <strong>Resolve these settings before saving:</strong>
+          <ul>{errors.map((validationError) => <li key={validationError}>{validationError}</li>)}</ul>
+        </div>
+      ) : <p className="question-settings-valid">These settings fit the collection lesson size.</p>}
+      {error ? <div className="collection-admin-message is-error" role="alert">{error}</div> : null}
+      {notice ? <div className="collection-admin-message is-success" role="status">{notice}</div> : null}
+
+      <div className="collection-admin-actions question-settings-panel-actions">
+        <button className="primary-button" type="submit" disabled={saving || errors.length > 0}>
+          {saving ? <LoaderCircle className="spin" size={16} /> : null}
+          {saving ? "Saving…" : "Save changes"}
+        </button>
+      </div>
+    </form>
   );
 }

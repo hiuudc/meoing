@@ -32,7 +32,6 @@ interface SidebarHarnessProps {
   accountMenu?: ReactNode;
   onSelectUnit?: (id: string) => void;
   onOpenLessons?: (id: string) => void;
-  onOpenCollectionQuestions?: () => void;
   onOpenCollectionAdmin?: () => void;
   onOpenDeletedUnits?: () => void;
   profileDisplayName?: string;
@@ -44,7 +43,6 @@ function SidebarHarness({
   accountMenu,
   onSelectUnit,
   onOpenLessons,
-  onOpenCollectionQuestions,
   onOpenCollectionAdmin,
   onOpenDeletedUnits,
   profileDisplayName,
@@ -79,10 +77,8 @@ function SidebarHarness({
     },
     onCreateUnit: vi.fn(),
     onEditUnit: vi.fn(),
-    onOpenCollectionQuestions: onOpenCollectionQuestions ?? vi.fn(),
     onDeleteUnit: vi.fn(),
     onMoveUnit: vi.fn(),
-    onOpenAppearance: vi.fn(),
     onOpenCollectionAdmin,
     onOpenDeletedUnits,
     accountMenu,
@@ -153,18 +149,17 @@ describe("workspace unit navigation", () => {
     expect(profile?.textContent).not.toContain("Mina");
   });
 
-  it("opens collection question settings from the collection heading only", async () => {
-    const onOpenCollectionQuestions = vi.fn();
-    await renderSidebar({ onOpenCollectionQuestions });
+  it("opens collection administration from the collection heading gear", async () => {
+    const onOpenCollectionAdmin = vi.fn();
+    await renderSidebar({ onOpenCollectionAdmin });
 
     const settingsButton = document.querySelector<HTMLButtonElement>(
-      '[aria-label="Open question settings for Test Collection"]',
+      '[aria-label="Open collection administration for Test Collection"]',
     );
     expect(settingsButton).not.toBeNull();
-    expect(document.querySelector('[aria-label="Open question settings for Daily Rhythm"]')).toBeNull();
 
     await act(async () => settingsButton!.click());
-    expect(onOpenCollectionQuestions).toHaveBeenCalledOnce();
+    expect(onOpenCollectionAdmin).toHaveBeenCalledOnce();
   });
 
   it("opens collection settings for members without mutation permissions", async () => {

@@ -2,6 +2,7 @@
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_THEME } from "../store";
 import { AccountMenu } from "./AccountMenu";
 
 const mocks = vi.hoisted(() => ({
@@ -92,6 +93,36 @@ describe("AccountMenu", () => {
       .find((candidate) => candidate.textContent?.trim() === "Log out");
     await act(async () => signOutButton!.click());
     expect(mocks.signOut).toHaveBeenCalledOnce();
+  });
+
+  it("hosts Appearance in account settings and applies or discards through the controller", async () => {
+    const appearance = {
+      draft: { ...DEFAULT_THEME, colorStops: [...DEFAULT_THEME.colorStops] },
+      onOpen: vi.fn(),
+      onChange: vi.fn(),
+      onApply: vi.fn().mockResolvedValue(undefined),
+      onDiscard: vi.fn(),
+      onOpenCustomizer: vi.fn(),
+    };
+    document.body.innerHTML = '<div id="mount"></div>';
+    root = createRoot(document.querySelector("#mount")!);
+    await act(async () => root!.render(createElement(AccountMenu, { appearance })));
+    await act(async () => document.querySelector<HTMLButtonElement>(".app-account-button")!.click());
+
+    const appearanceTab = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+      .find((candidate) => candidate.textContent?.trim() === "Appearance");
+    await act(async () => appearanceTab!.click());
+    expect(appearance.onOpen).toHaveBeenCalledOnce();
+    expect(document.body.textContent).toContain("Base themes");
+
+    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Light"]')!.click());
+    expect(appearance.onChange).toHaveBeenCalledOnce();
+    await act(async () => Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+      .find((candidate) => candidate.textContent?.trim() === "Apply theme")!.click());
+    expect(appearance.onApply).toHaveBeenCalledWith(appearance.draft);
+
+    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Close account settings"]')!.click());
+    expect(appearance.onDiscard).toHaveBeenCalledOnce();
   });
 
   it("closes a security dialog before closing account settings on Escape", async () => {

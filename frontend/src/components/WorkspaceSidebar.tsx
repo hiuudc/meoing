@@ -8,7 +8,6 @@ import {
   History,
   MessageSquareQuote,
   MoreHorizontal,
-  Palette,
   Pencil,
   Plus,
   Search,
@@ -45,11 +44,9 @@ interface WorkspaceSidebarProps {
   onOpenLessons: (unitId: string) => void;
   onCreateUnit: () => void;
   onEditUnit: (unit: Unit) => void;
-  onOpenCollectionQuestions: () => void;
   onDeleteUnit: (unit: Unit) => void;
   onOpenUnitRevisions?: (unit: Unit) => void;
   onMoveUnit: (id: string, targetId: string, placement: "before" | "after") => void;
-  onOpenAppearance: () => void;
   onOpenCollectionAdmin?: () => void;
   onOpenDeletedUnits?: () => void;
   accountMenu?: ReactNode;
@@ -98,11 +95,9 @@ export function WorkspaceSidebar({
   onOpenLessons,
   onCreateUnit,
   onEditUnit,
-  onOpenCollectionQuestions,
   onDeleteUnit,
   onOpenUnitRevisions,
   onMoveUnit,
-  onOpenAppearance,
   onOpenCollectionAdmin,
   onOpenDeletedUnits,
   accountMenu,
@@ -302,11 +297,11 @@ export function WorkspaceSidebar({
       <div className="sidebar-heading">
         <span>{collection.name}</span>
         <ChevronDown size={16} />
-        {canManageCollection ? <button
-          className="collection-question-settings-button"
+        {canManageCollection && onOpenCollectionAdmin ? <button
+          className="collection-admin-settings-button"
           type="button"
-          aria-label={`Open question settings for ${collection.name}`}
-          onClick={onOpenCollectionQuestions}
+          aria-label={`Open collection administration for ${collection.name}`}
+          onClick={onOpenCollectionAdmin}
         >
           <Settings size={15} />
         </button> : null}
@@ -450,8 +445,12 @@ export function WorkspaceSidebar({
                 </div>
               );
             })
+          ) : canCreateUnit ? (
+            <button className="sidebar-empty sidebar-empty-action" type="button" onClick={onCreateUnit}>
+              Add a unit to begin.
+            </button>
           ) : (
-            <p className="sidebar-empty">Add a unit to begin.</p>
+            <p className="sidebar-empty">No units are available.</p>
           )}
         </div>
       </nav>
@@ -469,10 +468,6 @@ export function WorkspaceSidebar({
             <span>Collection settings</span>
           </button>
         ) : null}
-        {canManageCollection ? <button className="sidebar-nav-row" type="button" onClick={onOpenAppearance}>
-          <Palette size={16} />
-          <span>Appearance</span>
-        </button> : null}
         {accountMenu ?? <div className="profile-row">
           <span className="profile-avatar">
             {(profileDisplayName || profileUsername || "M").trim().charAt(0).toUpperCase()}

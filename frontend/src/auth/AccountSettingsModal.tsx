@@ -6,6 +6,7 @@ import {
   LoaderCircle,
   LogOut,
   Mail,
+  Palette,
   ShieldCheck,
   UserRound,
   X,
@@ -15,6 +16,8 @@ import { apiErrorMessage } from "../api/client";
 import { uploadProfileImage } from "../api/files";
 import { updateMainProfile } from "../api/profile";
 import { AnimatedModal } from "../components/AnimatedModal";
+import { AppearanceSettingsPanel } from "../components/AppearanceSettingsPanel";
+import type { ThemeConfig } from "../types";
 import {
   DeleteAccountDialog,
   EmailDialog,
@@ -26,9 +29,19 @@ import { ProfileAvatar } from "./ProfileAvatar";
 
 interface AccountSettingsModalProps {
   onClose: () => void;
+  appearance?: AccountAppearanceController;
 }
 
-type AccountSection = "profile" | "account" | "security" | "privacy";
+export interface AccountAppearanceController {
+  draft: ThemeConfig;
+  onOpen: () => void;
+  onChange: (theme: ThemeConfig) => void;
+  onApply: (theme: ThemeConfig) => void | Promise<void>;
+  onDiscard: () => void;
+  onOpenCustomizer: (theme: ThemeConfig) => void;
+}
+
+type AccountSection = "profile" | "account" | "security" | "privacy" | "appearance";
 type AccountDialog = "username" | "email" | "password" | "delete" | null;
 
 const SECTIONS: Array<{
@@ -40,9 +53,10 @@ const SECTIONS: Array<{
   { id: "account", label: "Account Info", icon: AtSign },
   { id: "security", label: "Password & Security", icon: KeyRound },
   { id: "privacy", label: "Data & Privacy", icon: ShieldCheck },
+  { id: "appearance", label: "Appearance", icon: Palette },
 ];
 
-export function AccountSettingsModal({ onClose }: AccountSettingsModalProps) {
+export function AccountSettingsModal({ onClose, appearance }: AccountSettingsModalProps) {
   const auth = useAuth();
   const profile = auth.currentUser?.profile;
   const [section, setSection] = useState<AccountSection>("profile");
@@ -60,7 +74,10 @@ export function AccountSettingsModal({ onClose }: AccountSettingsModalProps) {
 
   function closeTopLayer() {
     if (dialog) setDialog(null);
-    else onClose();
+    else {
+      appearance?.onDiscard();
+      onClose();
+    }
   }
 
   function showSuccess(message: string) {
@@ -138,13 +155,16 @@ export function AccountSettingsModal({ onClose }: AccountSettingsModalProps) {
           </span>
         </div>
         <nav aria-label="Account settings">
-          {SECTIONS.map(({ id, label, icon: Icon }) => (
+          {SECTIONS.filter(({ id }) => id !== "appearance" || appearance).map(({ id, label, icon: Icon }) => (
             <button
               key={id}
               type="button"
               className={section === id ? "is-active" : undefined}
               aria-current={section === id ? "page" : undefined}
-              onClick={() => setSection(id)}
+              onClick={() => {
+                setSection(id);
+                if (id === "appearance") appearance?.onOpen();
+              }}
             >
               <Icon size={18} /> {label}
             </button>
@@ -280,6 +300,22 @@ export function AccountSettingsModal({ onClose }: AccountSettingsModalProps) {
                 </div>
                 <button className="danger-button" type="button" onClick={() => setDialog("delete")}>Delete account</button>
               </div>
+            </div>
+          ) : null}
+
+          {section === "appearance" && appearance ? (
+            <div className="account-settings-page">
+              <div className="account-settings-page-heading">
+                <p>Experience</p>
+                <h3>Appearance</h3>
+                <span>Choose a theme and control how collection accents appear.</span>
+              </div>
+              <AppearanceSettingsPanel
+                draft={appearance.draft}
+                onChange={appearance.onChange}
+                onApply={appearance.onApply}
+                onOpenCustomizer={appearance.onOpenCustomizer}
+              />
             </div>
           ) : null}
         </div>

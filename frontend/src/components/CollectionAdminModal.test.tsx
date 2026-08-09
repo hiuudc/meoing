@@ -10,7 +10,9 @@ import type {
   LessonSummary,
 } from "../api/collectionAdmin";
 import type { Collection } from "../types";
-import { CollectionAdminModal } from "./CollectionAdminModal";
+import { DEFAULT_LEARNING_PROFILE } from "../learning/profile";
+import type { CollectionQuestionSettings } from "../learning/types";
+import { CollectionAdminModal, type AdminTab } from "./CollectionAdminModal";
 
 const collection: Collection = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -183,6 +185,8 @@ async function renderModal(
   onChanged = vi.fn(),
   currentUserId = "88888888-8888-4888-8888-888888888888",
   selectedCollection = collection,
+  initialTab: AdminTab = "members",
+  onSaveQuestionSettings = vi.fn(),
 ) {
   const { api, get, post, put } = createApi();
   document.body.innerHTML = '<button id="opener">Open admin</button><div id="mount"></div>';
@@ -194,12 +198,19 @@ async function renderModal(
       api,
       currentUserId,
       effectivePermissions,
+      learningProfile: DEFAULT_LEARNING_PROFILE,
+      questionSettings: selectedCollection.questionSettings,
+      initialTab,
+      onSaveQuestionSettings,
       onClose: vi.fn(),
       onChanged,
     }));
   });
-  await vi.waitFor(() => expect(document.body.textContent).toContain("Meoi Teacher"));
-  return { get, post, put, onChanged };
+  await vi.waitFor(() => expect(document.querySelector('[role="tabpanel"]')).not.toBeNull());
+  if (initialTab === "members") {
+    await vi.waitFor(() => expect(document.body.textContent).toContain("Meoi Teacher"));
+  }
+  return { get, post, put, onChanged, onSaveQuestionSettings };
 }
 
 beforeEach(() => {
@@ -222,6 +233,36 @@ afterEach(async () => {
 });
 
 describe("CollectionAdminModal", () => {
+  it("shows Questions first only for collection managers and saves through the embedded panel", async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    await renderModal(
+      ["manage_collection"],
+      vi.fn(),
+      "88888888-8888-4888-8888-888888888888",
+      {
+        ...collection,
+        questionSettings: {
+          enabledFormats: ["singleChoice", "multipleChoice", "trueFalse", "fillBlank", "translation"],
+          characterTracing: { requireStrokeOrder: true },
+        } satisfies CollectionQuestionSettings,
+      },
+      "questions",
+      onSave,
+    );
+
+    const tablist = document.querySelector('[role="tablist"]');
+    expect(tablist?.querySelector("button")?.textContent).toContain("Questions");
+    expect(document.body.textContent).toContain("Question formats");
+    await act(async () => button("Save changes").click());
+    expect(onSave).toHaveBeenCalledOnce();
+
+    await act(async () => root!.unmount());
+    root = null;
+    await renderModal([], vi.fn(), undefined, collection, "questions");
+    expect(document.querySelector('[role="tablist"]')?.textContent).not.toContain("Questions");
+    expect(document.body.textContent).toContain("Members and profiles");
+  });
+
   it("uses effective permissions as the sole gate for privileged tabs and actions", async () => {
     await renderModal([]);
 

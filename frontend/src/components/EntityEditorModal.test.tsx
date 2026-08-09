@@ -63,6 +63,9 @@ describe("EntityEditorModal collection languages", () => {
     expect(learningLanguage.selectedOptions[0]?.textContent).toBe("Select learning language");
     expect(speakingLanguage.value).toBe("");
     expect(speakingLanguage.selectedOptions[0]?.textContent).toBe("Select speaking language");
+    expect(Array.from(document.querySelectorAll("button")).some(
+      (button) => button.textContent?.trim() === "Create collection",
+    )).toBe(true);
   });
 
   it("keeps the saved language pair when editing a collection", async () => {
@@ -80,5 +83,8 @@ describe("EntityEditorModal collection languages", () => {
     const selects = Array.from(document.querySelectorAll<HTMLSelectElement>("select"));
     expect(selects[0]?.value).toBe("Japanese");
     expect(selects[1]?.value).toBe("Vietnamese");
+    expect(Array.from(document.querySelectorAll("button")).some(
+      (button) => button.textContent?.trim() === "Save changes",
+    )).toBe(true);
   });
 });

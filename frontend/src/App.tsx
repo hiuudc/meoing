@@ -5,10 +5,8 @@ import { upsertSetting } from "./api/settings";
 import { loadCloudWorkspace, loadDeletedCollections, serializeUnitContent } from "./api/workspace";
 import { useAuth } from "./auth/AuthProvider";
 import { AccountMenu } from "./auth/AccountMenu";
-import { AppearanceModal } from "./components/AppearanceModal";
 import { CollectionAdminModal } from "./components/CollectionAdminModal";
 import { CollectionRail } from "./components/CollectionRail";
-import { CollectionQuestionSettingsModal } from "./components/CollectionQuestionSettingsModal";
 import { ContentWorkspace } from "./components/ContentWorkspace";
 import { DeletedCollectionsModal } from "./components/DeletedCollectionsModal";
 import { DeletedUnitsModal } from "./components/DeletedUnitsModal";
@@ -50,12 +48,9 @@ export function App() {
   const [collectionAccentPreview, setCollectionAccentPreview] = useState<string | null>(null);
   const [appearanceDraft, setAppearanceDraft] = useState<ReturnType<typeof cloneTheme> | null>(null);
   const [themeDraft, setThemeDraft] = useState<ReturnType<typeof cloneTheme> | null>(null);
-  const [pendingAppearanceDraft, setPendingAppearanceDraft] = useState<ReturnType<typeof cloneTheme> | null>(null);
-  const [pendingThemeDraft, setPendingThemeDraft] = useState<ReturnType<typeof cloneTheme> | null>(null);
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const [sidebarWidthDraft, setSidebarWidthDraft] = useState<number | null>(null);
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>("library");
-  const [questionSettingsCollection, setQuestionSettingsCollection] = useState<Collection | null>(null);
   const [collectionAdminOpen, setCollectionAdminOpen] = useState(false);
   const [deletedCollections, setDeletedCollections] = useState<Collection[]>([]);
   const [deletedCollectionsOpen, setDeletedCollectionsOpen] = useState(false);
@@ -99,7 +94,6 @@ export function App() {
     if (
       !mobileNavigationOpen
       || editor
-      || questionSettingsCollection
       || collectionAdminOpen
       || deletedCollectionsOpen
       || deletedUnitsOpen
@@ -107,8 +101,6 @@ export function App() {
       || pendingInviteToken
       || appearanceDraft
       || themeDraft
-      || pendingAppearanceDraft
-      || pendingThemeDraft
     ) return;
     function onEscape(event: KeyboardEvent) {
       if (event.key === "Escape") setMobileNavigationOpen(false);
@@ -122,10 +114,7 @@ export function App() {
     deletedUnitsOpen,
     editor,
     mobileNavigationOpen,
-    pendingAppearanceDraft,
     pendingInviteToken,
-    pendingThemeDraft,
-    questionSettingsCollection,
     themeDraft,
     unitRevisionsUnit,
   ]);
@@ -238,17 +227,15 @@ export function App() {
             saveCollectionSetting(editor.value.id, "learningProfile", learningProfile),
           ]);
         } else {
-          const response = await api.post<{ id: string }>("/v1/collections", {
+          await api.post<{ id: string }>("/v1/collections", {
             name: fields.name.trim(),
             description: "",
-          }, crypto.randomUUID());
-          await Promise.all([
-            saveCollectionSetting(response.data.id, "appearance", {
+            appearance: {
               icon: fields.icon.trim(),
               accent: fields.accent,
-            }),
-            saveCollectionSetting(response.data.id, "learningProfile", learningProfile),
-          ]);
+            },
+            learningProfile,
+          }, crypto.randomUUID());
         }
       } else if (editor.type === "unit") {
         const collectionId = editor.value?.collectionId ?? editor.collectionId;
@@ -390,13 +377,15 @@ export function App() {
     }
   }
 
-  async function persistTheme(theme: typeof state.theme) {
+  async function persistTheme(theme: typeof state.theme): Promise<boolean> {
     const normalized = reconcileThemeSelection(theme);
-    dispatch({ type: "applyTheme", theme: normalized });
     try {
       await saveUserSetting("theme", normalized);
+      dispatch({ type: "applyTheme", theme: normalized });
+      return true;
     } catch (error) {
       setWorkspaceError(apiErrorMessage(error));
+      return false;
     }
   }
 
@@ -425,39 +414,18 @@ export function App() {
     setMobileNavigationOpen(false);
   }
 
-  function closeAppearance() {
-    setPendingThemeDraft(null);
-    setAppearanceDraft(null);
-  }
-
   function openThemeCustomizer(theme = state.theme) {
-    setPendingAppearanceDraft(null);
-    setPendingThemeDraft(cloneTheme(theme));
-    setAppearanceDraft(null);
-  }
-
-  function finishAppearanceExit() {
-    if (!pendingThemeDraft) return;
-    setThemeDraft(pendingThemeDraft);
-    setPendingThemeDraft(null);
+    setThemeDraft(cloneTheme(theme));
   }
 
   function closeThemeCustomizer() {
-    setPendingAppearanceDraft(null);
     setThemeDraft(null);
   }
 
   function returnThemeCustomizerToAppearance() {
     if (!themeDraft) return;
-    setPendingThemeDraft(null);
-    setPendingAppearanceDraft(cloneTheme(reconcileThemeSelection(themeDraft)));
+    setAppearanceDraft(cloneTheme(reconcileThemeSelection(themeDraft)));
     setThemeDraft(null);
-  }
-
-  function finishThemeCustomizerExit() {
-    if (!pendingAppearanceDraft) return;
-    setAppearanceDraft(pendingAppearanceDraft);
-    setPendingAppearanceDraft(null);
   }
 
   const inviteAcceptanceModal = pendingInviteToken && api ? (
@@ -476,7 +444,20 @@ export function App() {
   ) : null;
 
   const sidebarWidth = sidebarWidthDraft ?? state.sidebarWidth;
-  const activeTheme = themeDraft ?? pendingThemeDraft ?? pendingAppearanceDraft ?? appearanceDraft ?? state.theme;
+  const activeTheme = themeDraft ?? appearanceDraft ?? state.theme;
+  const accountAppearance = {
+    draft: appearanceDraft ?? state.theme,
+    onOpen: () => setAppearanceDraft((current) => current ?? cloneTheme(state.theme)),
+    onChange: setAppearanceDraft,
+    onApply: async (theme: typeof state.theme) => {
+      if (await persistTheme(theme)) setAppearanceDraft(null);
+    },
+    onDiscard: () => {
+      setAppearanceDraft(null);
+      setThemeDraft(null);
+    },
+    onOpenCustomizer: openThemeCustomizer,
+  };
 
   if (!activeCollection) {
     return (
@@ -498,7 +479,7 @@ export function App() {
           loading={workspaceLoading}
           openOnMobile={mobileNavigationOpen}
           onCloseMobile={closeMobileNavigation}
-          accountMenu={<AccountMenu />}
+          accountMenu={<AccountMenu appearance={accountAppearance} />}
         />
         <button
           className="mobile-drawer-backdrop"
@@ -593,17 +574,12 @@ export function App() {
         }}
         onCreateUnit={() => openEditor({ type: "unit", collectionId: activeCollection.id })}
         onEditUnit={(unit) => openEditor({ type: "unit", value: unit, collectionId: unit.collectionId })}
-        onOpenCollectionQuestions={() => {
-          setQuestionSettingsCollection(activeCollection);
-          closeMobileNavigation();
-        }}
         onDeleteUnit={(unit) => confirmDelete(cleanUnitName(unit.name), () => deleteUnit(unit))}
         onOpenUnitRevisions={(unit) => {
           setUnitRevisionsUnit(unit);
           closeMobileNavigation();
         }}
         onMoveUnit={(id, targetId, placement) => void persistUnitOrder(id, targetId, placement)}
-        onOpenAppearance={() => setAppearanceDraft(cloneTheme(state.theme))}
         onOpenCollectionAdmin={() => {
           setCollectionAdminOpen(true);
           closeMobileNavigation();
@@ -612,7 +588,7 @@ export function App() {
           setDeletedUnitsOpen(true);
           closeMobileNavigation();
         }}
-        accountMenu={<AccountMenu />}
+        accountMenu={<AccountMenu appearance={accountAppearance} />}
         canCreateUnit={canCreateContent}
         canEditUnit={canEditContent}
         canDeleteUnit={canDeleteContent}
@@ -643,7 +619,9 @@ export function App() {
         onOpenMobileNavigation={() => setMobileNavigationOpen(true)}
         onSelectKind={(kind) => dispatch({ type: "selectKind", kind })}
         onCreate={createContent}
+        onCreateUnit={() => openEditor({ type: "unit", collectionId: activeCollection.id })}
         canCreate={canCreateContent}
+        canCreateUnit={canCreateContent}
         canEdit={canEditContent}
         canDelete={canDeleteContent}
         onEditDocument={(document) => openEditor({ type: "document", value: document, unitId: document.unitId })}
@@ -695,32 +673,25 @@ export function App() {
         onAccentPreview={setCollectionAccentPreview}
         targetLanguage={activeLearningProfile.targetLanguage}
       />
-      <CollectionQuestionSettingsModal
-        collection={questionSettingsCollection}
-        profile={activeLearningProfile}
-        onClose={() => setQuestionSettingsCollection(null)}
-        onSave={(questionSettings) => {
-          if (!questionSettingsCollection) return;
-          const currentCollection = state.collections[questionSettingsCollection.id];
-          if (!currentCollection) return;
-          dispatch({
-            type: "updateCollection",
-            collection: { ...currentCollection, questionSettings },
-          });
-          setQuestionSettingsCollection(null);
-          void saveCollectionSetting(currentCollection.id, "questionSettings", questionSettings)
-            .catch((error) => {
-              setWorkspaceError(apiErrorMessage(error));
-              void refreshWorkspace();
-            });
-        }}
-      />
       {collectionAdminOpen && api ? (
         <CollectionAdminModal
           collection={activeCollection}
           api={api}
           currentUserId={auth.currentUser?.profile.id ?? ""}
           effectivePermissions={activeCollection.effectivePermissions ?? []}
+          learningProfile={activeLearningProfile}
+          questionSettings={activeCollection.questionSettings}
+          initialTab="questions"
+          onSaveQuestionSettings={async (questionSettings) => {
+            await saveCollectionSetting(activeCollection.id, "questionSettings", questionSettings);
+            const currentCollection = state.collections[activeCollection.id];
+            if (currentCollection) {
+              dispatch({
+                type: "updateCollection",
+                collection: { ...currentCollection, questionSettings },
+              });
+            }
+          }}
           onClose={() => setCollectionAdminOpen(false)}
           onChanged={refreshWorkspace}
         />
@@ -757,32 +728,22 @@ export function App() {
         />
       ) : null}
       {inviteAcceptanceModal}
-      <AppearanceModal
-        open={Boolean(appearanceDraft)}
-        draft={appearanceDraft}
-        onClose={closeAppearance}
-        onExited={finishAppearanceExit}
-        onChange={setAppearanceDraft}
-        onApply={(theme) => {
-          void persistTheme(theme);
-          setPendingThemeDraft(null);
-          setAppearanceDraft(null);
-        }}
-        onOpenCustomizer={openThemeCustomizer}
-      />
       <ThemeCustomizerDrawer
         savedTheme={state.theme}
         open={Boolean(themeDraft)}
         draft={themeDraft}
         onChange={setThemeDraft}
         onClose={closeThemeCustomizer}
-        onExited={finishThemeCustomizerExit}
+        onExited={() => undefined}
         onBack={returnThemeCustomizerToAppearance}
         onApply={() => {
           if (!themeDraft) return;
-          void persistTheme(themeDraft);
-          setPendingAppearanceDraft(null);
-          setThemeDraft(null);
+          const draft = themeDraft;
+          void persistTheme(draft).then((saved) => {
+            if (!saved) return;
+            setAppearanceDraft(null);
+            setThemeDraft(null);
+          });
         }}
       />
     </div>

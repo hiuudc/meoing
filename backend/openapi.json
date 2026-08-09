@@ -15939,10 +15939,128 @@
                       "null"
                     ],
                     "maxLength": 1000
+                  },
+                  "appearance": {
+                    "type": "object",
+                    "properties": {
+                      "icon": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 8
+                      },
+                      "accent": {
+                        "type": "string",
+                        "pattern": "^#[0-9a-f]{6}$/i"
+                      }
+                    },
+                    "required": [
+                      "icon",
+                      "accent"
+                    ]
+                  },
+                  "learningProfile": {
+                    "type": "object",
+                    "properties": {
+                      "targetLanguage": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 100
+                      },
+                      "sourceLanguage": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 100
+                      },
+                      "interfaceLanguage": {
+                        "type": "string",
+                        "enum": [
+                          "vi",
+                          "en"
+                        ]
+                      },
+                      "level": {
+                        "type": "string",
+                        "enum": [
+                          "beginner",
+                          "elementary",
+                          "intermediate",
+                          "upperIntermediate",
+                          "advanced"
+                        ]
+                      },
+                      "dailyQuestionGoal": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100
+                      },
+                      "lessonQuestionCount": {
+                        "type": "integer",
+                        "minimum": 8,
+                        "maximum": 15
+                      },
+                      "speakingEnabled": {
+                        "type": "boolean"
+                      },
+                      "preferredFormats": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "singleChoice",
+                            "multipleChoice",
+                            "trueFalse",
+                            "fillBlank",
+                            "selectBlank",
+                            "multiCloze",
+                            "wordBank",
+                            "matching",
+                            "reorderTokens",
+                            "reorderDialogue",
+                            "categorize",
+                            "translation",
+                            "shortAnswer",
+                            "errorCorrection",
+                            "sentenceTransformation",
+                            "dictation",
+                            "freeWriting",
+                            "speakingRepeat",
+                            "speakingRoleplay",
+                            "listenSelect",
+                            "audioMatching",
+                            "soundDiscrimination",
+                            "flashcardRecall",
+                            "characterTracing"
+                          ]
+                        },
+                        "minItems": 1,
+                        "maxItems": 100
+                      },
+                      "coachingStyle": {
+                        "type": "string",
+                        "enum": [
+                          "gentle",
+                          "direct",
+                          "socratic"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "targetLanguage",
+                      "sourceLanguage",
+                      "interfaceLanguage",
+                      "level",
+                      "dailyQuestionGoal",
+                      "lessonQuestionCount",
+                      "speakingEnabled",
+                      "preferredFormats",
+                      "coachingStyle"
+                    ]
                   }
                 },
                 "required": [
-                  "name"
+                  "name",
+                  "appearance",
+                  "learningProfile"
                 ]
               }
             }

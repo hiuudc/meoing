@@ -22,7 +22,7 @@ grant meoing_runtime to meoing_pgtap_executor
 grant usage on schema extensions to meoing_runtime;
 grant execute on all functions in schema extensions to meoing_runtime;
 
-select plan(150);
+select plan(158);
 
 select ok(
   case
@@ -503,6 +503,106 @@ select is(
   1,
   'collection creation seeds exactly one managed everyone role'
 );
+
+savepoint settings_contract_probe;
+
+select lives_ok(
+  format(
+    $sql$
+      insert into app.settings (scope_type, user_id, collection_id, key, value)
+      values
+        ('user', '10000000-0000-0000-0000-000000000001', null, 'sidebarWidth', '288'),
+        ('collection', null, %L, 'learningProfile', '{}'),
+        ('collection', null, %L, 'questionSettings', '{}'),
+        ('collection_user', '10000000-0000-0000-0000-000000000001', %L, 'unitOrder', '[]')
+    $sql$,
+    (select value from test_ids where key = 'collection_one'),
+    (select value from test_ids where key = 'collection_one'),
+    (select value from test_ids where key = 'collection_one')
+  ),
+  'settings accept the camelCase keys used by the frontend contract'
+);
+
+select throws_ok(
+  $$insert into app.settings (scope_type, user_id, key, value)
+    values ('user', '10000000-0000-0000-0000-000000000001', 'unsafe key', '{}')$$,
+  '23514',
+  null,
+  'settings reject keys containing spaces'
+);
+
+select throws_ok(
+  $$insert into app.settings (scope_type, user_id, key, value)
+    values ('user', '10000000-0000-0000-0000-000000000001', 'unsafe/key', '{}')$$,
+  '23514',
+  null,
+  'settings reject keys containing slashes'
+);
+
+select throws_ok(
+  $$insert into app.settings (scope_type, user_id, key, value)
+    values ('user', '10000000-0000-0000-0000-000000000001', 'unsafe$key', '{}')$$,
+  '23514',
+  null,
+  'settings reject keys containing unsupported punctuation'
+);
+
+insert into test_ids (key, value)
+select
+  'atomic_collection',
+  (
+    private.api_collection_create(
+      jsonb_build_object(
+        'name', 'Atomic collection',
+        'idempotencyKey', 'atomic-collection-settings-01',
+        'appearance', jsonb_build_object('icon', 'A', 'accent', '#8b7cf6'),
+        'learningProfile', jsonb_build_object('targetLanguage', 'Japanese', 'sourceLanguage', 'English')
+      )
+    ) ->> 'id'
+  )::uuid;
+
+select is(
+  (
+    select count(*)::integer
+    from app.settings
+    where collection_id = (select value from test_ids where key = 'atomic_collection')
+      and key in ('appearance', 'learningProfile')
+  ),
+  2,
+  'collection creation commits appearance and learning profile atomically'
+);
+
+select is(
+  (
+    private.api_collection_create(
+      jsonb_build_object(
+        'name', 'Atomic collection retry',
+        'idempotencyKey', 'atomic-collection-settings-01',
+        'appearance', jsonb_build_object('icon', 'B', 'accent', '#ffffff'),
+        'learningProfile', jsonb_build_object('targetLanguage', 'German', 'sourceLanguage', 'English')
+      )
+    ) ->> 'id'
+  )::uuid,
+  (select value from test_ids where key = 'atomic_collection'),
+  'an idempotent collection retry returns the original atomic result'
+);
+
+select throws_ok(
+  $$select private.api_collection_create(
+    jsonb_build_object('name', 'Incomplete collection', 'appearance', jsonb_build_object('icon', 'I', 'accent', '#8b7cf6'))
+  )$$,
+  '22023',
+  'COLLECTION_SETTINGS_INCOMPLETE',
+  'collection creation rejects a partial initial-settings bundle'
+);
+
+select is(
+  (select count(*)::integer from app.collections where name = 'Incomplete collection'),
+  0,
+  'a rejected initial-settings bundle leaves no collection behind'
+);
+
+rollback to savepoint settings_contract_probe;
 
 insert into test_ids (key, value)
 select

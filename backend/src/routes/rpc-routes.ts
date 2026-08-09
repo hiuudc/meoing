@@ -203,16 +203,21 @@ const LearningProfileSchema = z.object({
     .refine((items) => new Set(items).size === items.length, "Formats must be unique"),
   coachingStyle: z.enum(["gentle", "direct", "socratic"]),
 });
+const CollectionAppearanceSchema = z.object({
+  icon: z.string().trim().min(1).max(8),
+  accent: z.string().regex(/^#[0-9a-f]{6}$/i),
+});
+const CollectionCreateRequestSchema = CollectionCreateSchema.extend({
+  appearance: CollectionAppearanceSchema,
+  learningProfile: LearningProfileSchema,
+});
 const SETTING_VALUE_SCHEMAS: Readonly<Record<string, Readonly<Record<string, z.ZodType>>>> = {
   user: {
     theme: ThemeSettingSchema,
     sidebarWidth: z.number().int().min(248).max(420),
   },
   collection: {
-    appearance: z.object({
-      icon: z.string().trim().min(1).max(8),
-      accent: z.string().regex(/^#[0-9a-f]{6}$/i),
-    }),
+    appearance: CollectionAppearanceSchema,
     learningProfile: LearningProfileSchema,
     questionSettings: z.object({
       enabledFormats: z.array(SettingFormatSchema).min(1).max(100)
@@ -492,7 +497,7 @@ const endpoints: readonly RpcEndpoint[] = [
     summary: "Create a collection",
     tags: ["Collections"],
     operation: "collectionCreate",
-    body: CollectionCreateSchema,
+    body: CollectionCreateRequestSchema,
     headers: IdempotencyHeaderSchema,
     response: CollectionSchema,
   },

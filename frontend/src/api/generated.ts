@@ -4465,6 +4465,24 @@ export interface operations {
                 "application/json": {
                     name: string;
                     description?: string | null;
+                    appearance: {
+                        icon: string;
+                        accent: string;
+                    };
+                    learningProfile: {
+                        targetLanguage: string;
+                        sourceLanguage: string;
+                        /** @enum {string} */
+                        interfaceLanguage: "vi" | "en";
+                        /** @enum {string} */
+                        level: "beginner" | "elementary" | "intermediate" | "upperIntermediate" | "advanced";
+                        dailyQuestionGoal: number;
+                        lessonQuestionCount: number;
+                        speakingEnabled: boolean;
+                        preferredFormats: ("singleChoice" | "multipleChoice" | "trueFalse" | "fillBlank" | "selectBlank" | "multiCloze" | "wordBank" | "matching" | "reorderTokens" | "reorderDialogue" | "categorize" | "translation" | "shortAnswer" | "errorCorrection" | "sentenceTransformation" | "dictation" | "freeWriting" | "speakingRepeat" | "speakingRoleplay" | "listenSelect" | "audioMatching" | "soundDiscrimination" | "flashcardRecall" | "characterTracing")[];
+                        /** @enum {string} */
+                        coachingStyle: "gentle" | "direct" | "socratic";
+                    };
                 };
             };
         };

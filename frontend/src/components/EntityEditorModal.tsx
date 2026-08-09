@@ -106,6 +106,10 @@ export function EntityEditorModal({
   }, [activeEditor, onAccentPreview]);
 
   const title = activeEditor ? getTitle(activeEditor) : "";
+  const entityLabel = activeEditor?.type === "studyItem"
+    ? activeEditor.kind
+    : activeEditor?.type ?? "item";
+  const creating = Boolean(activeEditor && !activeEditor.value);
   const activeAccent = normalizeHex(fields.accent ?? accentOptions[0], accentOptions[0]);
   const hasPresetAccent = accentOptions.includes(activeAccent);
 
@@ -349,7 +353,9 @@ export function EntityEditorModal({
           <footer className="modal-actions">
             <button className="secondary-button" type="button" onClick={onClose} disabled={saving}>Cancel</button>
             <button className="primary-button" type="submit" disabled={saving}>
-              {saving ? "Saving…" : "Save changes"}
+              {saving
+                ? (creating ? "Creating…" : "Saving…")
+                : (creating ? `Create ${entityLabel}` : "Save changes")}
             </button>
           </footer>
         </form>

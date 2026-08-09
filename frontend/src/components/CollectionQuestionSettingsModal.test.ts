@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_LEARNING_PROFILE } from "../learning/profile";
 import { LESSON_QUESTION_FORMAT_DEFINITIONS } from "../learning/questionRegistry";
 import type { Collection } from "../types";
-import { CollectionQuestionSettingsModal } from "./CollectionQuestionSettingsModal";
+import { CollectionQuestionSettingsPanel } from "./CollectionQuestionSettingsModal";
 
 const enabledFormatIds = [
   "singleChoice",
@@ -46,15 +46,13 @@ function groupCount(label: string): number {
   return Number(formatGroup(label).querySelector(".question-format-group-heading span")?.textContent);
 }
 
-async function renderModal(onSave = vi.fn()) {
-  document.body.innerHTML = '<button id="opener">Open settings</button><div id="mount"></div>';
-  document.querySelector<HTMLButtonElement>("#opener")!.focus();
+async function renderPanel(onSave = vi.fn()) {
+  document.body.innerHTML = '<div id="mount"></div>';
   root = createRoot(document.querySelector("#mount")!);
   await act(async () => {
-    root!.render(createElement(CollectionQuestionSettingsModal, {
+    root!.render(createElement(CollectionQuestionSettingsPanel, {
       collection,
       profile: { ...DEFAULT_LEARNING_PROFILE, targetLanguage: "English", speakingEnabled: false },
-      onClose: vi.fn(),
       onSave,
     }));
   });
@@ -82,7 +80,7 @@ afterEach(async () => {
 
 describe("collection question format settings", () => {
   it("shows enabled and disabled groups with every preview always visible", async () => {
-    await renderModal();
+    await renderPanel();
 
     expect(groupCount("Enabled formats")).toBe(enabledFormatIds.length);
     expect(groupCount("Disabled formats")).toBe(
@@ -96,7 +94,7 @@ describe("collection question format settings", () => {
   });
 
   it("moves toggled cards between groups and restores focus to their checkbox", async () => {
-    await renderModal();
+    await renderPanel();
     const selectBlank = formatCard("selectBlank").querySelector<HTMLInputElement>('input[type="checkbox"]')!;
 
     await act(async () => selectBlank.click());
@@ -117,7 +115,7 @@ describe("collection question format settings", () => {
   });
 
   it("dims unavailable formats and disables both toggle and preview controls", async () => {
-    await renderModal();
+    await renderPanel();
     const card = formatCard("speakingRepeat");
     const checkbox = card.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
     const preview = card.querySelector<HTMLFieldSetElement>(".collection-question-preview")!;
@@ -130,7 +128,7 @@ describe("collection question format settings", () => {
   });
 
   it("saves only the collection's enabled built-in formats", async () => {
-    const onSave = await renderModal();
+    const onSave = await renderPanel();
     const save = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
       .find((candidate) => candidate.textContent?.includes("Save changes"));
     if (!save) throw new Error("Save button not found.");
