@@ -20,6 +20,7 @@ import { LettersWorkspace } from "./components/LettersWorkspace";
 import { ThemeCustomizerDrawer } from "./components/ThemeCustomizerDrawer";
 import { UnitRevisionsModal } from "./components/UnitRevisionsModal";
 import { WorkspaceSidebar } from "./components/WorkspaceSidebar";
+import { WorkspaceStatusShell } from "./components/WorkspaceStatusShell";
 import { normalizeLearningProfile } from "./learning/profile";
 import { getSupportedLanguage } from "./learning/languages";
 import { createEmptyWorkspaceState, makeId, workspaceReducer } from "./store";
@@ -474,48 +475,52 @@ export function App() {
 
   if (workspaceLoading) {
     return (
-      <main className="cloud-workspace-status" role="status">
-        <span className="cloud-workspace-spinner" />
-        <h1>Loading your workspace</h1>
-        <p>Meoing is fetching the latest collections and units.</p>
-      </main>
+      <WorkspaceStatusShell theme={state.theme}>
+        <main className="cloud-workspace-status" role="status">
+          <span className="cloud-workspace-spinner" />
+          <h1>Loading your workspace</h1>
+          <p>Meoing is fetching the latest collections and units.</p>
+        </main>
+      </WorkspaceStatusShell>
     );
   }
 
   if (!activeCollection) {
     return (
-      <main className="cloud-workspace-status">
-        <div className="auth-brand" aria-hidden="true">M</div>
-        <h1>{workspaceError ? "Workspace unavailable" : "Create your first collection"}</h1>
-        <p>{workspaceError ?? "Collections keep your units, roles and learning progress together."}</p>
-        {workspaceError ? (
-          <button className="auth-primary" type="button" onClick={() => void refreshWorkspace()}>Try again</button>
-        ) : (
-          <button className="auth-primary" type="button" onClick={() => openEditor({ type: "collection" })}>New collection</button>
-        )}
-        {deletedCollections.length > 0 && api ? (
-          <button className="auth-secondary" type="button" onClick={() => setDeletedCollectionsOpen(true)}>
-            Restore deleted collections ({deletedCollections.length})
-          </button>
-        ) : null}
-        <button className="auth-secondary" type="button" onClick={() => void auth.signOut()}>Sign out</button>
-        <EntityEditorModal
-          editor={editor}
-          onClose={closeEditor}
-          onSubmit={submitEditor}
-          onAccentPreview={setCollectionAccentPreview}
-          targetLanguage="English"
-        />
-        {deletedCollectionsOpen && api ? (
-          <DeletedCollectionsModal
-            api={api}
-            collections={deletedCollections}
-            onClose={() => setDeletedCollectionsOpen(false)}
-            onRestored={refreshWorkspace}
+      <WorkspaceStatusShell theme={state.theme}>
+        <main className="cloud-workspace-status">
+          <div className="auth-brand" aria-hidden="true">M</div>
+          <h1>{workspaceError ? "Workspace unavailable" : "Create your first collection"}</h1>
+          <p>{workspaceError ?? "Collections keep your units, roles and learning progress together."}</p>
+          {workspaceError ? (
+            <button className="auth-primary" type="button" onClick={() => void refreshWorkspace()}>Try again</button>
+          ) : (
+            <button className="auth-primary" type="button" onClick={() => openEditor({ type: "collection" })}>New collection</button>
+          )}
+          {deletedCollections.length > 0 && api ? (
+            <button className="auth-secondary" type="button" onClick={() => setDeletedCollectionsOpen(true)}>
+              Restore deleted collections ({deletedCollections.length})
+            </button>
+          ) : null}
+          <button className="auth-secondary" type="button" onClick={() => void auth.signOut()}>Sign out</button>
+          <EntityEditorModal
+            editor={editor}
+            onClose={closeEditor}
+            onSubmit={submitEditor}
+            onAccentPreview={setCollectionAccentPreview}
+            targetLanguage="English"
           />
-        ) : null}
-        {inviteAcceptanceModal}
-      </main>
+          {deletedCollectionsOpen && api ? (
+            <DeletedCollectionsModal
+              api={api}
+              collections={deletedCollections}
+              onClose={() => setDeletedCollectionsOpen(false)}
+              onRestored={refreshWorkspace}
+            />
+          ) : null}
+          {inviteAcceptanceModal}
+        </main>
+      </WorkspaceStatusShell>
     );
   }
 

@@ -1333,6 +1333,10 @@ button:disabled {
   overflow: hidden;
 }
 
+.app-shell.app-shell-status {
+  display: block;
+}
+
 @keyframes auth-spin {
   to { transform: rotate(360deg); }
 }
