@@ -5,9 +5,13 @@ import { resolve } from "node:path";
 import test from "node:test";
 
 import {
+  developmentProcessRoot,
+  isKnownLocalServerResponse,
   npmExecutable,
   npmInvocation,
   parseNodeMajor,
+  parseWindowsListeningPids,
+  isMeoingDevRunner,
   validatePreflight,
   workerEnvironment,
 } from "./dev-local.mjs";
@@ -68,4 +72,74 @@ test("uses the platform appropriate npm executable", () => {
     shell: false,
   });
   assert.equal(parseNodeMajor("22.15.1"), 22);
+});
+
+test("finds each listening PID on a Windows development port once", () => {
+  const output = [
+    "  TCP    127.0.0.1:5173       0.0.0.0:0              LISTENING       13216",
+    "  TCP    [::1]:5173           [::]:0                 LISTENING       13216",
+    "  TCP    127.0.0.1:8787       0.0.0.0:0              LISTENING       23064",
+    "  TCP    127.0.0.1:5173       127.0.0.1:51011        ESTABLISHED     13216",
+  ].join("\r\n");
+
+  assert.deepEqual(parseWindowsListeningPids(output, 5173), [13216]);
+  assert.deepEqual(parseWindowsListeningPids(output, 8787), [23064]);
+});
+
+test("only recognises Meoing Vite and Wrangler development runners", () => {
+  const root = "C:\\workspace\\meoing";
+
+  assert.equal(
+    isMeoingDevRunner(
+      '"node" "C:\\workspace\\meoing\\frontend\\node_modules\\vite\\bin\\vite.js" --host 127.0.0.1',
+      "Frontend",
+      root,
+    ),
+    true,
+  );
+  assert.equal(
+    isMeoingDevRunner(
+      '"node" "C:\\workspace\\meoing\\backend\\node_modules\\wrangler\\bin\\wrangler.js" dev --config wrangler.api.jsonc',
+      "API Worker",
+      root,
+    ),
+    true,
+  );
+  assert.equal(
+    isMeoingDevRunner('"node" "C:\\other-app\\vite.js" --host 127.0.0.1', "Frontend", root), false);
+});
+
+test("recognises the actual Meoing frontend title without accepting mojibake", () => {
+  const title = "<title>Meoi \u00b7 Language Workspace</title>";
+
+  assert.equal(isKnownLocalServerResponse("Frontend", 200, `<!doctype html>${title}`), true);
+  assert.equal(isKnownLocalServerResponse("Frontend", 200, "<title>Meoi Â· Language Workspace</title>"), false);
+});
+
+test("requires a verified repository runner before stopping a listening process", async () => {
+  const root = "C:\\workspace\\meoing";
+  const unavailableProcessInfo = async () => null;
+  const unrelatedProcessInfo = async () => ({
+    commandLine: '"node" "C:\\other-app\\node_modules\\vite\\bin\\vite.js" --host 127.0.0.1',
+    parentProcessId: 0,
+    processId: 1234,
+  });
+  const verifiedProcessInfo = async () => ({
+    commandLine: '"node" "C:\\workspace\\meoing\\frontend\\node_modules\\vite\\bin\\vite.js" --host 127.0.0.1',
+    parentProcessId: 0,
+    processId: 5678,
+  });
+
+  assert.equal(
+    await developmentProcessRoot(1234, { label: "Frontend" }, { getProcessInfo: unavailableProcessInfo, root }),
+    null,
+  );
+  assert.equal(
+    await developmentProcessRoot(1234, { label: "Frontend" }, { getProcessInfo: unrelatedProcessInfo, root }),
+    null,
+  );
+  assert.equal(
+    await developmentProcessRoot(5678, { label: "Frontend" }, { getProcessInfo: verifiedProcessInfo, root }),
+    5678,
+  );
 });
