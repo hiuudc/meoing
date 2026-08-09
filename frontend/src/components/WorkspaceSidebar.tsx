@@ -17,7 +17,7 @@ import {
   Type,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { MAX_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH, normalizeSidebarWidth } from "../store";
 import type { Collection, ContentKind, Unit } from "../types";
 import { cleanUnitName } from "../unit";
@@ -52,6 +52,7 @@ interface WorkspaceSidebarProps {
   onOpenAppearance: () => void;
   onOpenCollectionAdmin?: () => void;
   onOpenDeletedUnits?: () => void;
+  accountMenu?: ReactNode;
   profileDisplayName?: string | null;
   profileUsername?: string | null;
   canCreateUnit?: boolean;
@@ -104,6 +105,7 @@ export function WorkspaceSidebar({
   onOpenAppearance,
   onOpenCollectionAdmin,
   onOpenDeletedUnits,
+  accountMenu,
   profileDisplayName,
   profileUsername,
   canCreateUnit = true,
@@ -471,7 +473,7 @@ export function WorkspaceSidebar({
           <Palette size={16} />
           <span>Appearance</span>
         </button> : null}
-        <div className="profile-row">
+        {accountMenu ?? <div className="profile-row">
           <span className="profile-avatar">
             {(profileDisplayName || profileUsername || "M").trim().charAt(0).toUpperCase()}
           </span>
@@ -479,7 +481,7 @@ export function WorkspaceSidebar({
             <strong>{profileDisplayName || profileUsername || "Meoing learner"}</strong>
             <small>{profileUsername ? `@${profileUsername}` : "Signed in"}</small>
           </span>
-        </div>
+        </div>}
       </div>
       <p className="sr-only" id="unit-reorder-instructions">Drag unit names or use the up and down arrow keys while focused to reorder.</p>
       <p className="sr-only" aria-live="polite">{reorderAnnouncement}</p>

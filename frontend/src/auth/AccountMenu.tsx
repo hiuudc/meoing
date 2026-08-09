@@ -11,6 +11,10 @@ export function AccountMenu() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const hostRef = useRef<HTMLDivElement>(null);
+  const profile = auth.currentUser?.profile;
+  const displayName = profile?.displayName || profile?.username || "Meoing learner";
+  const username = profile?.username ? `@${profile.username}` : "Signed in";
+  const initial = displayName.trim().charAt(0).toUpperCase() || "M";
 
   useEffect(() => {
     if (!open) return;
@@ -50,13 +54,18 @@ export function AccountMenu() {
   return (
     <div className="account-menu" ref={hostRef}>
       <button
-        className="app-account-button"
+        className="app-account-button profile-row"
         type="button"
+        aria-label="Open account menu"
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
       >
-        @{auth.currentUser?.profile.username}
+        <span className="profile-avatar" aria-hidden="true">{initial}</span>
+        <span className="profile-copy">
+          <strong>{displayName}</strong>
+          <small>{username}</small>
+        </span>
       </button>
       {open ? (
         <div className="account-menu-popover" role="menu">

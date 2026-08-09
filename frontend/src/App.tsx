@@ -20,6 +20,8 @@ import { LettersWorkspace } from "./components/LettersWorkspace";
 import { ThemeCustomizerDrawer } from "./components/ThemeCustomizerDrawer";
 import { UnitRevisionsModal } from "./components/UnitRevisionsModal";
 import { WorkspaceSidebar } from "./components/WorkspaceSidebar";
+import { WorkspacePlaceholderSidebar } from "./components/WorkspacePlaceholderSidebar";
+import { WorkspaceStatusContent } from "./components/WorkspaceStatusContent";
 import { WorkspaceStatusShell } from "./components/WorkspaceStatusShell";
 import { normalizeLearningProfile } from "./learning/profile";
 import { getSupportedLanguage } from "./learning/languages";
@@ -473,59 +475,66 @@ export function App() {
     />
   ) : null;
 
-  if (workspaceLoading) {
-    return (
-      <WorkspaceStatusShell theme={state.theme}>
-        <main className="cloud-workspace-status" role="status">
-          <span className="cloud-workspace-spinner" />
-          <h1>Loading your workspace</h1>
-          <p>Meoing is fetching the latest collections and units.</p>
-        </main>
-      </WorkspaceStatusShell>
-    );
-  }
+  const sidebarWidth = sidebarWidthDraft ?? state.sidebarWidth;
+  const activeTheme = themeDraft ?? pendingThemeDraft ?? pendingAppearanceDraft ?? appearanceDraft ?? state.theme;
 
   if (!activeCollection) {
     return (
-      <WorkspaceStatusShell theme={state.theme}>
-        <main className="cloud-workspace-status">
-          <div className="auth-brand" aria-hidden="true">M</div>
-          <h1>{workspaceError ? "Workspace unavailable" : "Create your first collection"}</h1>
-          <p>{workspaceError ?? "Collections keep your units, roles and learning progress together."}</p>
-          {workspaceError ? (
-            <button className="auth-primary" type="button" onClick={() => void refreshWorkspace()}>Try again</button>
-          ) : (
-            <button className="auth-primary" type="button" onClick={() => openEditor({ type: "collection" })}>New collection</button>
-          )}
-          {deletedCollections.length > 0 && api ? (
-            <button className="auth-secondary" type="button" onClick={() => setDeletedCollectionsOpen(true)}>
-              Restore deleted collections ({deletedCollections.length})
-            </button>
-          ) : null}
-          <button className="auth-secondary" type="button" onClick={() => void auth.signOut()}>Sign out</button>
-          <EntityEditorModal
+      <WorkspaceStatusShell theme={activeTheme} sidebarWidth={sidebarWidth}>
+        <CollectionRail
+          collections={collections}
+          activeId=""
+          onSelect={(id) => dispatch({ type: "selectCollection", id })}
+          onCreate={() => openEditor({ type: "collection" })}
+          createDisabled={workspaceLoading}
+          canEdit={(collection) => hasPermission(collection, "manage_collection")}
+          canDelete={(collection) => hasPermission(collection, "manage_collection")}
+          onEdit={(collection) => openEditor({ type: "collection", value: collection })}
+          onDelete={(collection) => confirmDelete(collection.name, () => deleteCollection(collection))}
+          deletedCollectionCount={deletedCollections.length}
+          onOpenDeletedCollections={() => setDeletedCollectionsOpen(true)}
+        />
+        <WorkspacePlaceholderSidebar
+          loading={workspaceLoading}
+          openOnMobile={mobileNavigationOpen}
+          onCloseMobile={closeMobileNavigation}
+          accountMenu={<AccountMenu />}
+        />
+        <button
+          className="mobile-drawer-backdrop"
+          data-state={mobileNavigationOpen ? "open" : "closed"}
+          type="button"
+          aria-label="Close navigation"
+          aria-hidden={!mobileNavigationOpen}
+          tabIndex={mobileNavigationOpen ? 0 : -1}
+          onClick={closeMobileNavigation}
+        />
+        <WorkspaceStatusContent
+          loading={workspaceLoading}
+          error={workspaceError}
+          onRetry={() => void refreshWorkspace()}
+          onOpenMobileNavigation={() => setMobileNavigationOpen(true)}
+        />
+        {!workspaceLoading ? <EntityEditorModal
             editor={editor}
             onClose={closeEditor}
             onSubmit={submitEditor}
             onAccentPreview={setCollectionAccentPreview}
             targetLanguage="English"
+          /> : null}
+        {deletedCollectionsOpen && api ? (
+          <DeletedCollectionsModal
+            api={api}
+            collections={deletedCollections}
+            onClose={() => setDeletedCollectionsOpen(false)}
+            onRestored={refreshWorkspace}
           />
-          {deletedCollectionsOpen && api ? (
-            <DeletedCollectionsModal
-              api={api}
-              collections={deletedCollections}
-              onClose={() => setDeletedCollectionsOpen(false)}
-              onRestored={refreshWorkspace}
-            />
-          ) : null}
-          {inviteAcceptanceModal}
-        </main>
+        ) : null}
+        {inviteAcceptanceModal}
       </WorkspaceStatusShell>
     );
   }
 
-  const sidebarWidth = sidebarWidthDraft ?? state.sidebarWidth;
-  const activeTheme = themeDraft ?? pendingThemeDraft ?? pendingAppearanceDraft ?? appearanceDraft ?? state.theme;
   const shellStyle = {
     ...themeStyle(activeTheme, activeCollection.accent),
     ...(collectionAccentPreview ? accentStyle(activeTheme, collectionAccentPreview) : {}),
@@ -540,7 +549,6 @@ export function App() {
           <button type="button" onClick={() => setWorkspaceError(null)}>Dismiss</button>
         </div>
       ) : null}
-      <AccountMenu />
       <CollectionRail
         collections={collections}
         activeId={activeCollection.id}
@@ -604,8 +612,7 @@ export function App() {
           setDeletedUnitsOpen(true);
           closeMobileNavigation();
         }}
-        profileDisplayName={auth.currentUser?.profile.displayName}
-        profileUsername={auth.currentUser?.profile.username}
+        accountMenu={<AccountMenu />}
         canCreateUnit={canCreateContent}
         canEditUnit={canEditContent}
         canDeleteUnit={canDeleteContent}

@@ -150,6 +150,15 @@ button:disabled {
   background: var(--accent);
 }
 
+.rail-action:disabled,
+.rail-action:disabled:hover {
+  color: var(--text-muted);
+  cursor: not-allowed;
+  background: var(--bg-elevated);
+  border-radius: 15px;
+  opacity: .48;
+}
+
 .rail-divider {
   width: 30px;
   height: 1px;
@@ -1333,38 +1342,43 @@ button:disabled {
   overflow: hidden;
 }
 
-.app-shell.app-shell-status {
-  display: block;
-}
-
 @keyframes auth-spin {
   to { transform: rotate(360deg); }
 }
 
-.cloud-workspace-status {
-  display: grid;
-  min-height: 100dvh;
-  padding: 30px;
-  place-items: center;
-  align-content: center;
-  gap: 14px;
-  color: #f3f3f5;
-  text-align: center;
-  background: #18191f;
+.workspace-status-main {
+  grid-column: 3 / -1;
 }
 
-.cloud-workspace-status h1,
-.cloud-workspace-status p {
-  max-width: 520px;
+.workspace-status-content {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  padding: 30px;
+  place-items: center;
+  overflow: auto;
+}
+
+.workspace-status-copy {
+  display: grid;
+  width: min(520px, 100%);
+  justify-items: center;
+  gap: 14px;
+  text-align: center;
+}
+
+.workspace-status-copy h1,
+.workspace-status-copy p {
   margin: 0;
 }
 
-.cloud-workspace-status p {
-  color: #aeb0bc;
+.workspace-status-copy p {
+  color: var(--text-muted);
   line-height: 1.5;
 }
 
-.cloud-workspace-status > button {
+.workspace-status-copy > button {
   width: min(280px, 100%);
 }
 
@@ -1402,40 +1416,50 @@ button:disabled {
 }
 
 .account-menu {
-  position: fixed;
+  position: relative;
   z-index: 45;
-  top: 10px;
-  right: 12px;
+  width: 100%;
 }
 
 .app-account-button {
-  min-height: 30px;
-  padding: 5px 9px;
-  color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 750;
-  background: color-mix(in srgb, var(--surface-elevated) 88%, transparent);
-  border: 1px solid var(--border);
+  width: 100%;
+  min-height: 0;
+  color: var(--text-primary);
+  text-align: left;
+  border: 1px solid transparent;
   border-radius: 7px;
 }
 
 .app-account-button:hover {
   color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.app-account-button:focus-visible {
+  border-color: var(--accent-readable);
+  outline: 2px solid color-mix(in srgb, var(--accent-readable) 35%, transparent);
+  outline-offset: 1px;
 }
 
 .account-menu-popover {
   position: absolute;
-  top: calc(100% + 7px);
-  right: 0;
+  bottom: calc(100% + 7px);
+  left: 0;
   display: grid;
   width: 230px;
+  max-height: calc(100vh - 24px);
   gap: 4px;
   padding: 10px;
+  overflow: auto;
   color: var(--text-primary);
   background: var(--surface-elevated);
   border: 1px solid var(--border-strong);
   border-radius: 10px;
   box-shadow: 0 16px 36px rgba(0, 0, 0, .32);
+}
+
+.workspace-placeholder-sidebar .sidebar-search:has(input:disabled) {
+  opacity: .62;
 }
 
 .account-menu-popover > strong,
@@ -2588,6 +2612,10 @@ input[type="range"] {
 
   .workspace-main {
     min-height: 100vh;
+  }
+
+  .workspace-status-main {
+    grid-column: 2 / -1;
   }
 
   .mobile-nav-trigger {

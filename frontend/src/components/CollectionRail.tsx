@@ -13,6 +13,7 @@ interface CollectionRailProps {
   };
   onSelect: (id: string) => void;
   onCreate: () => void;
+  createDisabled?: boolean;
   canEdit?: (collection: Collection) => boolean;
   canDelete?: (collection: Collection) => boolean;
   onEdit: (collection: Collection) => void;
@@ -47,6 +48,7 @@ export function CollectionRail({
   accentPreview,
   onSelect,
   onCreate,
+  createDisabled = false,
   canEdit = () => true,
   canDelete = () => true,
   onEdit,
@@ -178,13 +180,25 @@ export function CollectionRail({
             <ArchiveRestore size={19} />
           </button>
         ) : null}
-        <button className="rail-action" type="button" aria-label="Add collection" onClick={onCreate}>
+        <button
+          className="rail-action"
+          type="button"
+          aria-label="Add collection"
+          disabled={createDisabled}
+          onClick={onCreate}
+        >
           <Plus size={20} />
         </button>
         <button className="rail-action" type="button" aria-label="Explore collections">
           <Compass size={19} />
         </button>
-        <button className="rail-action mobile-only" type="button" aria-label="Create collection" onClick={onCreate}>
+        <button
+          className="rail-action mobile-only"
+          type="button"
+          aria-label="Create collection"
+          disabled={createDisabled}
+          onClick={onCreate}
+        >
           <FolderPlus size={18} />
         </button>
       </div>

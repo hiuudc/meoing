@@ -27,8 +27,8 @@ describe("WorkspaceStatusShell", () => {
 
     await act(async () => {
       root!.render(
-        <WorkspaceStatusShell theme={DEFAULT_THEME}>
-          <main className="cloud-workspace-status">Create a collection</main>
+        <WorkspaceStatusShell theme={DEFAULT_THEME} sidebarWidth={280}>
+          <main>Create a collection</main>
         </WorkspaceStatusShell>,
       );
     });
@@ -38,6 +38,7 @@ describe("WorkspaceStatusShell", () => {
     expect(shell?.style.getPropertyValue("--bg-sidebar")).not.toBe("");
     expect(shell?.style.getPropertyValue("--bg-main")).not.toBe("");
     expect(shell?.style.getPropertyValue("--border")).not.toBe("");
+    expect(shell?.style.getPropertyValue("--sidebar-width")).toBe("280px");
     expect(shell?.textContent).toContain("Create a collection");
   });
 });

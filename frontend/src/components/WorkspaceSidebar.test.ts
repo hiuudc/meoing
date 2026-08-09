@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, createElement, useState } from "react";
+import { act, createElement, useState, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Collection, ContentKind, Unit } from "../types";
@@ -29,6 +29,7 @@ const units: Unit[] = [
 ];
 
 interface SidebarHarnessProps {
+  accountMenu?: ReactNode;
   onSelectUnit?: (id: string) => void;
   onOpenLessons?: (id: string) => void;
   onOpenCollectionQuestions?: () => void;
@@ -40,6 +41,7 @@ interface SidebarHarnessProps {
 }
 
 function SidebarHarness({
+  accountMenu,
   onSelectUnit,
   onOpenLessons,
   onOpenCollectionQuestions,
@@ -83,6 +85,7 @@ function SidebarHarness({
     onOpenAppearance: vi.fn(),
     onOpenCollectionAdmin,
     onOpenDeletedUnits,
+    accountMenu,
     profileDisplayName,
     profileUsername,
     canCreateUnit: !readOnly,
@@ -128,6 +131,16 @@ afterEach(async () => {
 });
 
 describe("workspace unit navigation", () => {
+  it("renders a composed account menu in the profile footer", async () => {
+    await renderSidebar({
+      accountMenu: createElement("button", { type: "button", id: "account-slot" }, "Account menu"),
+      profileDisplayName: "Fallback Profile",
+    });
+
+    expect(document.querySelector("#account-slot")?.closest(".sidebar-footer")).not.toBeNull();
+    expect(document.querySelector(".profile-row")).toBeNull();
+  });
+
   it("renders the authenticated profile instead of demo identity", async () => {
     await renderSidebar({
       profileDisplayName: "Meoi Teacher",

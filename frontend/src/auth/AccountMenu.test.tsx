@@ -53,6 +53,25 @@ afterEach(async () => {
 });
 
 describe("AccountMenu", () => {
+  it("uses the sidebar profile row as the account trigger and exposes sign out from its menu", async () => {
+    document.body.innerHTML = '<div id="mount"></div>';
+    root = createRoot(document.querySelector("#mount")!);
+    await act(async () => root!.render(createElement(AccountMenu)));
+
+    const accountButton = document.querySelector<HTMLButtonElement>(".app-account-button");
+    expect(accountButton?.classList.contains("profile-row")).toBe(true);
+    expect(accountButton?.textContent).toContain("Meoi User");
+    expect(accountButton?.textContent).toContain("@meoi.user");
+
+    await act(async () => accountButton!.click());
+    const signOutButton = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'))
+      .find((candidate) => candidate.textContent?.trim() === "Sign out");
+    expect(signOutButton).toBeDefined();
+
+    await act(async () => signOutButton!.click());
+    expect(mocks.signOut).toHaveBeenCalledOnce();
+  });
+
   it("clears only that user's pending progress after account deletion is accepted", async () => {
     document.body.innerHTML = '<div id="mount"></div>';
     root = createRoot(document.querySelector("#mount")!);
