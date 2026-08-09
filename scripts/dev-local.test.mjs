@@ -7,12 +7,14 @@ import test from "node:test";
 import {
   developmentProcessRoot,
   isKnownLocalServerResponse,
+  isMeoingDevRunner,
   npmExecutable,
   npmInvocation,
   parseNodeMajor,
   parseWindowsListeningPids,
-  isMeoingDevRunner,
+  validateLocalDevVariables,
   validatePreflight,
+  windowsProcessQuery,
   workerEnvironment,
 } from "./dev-local.mjs";
 
@@ -36,13 +38,45 @@ test("accepts configured local files", async () => {
   await mkdir(resolve(root, "frontend"), { recursive: true });
   await mkdir(resolve(root, "backend"), { recursive: true });
   await writeFile(resolve(root, "frontend", ".env.local"), "VITE_MEOI_API_URL=http://127.0.0.1:5173/__meoing_api\n");
-  await writeFile(resolve(root, "backend", ".dev.vars"), "INVITE_TOKEN_SECRET=test\n");
+  await writeFile(resolve(root, "backend", ".dev.vars"), [
+    "APP_ENV=local",
+    "SUPABASE_URL=http://127.0.0.1:54321",
+    "SUPABASE_JWT_AUDIENCE=authenticated",
+    "R2_ACCESS_KEY_ID=test",
+    "R2_SECRET_ACCESS_KEY=test",
+    "INVITE_TOKEN_SECRET=test",
+    "TURNSTILE_SECRET_KEY=test",
+    "",
+  ].join("\n"));
 
   try {
     assert.deepEqual(validatePreflight({ root, nodeVersion: "22.0.0" }), []);
   } finally {
     await rm(root, { force: true, recursive: true });
   }
+});
+
+test("rejects missing and placeholder local Worker variables", () => {
+  const failures = validateLocalDevVariables([
+    "APP_ENV=local",
+    "SUPABASE_URL=https://PROJECT_REF.supabase.co",
+    "SUPABASE_JWT_AUDIENCE=authenticated",
+    "",
+  ].join("\n"));
+
+  assert.ok(failures.includes("SUPABASE_URL in backend/.dev.vars must be http://127.0.0.1:54321."));
+  assert.ok(failures.includes("Missing INVITE_TOKEN_SECRET in backend/.dev.vars."));
+  assert.ok(failures.includes("Missing R2_ACCESS_KEY_ID in backend/.dev.vars."));
+});
+
+test("rejects escaped newlines in local Worker variables", () => {
+  const failures = validateLocalDevVariables(
+    "APP_ENV=local\\nSUPABASE_URL=http://127.0.0.1:54321\\nSUPABASE_JWT_AUDIENCE=authenticated",
+  );
+
+  assert.deepEqual(failures, [
+    "backend/.dev.vars contains literal \\n text; replace it with real line breaks.",
+  ]);
 });
 
 test("keeps an explicit Hyperdrive connection and supplies a local default", () => {
@@ -54,7 +88,7 @@ test("keeps an explicit Hyperdrive connection and supplies a local default", () 
   assert.equal(supplied.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE, "postgresql://custom");
   assert.equal(
     defaulted.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE,
-    "postgresql://postgres:postgres@127.0.0.1:54322/postgres",
+    "postgresql://meoing_api_login:meoing-local-api-password@127.0.0.1:54322/postgres",
   );
 });
 
@@ -141,5 +175,15 @@ test("requires a verified repository runner before stopping a listening process"
   assert.equal(
     await developmentProcessRoot(5678, { label: "Frontend" }, { getProcessInfo: verifiedProcessInfo, root }),
     5678,
+  );
+});
+
+test("builds a valid PowerShell process query with separated object fields", () => {
+  assert.equal(
+    windowsProcessQuery(1234),
+    "$process = Get-CimInstance Win32_Process -Filter 'ProcessId = 1234'; "
+      + "if ($null -ne $process) {   [PSCustomObject]@{     commandLine = $process.CommandLine; "
+      + "    parentProcessId = $process.ParentProcessId;     processId = $process.ProcessId; "
+      + "  } | ConvertTo-Json -Compress }",
   );
 });

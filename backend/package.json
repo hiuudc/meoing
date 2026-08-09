@@ -20,6 +20,7 @@
     "db:reset": "supabase db reset",
     "db:concurrency": "node scripts/db-concurrency.mjs",
     "db:identity:configure": "node scripts/configure-database-identity.mjs",
+    "db:local:provision": "node scripts/setup-local-database.mjs",
     "db:target:verify": "node scripts/verify-database-target.mjs",
     "db:test": "supabase test db",
     "db:stop": "supabase stop",

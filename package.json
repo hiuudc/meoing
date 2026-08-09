@@ -8,6 +8,6 @@
   },
   "scripts": {
     "dev:local": "node scripts/dev-local.mjs",
-    "test:dev-local": "node --test scripts/dev-local.test.mjs"
+    "test:dev-local": "node --test scripts/dev-local.test.mjs backend/scripts/setup-local-database.test.mjs"
   }
 }

@@ -42,15 +42,24 @@ npm --prefix backend run check
 
 Before the first `npm run dev:local`, create `backend/.dev.vars` from
 `backend/.dev.vars.example` and configure the local-only secrets required by
-the API Worker. The launcher verifies that file and `frontend/.env.local`,
+the API Worker. Keep one variable per real line; the launcher rejects escaped
+`\\n` text, missing local Auth values, and placeholder Supabase URLs. It also
+verifies `frontend/.env.local`,
 starts local Supabase, then starts the API Worker and Vite in the same
 terminal. Open `http://127.0.0.1:5173` once both services are ready.
+The launcher also creates or repairs the restricted `meoing_api_login` role
+used by the local Worker; it never connects the API as the `postgres` role.
 On Windows, it automatically stops only an existing Meoing local frontend or
 API Worker detected on ports `5173` and `8787`; a different process on either
 port remains protected and produces an explicit error.
 
 `npm run dev:local` never resets local data. Apply new migrations explicitly
 when needed with `npm --prefix backend run db:reset`.
+
+Local Auth emails are captured instead of delivered. After signup or password
+recovery, open `http://127.0.0.1:54324` and follow the email link. A database
+reset removes local accounts, so sign out any stale browser session and create
+a new local account afterward.
 
 The website authenticates directly with Supabase Auth, then sends the access
 token to the Worker API. Application tables are not exposed through the

@@ -1,11 +1,23 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const minimumNodeMajor = 22;
-const localHyperdriveConnection = "postgresql://postgres:postgres@127.0.0.1:54322/postgres";
+const localHyperdriveConnection =
+  "postgresql://meoing_api_login:meoing-local-api-password@127.0.0.1:54322/postgres";
+const localDevVariableExpectations = {
+  APP_ENV: "local",
+  SUPABASE_JWT_AUDIENCE: "authenticated",
+  SUPABASE_URL: "http://127.0.0.1:54321",
+};
+const requiredLocalSecrets = [
+  "INVITE_TOKEN_SECRET",
+  "R2_ACCESS_KEY_ID",
+  "R2_SECRET_ACCESS_KEY",
+  "TURNSTILE_SECRET_KEY",
+];
 const localDevServers = [
   {
     label: "Frontend",
@@ -82,6 +94,56 @@ export function isKnownLocalServerResponse(label, status, body) {
   return server?.matches(status, body) ?? false;
 }
 
+export function parseDevVariables(contents) {
+  const variables = new Map();
+  for (const rawLine of contents.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) {
+      continue;
+    }
+    const separator = line.indexOf("=");
+    if (separator <= 0) {
+      continue;
+    }
+    const key = line.slice(0, separator).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+      continue;
+    }
+    let value = line.slice(separator + 1).trim();
+    if (
+      value.length >= 2
+      && ((value.startsWith('"') && value.endsWith('"'))
+        || (value.startsWith("'") && value.endsWith("'")))
+    ) {
+      value = value.slice(1, -1);
+    }
+    variables.set(key, value);
+  }
+  return variables;
+}
+
+export function validateLocalDevVariables(contents) {
+  if (contents.includes("\\n") || contents.includes("\\r\\n")) {
+    return ["backend/.dev.vars contains literal \\n text; replace it with real line breaks."];
+  }
+
+  const failures = [];
+  const variables = parseDevVariables(contents);
+  for (const [key, expected] of Object.entries(localDevVariableExpectations)) {
+    if (!variables.has(key)) {
+      failures.push(`Missing ${key} in backend/.dev.vars.`);
+    } else if (variables.get(key) !== expected) {
+      failures.push(`${key} in backend/.dev.vars must be ${expected}.`);
+    }
+  }
+  for (const key of requiredLocalSecrets) {
+    if (!variables.get(key)) {
+      failures.push(`Missing ${key} in backend/.dev.vars.`);
+    }
+  }
+  return failures;
+}
+
 export function validatePreflight({
   root = projectRoot,
   nodeVersion = process.versions.node,
@@ -96,6 +158,11 @@ export function validatePreflight({
     if (!existsSync(resolve(root, relativePath))) {
       failures.push(`Missing ${relativePath}.`);
     }
+  }
+
+  const devVariablesPath = resolve(root, "backend/.dev.vars");
+  if (existsSync(devVariablesPath)) {
+    failures.push(...validateLocalDevVariables(readFileSync(devVariablesPath, "utf8")));
   }
 
   return failures;
@@ -166,17 +233,21 @@ async function listeningProcessIds(port) {
   return parseWindowsListeningPids(output, port);
 }
 
-async function windowsProcessInfo(pid) {
-  const script = [
-    `$process = Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}'`,
+export function windowsProcessQuery(pid) {
+  return [
+    `$process = Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}';`,
     "if ($null -ne $process) {",
     "  [PSCustomObject]@{",
-    "    commandLine = $process.CommandLine",
-    "    parentProcessId = $process.ParentProcessId",
-    "    processId = $process.ProcessId",
+    "    commandLine = $process.CommandLine;",
+    "    parentProcessId = $process.ParentProcessId;",
+    "    processId = $process.ProcessId;",
     "  } | ConvertTo-Json -Compress",
     "}",
   ].join(" ");
+}
+
+async function windowsProcessInfo(pid) {
+  const script = windowsProcessQuery(pid);
   const output = await runBufferedCommand("powershell.exe", ["-NoProfile", "-Command", script]);
   const trimmed = output.trim();
   if (!trimmed) {
@@ -247,7 +318,17 @@ export async function releaseExistingMeoingDevServers({ platform = process.platf
     }
 
     const response = await localServerResponse(server);
-    if (!response || !isKnownLocalServerResponse(server.label, response.status, response.body)) {
+    if (!response) {
+      try {
+        await waitForPortToClose(server.port);
+        continue;
+      } catch {
+        throw new Error(
+          `Port ${server.port} is already in use by an unverified process. Stop that process manually before running npm run dev:local.`,
+        );
+      }
+    }
+    if (!isKnownLocalServerResponse(server.label, response.status, response.body)) {
       throw new Error(
         `Port ${server.port} is already in use by an unverified process. Stop that process manually before running npm run dev:local.`,
       );
@@ -255,9 +336,14 @@ export async function releaseExistingMeoingDevServers({ platform = process.platf
 
     const roots = await Promise.all(pids.map((pid) => developmentProcessRoot(pid, server)));
     if (roots.some((pid) => pid === null)) {
-      throw new Error(
-        `Port ${server.port} responded as Meoing, but its process tree could not be verified for this repository. Stop that process manually before running npm run dev:local.`,
-      );
+      try {
+        await waitForPortToClose(server.port);
+        continue;
+      } catch {
+        throw new Error(
+          `Port ${server.port} responded as Meoing, but its process tree could not be verified for this repository. Stop that process manually before running npm run dev:local.`,
+        );
+      }
     }
 
     console.log(`Stopping existing local Meoing ${server.label} on port ${server.port}...`);
@@ -335,6 +421,14 @@ export async function startLocalDevelopment() {
 
   console.log("Starting local Supabase (existing database data is preserved)...");
   await runCommand("Local Supabase", ["--prefix", "backend", "run", "db:start"]);
+
+  console.log("Provisioning the local API database login...");
+  await runCommand("Local API database login", [
+    "--prefix",
+    "backend",
+    "run",
+    "db:local:provision",
+  ]);
 
   const processes = [
     {
