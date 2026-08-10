@@ -506,6 +506,11 @@ export function LearningWorkspace({
       setLearningCache(empty);
       return;
     }
+    // Do not abort a database-backed Worker request while changing workspace modes.
+    // Wrangler's local ProxyWorker can terminate when its client connection disappears
+    // after the query has already completed. The component only needs to ignore stale
+    // results once it has unmounted or switched units.
+    let active = true;
     const controller = new AbortController();
     void Promise.all([
       fetchCursorPages<WireLesson>(
@@ -525,7 +530,7 @@ export function LearningWorkspace({
           const full = await api.get<WireLesson>(`/v1/lessons/${encodeURIComponent(item.id)}`, controller.signal);
           return full.data;
         }));
-        if (controller.signal.aborted) return;
+        if (!active) return;
         const latestProgressSummaries = new Map<string, WireProgressHistory>();
         for (const progress of progressItems) {
           if (progress.id && progress.lessonId && !latestProgressSummaries.has(progress.lessonId)) {
@@ -541,7 +546,7 @@ export function LearningWorkspace({
             return { ...progress, ...detail.data };
           }),
         );
-        if (controller.signal.aborted) return;
+        if (!active) return;
         const latestProgressByLesson = new Map(
           detailedProgress.map((progress) => [progress.lessonId, progress]),
         );
@@ -563,9 +568,11 @@ export function LearningWorkspace({
         setLearningCache(next);
       })
       .catch((caught) => {
-        if (!controller.signal.aborted) setError(publicError(caught));
+        if (active) setError(publicError(caught));
       });
-    return () => controller.abort();
+    return () => {
+      active = false;
+    };
   }, [api, collection.id, unit?.id]);
 
   useEffect(() => {

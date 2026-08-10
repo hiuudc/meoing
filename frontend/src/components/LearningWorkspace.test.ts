@@ -238,6 +238,31 @@ describe("LearningWorkspace cloud lesson persistence", () => {
     return { api, events, get, post };
   }
 
+  it("keeps the cloud cache request alive when Learn unmounts during a workspace switch", async () => {
+    const state = createSeedState();
+    let lessonSignal: AbortSignal | undefined;
+    let resolveLessons: ((value: { data: { items: []; nextCursor: null } }) => void) | undefined;
+    const get = vi.fn((path: string, signal?: AbortSignal) => {
+      if (path.startsWith("/v1/lessons?")) {
+        lessonSignal = signal;
+        return new Promise<{ data: { items: []; nextCursor: null } }>((resolve) => {
+          resolveLessons = resolve;
+        });
+      }
+      return Promise.resolve({ data: { items: [], nextCursor: null } });
+    });
+    const api = { get, post: vi.fn(), delete: vi.fn() } as unknown as ApiClient;
+
+    await renderWithCompatibility(ready, state, { api, userId: "user-1" });
+    await vi.waitFor(() => expect(lessonSignal).toBeDefined());
+
+    await act(async () => root?.unmount());
+    root = null;
+
+    expect(lessonSignal?.aborted).toBe(false);
+    resolveLessons?.({ data: { items: [], nextCursor: null } });
+  });
+
   it("saves a generated lesson through the Worker before acknowledging the extension", async () => {
     const state = createSeedState();
     const cloud = createCloudApi(state);
