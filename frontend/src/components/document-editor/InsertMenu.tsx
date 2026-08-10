@@ -106,6 +106,38 @@ export function InsertMenu({
   );
 }
 
+/** Compact insert control used beside the draggable block handle. */
+export function BlockInsertMenu({ language }: { language: string }) {
+  const [editor] = useLexicalComposerContext();
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="document-block-insert-menu">
+      <button
+        className="document-block-add-button"
+        type="button"
+        aria-label="Insert block"
+        aria-expanded={open}
+        aria-haspopup="menu"
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <Plus size={16} />
+      </button>
+      {open ? <div className="document-block-insert-popover">
+        <CommandList
+          commands={INSERT_COMMANDS}
+          onSelect={(command) => {
+            editor.focus();
+            executeInsertCommand(editor, command.id, language);
+            setOpen(false);
+          }}
+        />
+      </div> : null}
+    </div>
+  );
+}
+
 export function SlashMenuPlugin({ language }: { language: string }) {
   const [editor] = useLexicalComposerContext();
   const [query, setQuery] = useState<string | null>(null);

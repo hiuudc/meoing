@@ -201,7 +201,9 @@ async function renderModal(
       learningProfile: DEFAULT_LEARNING_PROFILE,
       questionSettings: selectedCollection.questionSettings,
       initialTab,
+      onSaveDetails: vi.fn(),
       onSaveQuestionSettings,
+      onRestoreDeletedUnit: vi.fn(),
       onClose: vi.fn(),
       onChanged,
     }));
@@ -233,7 +235,7 @@ afterEach(async () => {
 });
 
 describe("CollectionAdminModal", () => {
-  it("shows Questions first only for collection managers and saves through the embedded panel", async () => {
+  it("starts managers on Details and keeps Questions in Collection Administration", async () => {
     const onSave = vi.fn().mockResolvedValue(undefined);
     await renderModal(
       ["manage_collection"],
@@ -246,12 +248,14 @@ describe("CollectionAdminModal", () => {
           characterTracing: { requireStrokeOrder: true },
         } satisfies CollectionQuestionSettings,
       },
-      "questions",
+      "details",
       onSave,
     );
 
     const tablist = document.querySelector('[role="tablist"]');
-    expect(tablist?.querySelector("button")?.textContent).toContain("Questions");
+    expect(tablist?.querySelector("button")?.textContent).toContain("Details");
+    expect(document.body.textContent).toContain("Collection details");
+    await act(async () => button("Questions").click());
     expect(document.body.textContent).toContain("Question formats");
     await act(async () => button("Save changes").click());
     expect(onSave).toHaveBeenCalledOnce();

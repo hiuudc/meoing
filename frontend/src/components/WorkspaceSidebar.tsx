@@ -1,14 +1,11 @@
 import {
-  ArchiveRestore,
   BookOpenText,
   ChevronDown,
   ChevronRight,
   FileText,
   GraduationCap,
-  History,
   MessageSquareQuote,
   MoreHorizontal,
-  Pencil,
   Plus,
   Search,
   Settings,
@@ -43,12 +40,10 @@ interface WorkspaceSidebarProps {
   onSelectUnit: (id: string) => void;
   onOpenLessons: (unitId: string) => void;
   onCreateUnit: () => void;
-  onEditUnit: (unit: Unit) => void;
+  onOpenUnitSettings?: (unit: Unit) => void;
   onDeleteUnit: (unit: Unit) => void;
-  onOpenUnitRevisions?: (unit: Unit) => void;
   onMoveUnit: (id: string, targetId: string, placement: "before" | "after") => void;
   onOpenCollectionAdmin?: () => void;
-  onOpenDeletedUnits?: () => void;
   accountMenu?: ReactNode;
   profileDisplayName?: string | null;
   profileUsername?: string | null;
@@ -94,12 +89,10 @@ export function WorkspaceSidebar({
   onSelectUnit,
   onOpenLessons,
   onCreateUnit,
-  onEditUnit,
+  onOpenUnitSettings,
   onDeleteUnit,
-  onOpenUnitRevisions,
   onMoveUnit,
   onOpenCollectionAdmin,
-  onOpenDeletedUnits,
   accountMenu,
   profileDisplayName,
   profileUsername,
@@ -275,7 +268,7 @@ export function WorkspaceSidebar({
   }
 
   function openUnitMenuFromKeyboard(event: React.KeyboardEvent<HTMLButtonElement>, unit: Unit) {
-    if (!canEditUnit && !canDeleteUnit && !onOpenUnitRevisions) return;
+    if (!canEditUnit && !canDeleteUnit && !onOpenUnitSettings) return;
     if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
     event.preventDefault();
     const rect = event.currentTarget.getBoundingClientRect();
@@ -342,7 +335,7 @@ export function WorkspaceSidebar({
             units.map((unit, index) => {
               const cleanName = cleanUnitName(unit.name);
               const expanded = expandedUnitIds.has(unit.id);
-              const hasUnitActions = canEditUnit || canDeleteUnit || Boolean(onOpenUnitRevisions);
+              const hasUnitActions = canEditUnit || canDeleteUnit || Boolean(onOpenUnitSettings);
               const subnavId = `unit-subnav-${encodeURIComponent(unit.id)}`;
               const dropClass =
                 dragState?.targetId === unit.id && dragState.placement
@@ -401,6 +394,18 @@ export function WorkspaceSidebar({
                     >
                       <span>{cleanName}</span>
                     </button>
+                    {canEditUnit && onOpenUnitSettings ? <button
+                      className="unit-settings-button"
+                      type="button"
+                      aria-label={`Open settings for ${cleanName}`}
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onOpenUnitSettings(unit);
+                      }}
+                    >
+                      <Settings size={15} />
+                    </button> : null}
                     {hasUnitActions ? <button
                       className="unit-overflow-button"
                       type="button"
@@ -456,18 +461,6 @@ export function WorkspaceSidebar({
       </nav>
 
       <div className="sidebar-footer">
-        {canEditUnit && onOpenDeletedUnits ? (
-          <button className="sidebar-nav-row" type="button" onClick={onOpenDeletedUnits}>
-            <ArchiveRestore size={16} />
-            <span>Recently deleted units</span>
-          </button>
-        ) : null}
-        {onOpenCollectionAdmin ? (
-          <button className="sidebar-nav-row" type="button" onClick={onOpenCollectionAdmin}>
-            <Settings size={16} />
-            <span>Collection settings</span>
-          </button>
-        ) : null}
         {accountMenu ?? <div className="profile-row">
           <span className="profile-avatar">
             {(profileDisplayName || profileUsername || "M").trim().charAt(0).toUpperCase()}
@@ -504,15 +497,8 @@ export function WorkspaceSidebar({
           returnFocus={unitMenu.returnFocus}
           onClose={() => setUnitMenu(null)}
           items={[
-            ...(onOpenUnitRevisions
-              ? [{
-                label: "Revision history",
-                icon: History,
-                onSelect: () => onOpenUnitRevisions(unitMenu.unit),
-              }]
-              : []),
-            ...(canEditUnit
-              ? [{ label: "Edit unit", icon: Pencil, onSelect: () => onEditUnit(unitMenu.unit) }]
+            ...(canEditUnit && onOpenUnitSettings
+              ? [{ label: "Unit settings", icon: Settings, onSelect: () => onOpenUnitSettings(unitMenu.unit) }]
               : []),
             ...(canDeleteUnit
               ? [{

@@ -5,18 +5,17 @@ import { upsertSetting } from "./api/settings";
 import { loadCloudWorkspace, loadDeletedCollections, serializeUnitContent } from "./api/workspace";
 import { useAuth } from "./auth/AuthProvider";
 import { AccountMenu } from "./auth/AccountMenu";
-import { CollectionAdminModal } from "./components/CollectionAdminModal";
+import { CollectionAdminModal, type AdminTab, type CollectionDetailsDraft } from "./components/CollectionAdminModal";
 import { CollectionRail } from "./components/CollectionRail";
 import { ContentWorkspace } from "./components/ContentWorkspace";
 import { DeletedCollectionsModal } from "./components/DeletedCollectionsModal";
-import { DeletedUnitsModal } from "./components/DeletedUnitsModal";
 import { EntityEditorModal, type EditorState } from "./components/EntityEditorModal";
 import { InviteAcceptanceModal } from "./components/InviteAcceptanceModal";
 import { OverviewPanel } from "./components/OverviewPanel";
 import { LearningWorkspace } from "./components/LearningWorkspace";
 import { LettersWorkspace } from "./components/LettersWorkspace";
 import { ThemeCustomizerDrawer } from "./components/ThemeCustomizerDrawer";
-import { UnitRevisionsModal } from "./components/UnitRevisionsModal";
+import { UnitSettingsModal } from "./components/UnitSettingsModal";
 import { WorkspaceSidebar } from "./components/WorkspaceSidebar";
 import { WorkspacePlaceholderSidebar } from "./components/WorkspacePlaceholderSidebar";
 import { WorkspaceStatusContent } from "./components/WorkspaceStatusContent";
@@ -51,11 +50,10 @@ export function App() {
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const [sidebarWidthDraft, setSidebarWidthDraft] = useState<number | null>(null);
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>("library");
-  const [collectionAdminOpen, setCollectionAdminOpen] = useState(false);
+  const [collectionAdminState, setCollectionAdminState] = useState<{ collectionId: string; tab: AdminTab } | null>(null);
   const [deletedCollections, setDeletedCollections] = useState<Collection[]>([]);
   const [deletedCollectionsOpen, setDeletedCollectionsOpen] = useState(false);
-  const [deletedUnitsOpen, setDeletedUnitsOpen] = useState(false);
-  const [unitRevisionsUnit, setUnitRevisionsUnit] = useState<Unit | null>(null);
+  const [unitSettingsUnit, setUnitSettingsUnit] = useState<Unit | null>(null);
   const [pendingInviteToken, setPendingInviteToken] = useState<string | null>(() => (
     new URLSearchParams(window.location.search).get("invite")
   ));
@@ -94,10 +92,9 @@ export function App() {
     if (
       !mobileNavigationOpen
       || editor
-      || collectionAdminOpen
+      || collectionAdminState
       || deletedCollectionsOpen
-      || deletedUnitsOpen
-      || unitRevisionsUnit
+      || unitSettingsUnit
       || pendingInviteToken
       || appearanceDraft
       || themeDraft
@@ -109,14 +106,13 @@ export function App() {
     return () => window.removeEventListener("keydown", onEscape);
   }, [
     appearanceDraft,
-    collectionAdminOpen,
+    collectionAdminState,
     deletedCollectionsOpen,
-    deletedUnitsOpen,
     editor,
     mobileNavigationOpen,
     pendingInviteToken,
     themeDraft,
-    unitRevisionsUnit,
+    unitSettingsUnit,
   ]);
 
   const collections = useMemo(
@@ -124,6 +120,9 @@ export function App() {
     [state.collectionOrder, state.collections],
   );
   const activeCollection = state.collections[state.activeCollectionId] ?? collections[0];
+  const collectionAdminCollection = collectionAdminState
+    ? state.collections[collectionAdminState.collectionId]
+    : activeCollection;
   const activeLearningProfile = useMemo(
     () => normalizeLearningProfile(activeCollection?.learningProfile),
     [activeCollection?.learningProfile],
@@ -200,6 +199,47 @@ export function App() {
   async function saveUserSetting(key: string, value: unknown) {
     if (!api) throw new Error("The API is not available.");
     await upsertSetting(api, { scope: "user" }, key, value);
+  }
+
+  function openCollectionAdministration(collectionId: string, tab: AdminTab = "details") {
+    setCollectionAdminState({ collectionId, tab });
+    closeMobileNavigation();
+  }
+
+  async function saveCollectionDetails(collection: Collection, details: CollectionDetailsDraft) {
+    if (!api) throw new Error("The API is not available.");
+    const currentProfile = normalizeLearningProfile(collection.learningProfile);
+    const learningProfile = normalizeLearningProfile({
+      ...currentProfile,
+      targetLanguage: details.targetLanguage,
+      sourceLanguage: getSupportedLanguage(details.sourceLanguage)?.name ?? currentProfile.sourceLanguage,
+    });
+    await api.patch(`/v1/collections/${encodeURIComponent(collection.id)}`, {
+      name: details.name,
+      description: collection.description ?? "",
+      expectedRevision: collection.revision ?? 1,
+    });
+    await Promise.all([
+      saveCollectionSetting(collection.id, "appearance", { icon: details.icon, accent: details.accent }),
+      saveCollectionSetting(collection.id, "learningProfile", learningProfile),
+    ]);
+    await refreshWorkspace();
+  }
+
+  async function saveUnitDetails(
+    unit: Unit,
+    fields: { name: string; description: string; instructionOverride: string },
+  ) {
+    if (!api) throw new Error("The API is not available.");
+    await api.patch(`/v1/units/${encodeURIComponent(unit.id)}`, {
+      name: fields.name,
+      description: fields.description,
+      instructionOverride: fields.instructionOverride,
+      languageCode: unit.languageCode ?? "und",
+      expectedRevision: unit.revision ?? 1,
+      ...serializeUnitContent(state, unit.id),
+    });
+    await refreshWorkspace();
   }
 
   async function submitEditor(fields: Record<string, string>): Promise<string | null> {
@@ -544,7 +584,7 @@ export function App() {
         onCreate={() => openEditor({ type: "collection" })}
         canEdit={(collection) => hasPermission(collection, "manage_collection")}
         canDelete={(collection) => hasPermission(collection, "manage_collection")}
-        onEdit={(collection) => openEditor({ type: "collection", value: collection })}
+        onEdit={(collection) => openCollectionAdministration(collection.id, "details")}
         onDelete={(collection) => confirmDelete(collection.name, () => deleteCollection(collection))}
         deletedCollectionCount={deletedCollections.length}
         onOpenDeletedCollections={() => setDeletedCollectionsOpen(true)}
@@ -573,21 +613,13 @@ export function App() {
           closeMobileNavigation();
         }}
         onCreateUnit={() => openEditor({ type: "unit", collectionId: activeCollection.id })}
-        onEditUnit={(unit) => openEditor({ type: "unit", value: unit, collectionId: unit.collectionId })}
+        onOpenUnitSettings={(unit) => {
+          setUnitSettingsUnit(unit);
+          closeMobileNavigation();
+        }}
         onDeleteUnit={(unit) => confirmDelete(cleanUnitName(unit.name), () => deleteUnit(unit))}
-        onOpenUnitRevisions={(unit) => {
-          setUnitRevisionsUnit(unit);
-          closeMobileNavigation();
-        }}
         onMoveUnit={(id, targetId, placement) => void persistUnitOrder(id, targetId, placement)}
-        onOpenCollectionAdmin={() => {
-          setCollectionAdminOpen(true);
-          closeMobileNavigation();
-        }}
-        onOpenDeletedUnits={() => {
-          setDeletedUnitsOpen(true);
-          closeMobileNavigation();
-        }}
+        onOpenCollectionAdmin={() => openCollectionAdministration(activeCollection.id, "details")}
         accountMenu={<AccountMenu appearance={accountAppearance} />}
         canCreateUnit={canCreateContent}
         canEditUnit={canEditContent}
@@ -673,18 +705,19 @@ export function App() {
         onAccentPreview={setCollectionAccentPreview}
         targetLanguage={activeLearningProfile.targetLanguage}
       />
-      {collectionAdminOpen && api ? (
+      {collectionAdminState && collectionAdminCollection && api ? (
         <CollectionAdminModal
-          collection={activeCollection}
+          collection={collectionAdminCollection}
           api={api}
           currentUserId={auth.currentUser?.profile.id ?? ""}
-          effectivePermissions={activeCollection.effectivePermissions ?? []}
-          learningProfile={activeLearningProfile}
-          questionSettings={activeCollection.questionSettings}
-          initialTab="questions"
+          effectivePermissions={collectionAdminCollection.effectivePermissions ?? []}
+          learningProfile={normalizeLearningProfile(collectionAdminCollection.learningProfile)}
+          questionSettings={collectionAdminCollection.questionSettings}
+          initialTab={collectionAdminState.tab}
+          onSaveDetails={(details) => saveCollectionDetails(collectionAdminCollection, details)}
           onSaveQuestionSettings={async (questionSettings) => {
-            await saveCollectionSetting(activeCollection.id, "questionSettings", questionSettings);
-            const currentCollection = state.collections[activeCollection.id];
+            await saveCollectionSetting(collectionAdminCollection.id, "questionSettings", questionSettings);
+            const currentCollection = state.collections[collectionAdminCollection.id];
             if (currentCollection) {
               dispatch({
                 type: "updateCollection",
@@ -692,17 +725,30 @@ export function App() {
               });
             }
           }}
-          onClose={() => setCollectionAdminOpen(false)}
+          onRestoreDeletedUnit={async (unitId) => {
+            await refreshWorkspace();
+            dispatch({ type: "selectCollection", id: collectionAdminCollection.id });
+            dispatch({ type: "selectUnit", id: unitId });
+            setWorkspaceMode("library");
+          }}
+          onClose={() => setCollectionAdminState(null)}
           onChanged={refreshWorkspace}
         />
       ) : null}
-      {unitRevisionsUnit && api ? (
-        <UnitRevisionsModal
+      {unitSettingsUnit && api ? (
+        <UnitSettingsModal
           api={api}
-          unit={unitRevisionsUnit}
-          canRestore={canEditContent}
-          onClose={() => setUnitRevisionsUnit(null)}
-          onRestored={refreshWorkspace}
+          unit={unitSettingsUnit}
+          canEdit={canEditContent}
+          canDelete={canDeleteContent}
+          onClose={() => setUnitSettingsUnit(null)}
+          onSaveDetails={(fields) => saveUnitDetails(unitSettingsUnit, fields)}
+          onDelete={async () => {
+            if (!window.confirm(`Delete "${cleanUnitName(unitSettingsUnit.name)}"? It can be restored for 30 days.`)) return;
+            await deleteUnit(unitSettingsUnit);
+            setUnitSettingsUnit(null);
+          }}
+          onChanged={refreshWorkspace}
         />
       ) : null}
       {deletedCollectionsOpen && api ? (
@@ -711,20 +757,6 @@ export function App() {
           collections={deletedCollections}
           onClose={() => setDeletedCollectionsOpen(false)}
           onRestored={refreshWorkspace}
-        />
-      ) : null}
-      {deletedUnitsOpen && api ? (
-        <DeletedUnitsModal
-          key={activeCollection.id}
-          api={api}
-          collection={activeCollection}
-          onClose={() => setDeletedUnitsOpen(false)}
-          onRestored={async (unit) => {
-            await refreshWorkspace();
-            dispatch({ type: "selectCollection", id: unit.collectionId });
-            dispatch({ type: "selectUnit", id: unit.id });
-            setWorkspaceMode("library");
-          }}
         />
       ) : null}
       {inviteAcceptanceModal}

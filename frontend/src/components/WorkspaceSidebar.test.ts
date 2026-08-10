@@ -33,7 +33,7 @@ interface SidebarHarnessProps {
   onSelectUnit?: (id: string) => void;
   onOpenLessons?: (id: string) => void;
   onOpenCollectionAdmin?: () => void;
-  onOpenDeletedUnits?: () => void;
+  onOpenUnitSettings?: (unit: Unit) => void;
   profileDisplayName?: string;
   profileUsername?: string;
   readOnly?: boolean;
@@ -44,7 +44,7 @@ function SidebarHarness({
   onSelectUnit,
   onOpenLessons,
   onOpenCollectionAdmin,
-  onOpenDeletedUnits,
+  onOpenUnitSettings,
   profileDisplayName,
   profileUsername,
   readOnly = false,
@@ -76,11 +76,10 @@ function SidebarHarness({
       onOpenLessons?.(id);
     },
     onCreateUnit: vi.fn(),
-    onEditUnit: vi.fn(),
+    onOpenUnitSettings,
     onDeleteUnit: vi.fn(),
     onMoveUnit: vi.fn(),
     onOpenCollectionAdmin,
-    onOpenDeletedUnits,
     accountMenu,
     profileDisplayName,
     profileUsername,
@@ -162,34 +161,19 @@ describe("workspace unit navigation", () => {
     expect(onOpenCollectionAdmin).toHaveBeenCalledOnce();
   });
 
-  it("opens collection settings for members without mutation permissions", async () => {
-    const onOpenCollectionAdmin = vi.fn();
-    await renderSidebar({ onOpenCollectionAdmin, readOnly: true });
-
-    const collectionSettings = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
-      .find((button) => button.textContent?.trim() === "Collection settings");
-    expect(collectionSettings).toBeDefined();
-
-    await act(async () => collectionSettings!.click());
-    expect(onOpenCollectionAdmin).toHaveBeenCalledOnce();
+  it("keeps collection administration and deleted units out of the sidebar footer", async () => {
+    await renderSidebar();
+    expect(document.body.textContent).not.toContain("Collection settings");
+    expect(document.body.textContent).not.toContain("Recently deleted units");
   });
 
-  it("opens deleted units only for members allowed to restore content", async () => {
-    const onOpenDeletedUnits = vi.fn();
-    await renderSidebar({ onOpenDeletedUnits });
-
-    const restoreUnits = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
-      .find((button) => button.textContent?.trim() === "Recently deleted units");
-    expect(restoreUnits).toBeDefined();
-    await act(async () => restoreUnits!.click());
-    expect(onOpenDeletedUnits).toHaveBeenCalledOnce();
-
-    await act(async () => {
-      root!.render(createElement(SidebarHarness, { onOpenDeletedUnits, readOnly: true }));
-    });
-    expect(Array.from(document.querySelectorAll("button")).some(
-      (button) => button.textContent?.trim() === "Recently deleted units",
-    )).toBe(false);
+  it("opens Unit Settings from the trailing gear without selecting or dragging the unit", async () => {
+    const onOpenUnitSettings = vi.fn();
+    await renderSidebar({ onOpenUnitSettings });
+    const settings = document.querySelector<HTMLButtonElement>('[aria-label="Open settings for Daily Rhythm"]');
+    expect(settings).not.toBeNull();
+    await act(async () => settings!.click());
+    expect(onOpenUnitSettings).toHaveBeenCalledWith(units[0]);
   });
 
   it("keeps the unit name and disclosure button in sync while toggling the active unit", async () => {

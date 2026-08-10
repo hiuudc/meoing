@@ -13,6 +13,12 @@ interface DeletedUnitsModalProps {
   onRestored: (unit: Unit) => void | Promise<void>;
 }
 
+export interface DeletedUnitsPanelProps {
+  api: ApiClient;
+  collection: Collection;
+  onRestored: (unit: Unit) => void | Promise<void>;
+}
+
 const DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
   year: "numeric",
   month: "short",
@@ -27,6 +33,39 @@ export function DeletedUnitsModal({
   onClose,
   onRestored,
 }: DeletedUnitsModalProps) {
+  return (
+    <AnimatedModal
+      open
+      onClose={onClose}
+      labelledBy="deleted-units-title"
+      backdropClassName="modal-backdrop unit-revisions-backdrop"
+      panelClassName="unit-revisions-modal"
+    >
+      <header className="unit-revisions-header">
+        <div>
+          <p>30-day recovery window</p>
+          <h2 id="deleted-units-title">Recently deleted units</h2>
+          <span>{collection.name}</span>
+        </div>
+        <button className="icon-button" type="button" aria-label="Close deleted units" onClick={onClose}>
+          <X size={20} />
+        </button>
+      </header>
+      <div className="unit-revisions-body">
+        <DeletedUnitsPanel api={api} collection={collection} onRestored={async (unit) => {
+          await onRestored(unit);
+          onClose();
+        }} />
+      </div>
+    </AnimatedModal>
+  );
+}
+
+export function DeletedUnitsPanel({
+  api,
+  collection,
+  onRestored,
+}: DeletedUnitsPanelProps) {
   const [units, setUnits] = useState<Unit[]>([]);
   const [loading, setLoading] = useState(true);
   const [restoringId, setRestoringId] = useState<string | null>(null);
@@ -58,7 +97,6 @@ export function DeletedUnitsModal({
     try {
       await restoreDeletedUnit(api, unit);
       await onRestored(unit);
-      onClose();
     } catch (restoreError) {
       setError(apiErrorMessage(restoreError));
     } finally {
@@ -66,65 +104,45 @@ export function DeletedUnitsModal({
     }
   }
 
-  return (
-    <AnimatedModal
-      open
-      onClose={onClose}
-      labelledBy="deleted-units-title"
-      backdropClassName="modal-backdrop unit-revisions-backdrop"
-      panelClassName="unit-revisions-modal"
-    >
-      <header className="unit-revisions-header">
-        <div>
-          <p>30-day recovery window</p>
-          <h2 id="deleted-units-title">Recently deleted units</h2>
-          <span>{collection.name}</span>
-        </div>
-        <button className="icon-button" type="button" aria-label="Close deleted units" onClick={onClose}>
-          <X size={20} />
-        </button>
-      </header>
-      <div className="unit-revisions-body">
-        {error ? <p className="collection-admin-inline-error" role="alert">{error}</p> : null}
-        {loading ? (
-          <div className="collection-admin-loading" role="status">
-            <LoaderCircle className="spin" size={18} />
-            Loading deleted units…
-          </div>
-        ) : !units.length ? (
-          <div className="deleted-collections-empty">
-            <Trash2 size={22} aria-hidden="true" />
-            <p>No restorable units in this collection.</p>
-          </div>
-        ) : (
-          <ol className="unit-revisions-list">
-            {units.map((unit) => (
-              <li key={unit.id}>
-                <span className="unit-revision-icon" aria-hidden="true"><Trash2 size={16} /></span>
-                <div>
-                  <strong>{cleanUnitName(unit.name)}</strong>
-                  <span>
-                    Deleted {unit.deletedAt
-                      ? DATE_FORMATTER.format(new Date(unit.deletedAt))
-                      : "recently"}
-                  </span>
-                </div>
-                <button
-                  className="secondary-button"
-                  type="button"
-                  disabled={restoringId !== null}
-                  onClick={() => void restore(unit)}
-                >
-                  {restoringId === unit.id
-                    ? <LoaderCircle className="spin" size={15} />
-                    : <ArchiveRestore size={15} />}
-                  Restore
-                </button>
-              </li>
-            ))}
-          </ol>
-        )}
+  return <>
+    {error ? <p className="collection-admin-inline-error" role="alert">{error}</p> : null}
+    {loading ? (
+      <div className="collection-admin-loading" role="status">
+        <LoaderCircle className="spin" size={18} />
+        Loading deleted units…
       </div>
-    </AnimatedModal>
-  );
+    ) : !units.length ? (
+      <div className="deleted-collections-empty">
+        <Trash2 size={22} aria-hidden="true" />
+        <p>No restorable units in this collection.</p>
+      </div>
+    ) : (
+      <ol className="unit-revisions-list">
+        {units.map((unit) => (
+          <li key={unit.id}>
+            <span className="unit-revision-icon" aria-hidden="true"><Trash2 size={16} /></span>
+            <div>
+              <strong>{cleanUnitName(unit.name)}</strong>
+              <span>
+                Deleted {unit.deletedAt
+                  ? DATE_FORMATTER.format(new Date(unit.deletedAt))
+                  : "recently"}
+              </span>
+            </div>
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={restoringId !== null}
+              onClick={() => void restore(unit)}
+            >
+              {restoringId === unit.id
+                ? <LoaderCircle className="spin" size={15} />
+                : <ArchiveRestore size={15} />}
+              Restore
+            </button>
+          </li>
+        ))}
+      </ol>
+    )}
+  </>;
 }

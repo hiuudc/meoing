@@ -1,5 +1,6 @@
 import {
   BookOpen,
+  ArchiveRestore,
   Check,
   CircleHelp,
   Clipboard,
@@ -9,6 +10,7 @@ import {
   Pencil,
   Plus,
   ScrollText,
+  Settings,
   Shield,
   Trash2,
   UserRound,
@@ -49,12 +51,25 @@ import {
   type LanguageStats,
   type MemberProgress,
 } from "../api/collectionAdmin";
+import { SUPPORTED_LANGUAGE_NAMES } from "../learning/languages";
+import { normalizeLearningProfile } from "../learning/profile";
 import type { Collection } from "../types";
 import type { CollectionQuestionSettings, LearningProfile } from "../learning/types";
+import { normalizeHex } from "../theme";
 import { AnimatedModal } from "./AnimatedModal";
 import { CollectionQuestionSettingsPanel } from "./CollectionQuestionSettingsModal";
+import { DeletedUnitsPanel } from "./DeletedUnitsModal";
+import { HsvColorPicker } from "./HsvColorPicker";
 
-export type AdminTab = "questions" | "members" | "roles" | "invites" | "audit" | "lessons";
+export type AdminTab = "details" | "questions" | "units" | "members" | "roles" | "invites" | "audit" | "lessons";
+
+export interface CollectionDetailsDraft {
+  name: string;
+  icon: string;
+  accent: string;
+  targetLanguage: string;
+  sourceLanguage: string;
+}
 
 export interface CollectionAdminModalProps {
   collection: Collection;
@@ -64,7 +79,9 @@ export interface CollectionAdminModalProps {
   learningProfile: LearningProfile;
   questionSettings?: CollectionQuestionSettings;
   initialTab?: AdminTab;
+  onSaveDetails: (details: CollectionDetailsDraft) => void | Promise<void>;
   onSaveQuestionSettings: (settings: CollectionQuestionSettings) => void | Promise<void>;
+  onRestoreDeletedUnit: (unitId: string) => void | Promise<void>;
   onClose: () => void;
   onChanged: () => void | Promise<void>;
 }
@@ -93,7 +110,9 @@ interface ProgressDetailState {
 }
 
 const ADMIN_TABS: readonly TabDefinition[] = [
+  { id: "details", label: "Details", icon: Settings, permission: "manage_collection" },
   { id: "questions", label: "Questions", icon: CircleHelp, permission: "manage_collection" },
+  { id: "units", label: "Units", icon: ArchiveRestore, permission: "edit_content" },
   { id: "members", label: "Members", icon: Users },
   { id: "roles", label: "Roles", icon: Shield },
   { id: "invites", label: "Invites", icon: Link2, permission: "manage_invites" },
@@ -177,6 +196,125 @@ export function collectionAdminTabsForPermissions(
     .map((tab) => tab.id);
 }
 
+const COLLECTION_ACCENT_PRESETS = ["#8B7CF6", "#E7AD67", "#72BDA3", "#EB7198", "#69A9E8"];
+
+function CollectionDetailsPanel({
+  collection,
+  learningProfile,
+  onSave,
+}: {
+  collection: Collection;
+  learningProfile: LearningProfile;
+  onSave: (details: CollectionDetailsDraft) => void | Promise<void>;
+}) {
+  const profile = normalizeLearningProfile(learningProfile);
+  const [name, setName] = useState(collection.name);
+  const [icon, setIcon] = useState(collection.icon);
+  const [accent, setAccent] = useState(normalizeHex(collection.accent));
+  const [targetLanguage, setTargetLanguage] = useState(profile.targetLanguage);
+  const [sourceLanguage, setSourceLanguage] = useState(profile.sourceLanguage);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const nextProfile = normalizeLearningProfile(learningProfile);
+    setName(collection.name);
+    setIcon(collection.icon);
+    setAccent(normalizeHex(collection.accent));
+    setTargetLanguage(nextProfile.targetLanguage);
+    setSourceLanguage(nextProfile.sourceLanguage);
+    setError(null);
+  }, [collection.accent, collection.icon, collection.name, collection.revision, learningProfile]);
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!name.trim() || !icon.trim() || !targetLanguage || !sourceLanguage) {
+      setError("Name, icon, and both languages are required.");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await onSave({
+        name: name.trim(),
+        icon: icon.trim().slice(0, 2),
+        accent: normalizeHex(accent),
+        targetLanguage,
+        sourceLanguage,
+      });
+    } catch (saveError) {
+      setError(apiErrorMessage(saveError));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="collection-admin-section" aria-labelledby="collection-details-title">
+      <div className="collection-admin-section-heading">
+        <div>
+          <h3 id="collection-details-title">Collection details</h3>
+          <p>Manage the identity, language pair, and accent used across this collection.</p>
+        </div>
+      </div>
+      <form className="collection-admin-card collection-admin-form-grid collection-details-form" onSubmit={(event) => void submit(event)}>
+        <label className="collection-admin-form-wide">Collection name
+          <input value={name} onChange={(event) => setName(event.target.value)} disabled={saving} autoFocus />
+        </label>
+        <label>Collection icon
+          <input value={icon} onChange={(event) => setIcon(event.target.value.slice(0, 2))} disabled={saving} maxLength={2} />
+        </label>
+        <span className="collection-admin-field-note">Use one or two characters.</span>
+        <label>Language learning
+          <select value={targetLanguage} onChange={(event) => setTargetLanguage(event.target.value as typeof targetLanguage)} disabled={saving}>
+            {SUPPORTED_LANGUAGE_NAMES.map((language) => <option key={language} value={language}>{language}</option>)}
+          </select>
+        </label>
+        <label>Language speaking
+          <select value={sourceLanguage} onChange={(event) => setSourceLanguage(event.target.value as typeof sourceLanguage)} disabled={saving}>
+            {SUPPORTED_LANGUAGE_NAMES.map((language) => <option key={language} value={language}>{language}</option>)}
+          </select>
+        </label>
+        <fieldset className="collection-admin-accent-field collection-admin-form-wide">
+          <legend>Accent color</legend>
+          <div className="collection-admin-accent-presets">
+            {COLLECTION_ACCENT_PRESETS.map((value) => (
+              <button
+                key={value}
+                aria-label={`Use ${value} accent`}
+                aria-pressed={accent === value}
+                className={accent === value ? "is-selected" : undefined}
+                disabled={saving}
+                onClick={(event) => {
+                  event.preventDefault();
+                  setAccent(value);
+                }}
+                style={{ background: value }}
+                type="button"
+              />
+            ))}
+          </div>
+          <HsvColorPicker value={accent} onChange={setAccent} />
+          <label>Custom hex
+            <input
+              value={accent}
+              maxLength={7}
+              onBlur={() => setAccent(normalizeHex(accent))}
+              onChange={(event) => setAccent(event.target.value)}
+              disabled={saving}
+              spellCheck={false}
+            />
+          </label>
+        </fieldset>
+        {error ? <p className="collection-admin-inline-error collection-admin-form-wide" role="alert">{error}</p> : null}
+        <div className="collection-admin-actions collection-admin-form-wide">
+          <button className="primary-button" type="submit" disabled={saving}>{saving ? "Saving..." : "Save changes"}</button>
+        </div>
+      </form>
+    </section>
+  );
+}
+
 export function CollectionAdminModal({
   collection,
   api,
@@ -184,8 +322,10 @@ export function CollectionAdminModal({
   effectivePermissions,
   learningProfile,
   questionSettings,
-  initialTab = "questions",
+  initialTab = "details",
+  onSaveDetails,
   onSaveQuestionSettings,
+  onRestoreDeletedUnit,
   onClose,
   onChanged,
 }: CollectionAdminModalProps) {
@@ -290,7 +430,7 @@ export function CollectionAdminModal({
 
     async function loadActiveTab() {
       try {
-        if (activeTab === "questions") {
+        if (activeTab === "details" || activeTab === "questions" || activeTab === "units") {
           return;
         } else if (activeTab === "members") {
           const [memberResponse, roleResponse] = await Promise.all([
@@ -758,12 +898,40 @@ export function CollectionAdminModal({
               </div>
             ) : null}
 
+            {!loading && activeTab === "details" ? (
+              <CollectionDetailsPanel
+                collection={collection}
+                learningProfile={learningProfile}
+                onSave={onSaveDetails}
+              />
+            ) : null}
+
             {!loading && activeTab === "questions" ? (
               <CollectionQuestionSettingsPanel
                 collection={{ ...collection, questionSettings }}
                 profile={learningProfile}
                 onSave={onSaveQuestionSettings}
               />
+            ) : null}
+
+            {!loading && activeTab === "units" ? (
+              <section className="collection-admin-section" aria-labelledby="collection-units-title">
+                <div className="collection-admin-section-heading">
+                  <div>
+                    <h3 id="collection-units-title">Recently deleted units</h3>
+                    <p>Restore a unit and its retained content within the 30-day recovery window.</p>
+                  </div>
+                </div>
+                <div className="collection-admin-card collection-admin-recovery-card">
+                  <DeletedUnitsPanel
+                    api={api}
+                    collection={collection}
+                    onRestored={async (unit) => {
+                      await onRestoreDeletedUnit(unit.id);
+                    }}
+                  />
+                </div>
+              </section>
             ) : null}
 
             {!loading && activeTab === "members" ? (

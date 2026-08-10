@@ -18,6 +18,11 @@ import { HeadingNode, QuoteNode } from "@lexical/rich-text";
 import {
   $createTableNodeWithDimensions,
   $createTableSelectionFrom,
+  $getTableNodeFromLexicalNodeOrThrow,
+  $mergeCells,
+  $setTableColumnIsHeader,
+  $setTableRowIsHeader,
+  $unmergeCellNode,
   TableCellNode,
   TableNode,
   TableRowNode,
@@ -408,5 +413,35 @@ describe("document table selection", () => {
     expect(secondCellKey).not.toBe("");
     expect(documentEditorTheme.tableCellSelected).toBe("document-editor-table-cell-selected");
     expect(documentEditorTheme.tableSelection).toBe("document-editor-table-selection");
+  });
+
+  it("persists Playground-equivalent table formatting and merge operations", () => {
+    const editor = createTestEditor([TableNode, TableRowNode, TableCellNode]);
+    editor.update(() => {
+      const table = $createTableNodeWithDimensions(2, 2, true);
+      $getRoot().append(table);
+      const firstRow = table.getFirstChildOrThrow() as TableRowNode;
+      const firstCell = firstRow.getFirstChildOrThrow() as TableCellNode;
+      const secondCell = firstRow.getLastChildOrThrow() as TableCellNode;
+
+      firstCell.setBackgroundColor("#655bf5");
+      firstCell.setVerticalAlign("middle");
+      table.setRowStriping(true);
+      table.setFrozenRows(1);
+      table.setFrozenColumns(1);
+      $setTableRowIsHeader(table, 0, true);
+      $setTableColumnIsHeader(table, 0, true);
+      const merged = $mergeCells([firstCell, secondCell]);
+      expect(merged?.getColSpan()).toBe(2);
+      if (merged) $unmergeCellNode(merged);
+
+      const activeTable = $getTableNodeFromLexicalNodeOrThrow(firstCell);
+      expect(activeTable.getRowStriping()).toBe(true);
+      expect(activeTable.getFrozenRows()).toBe(1);
+      expect(activeTable.getFrozenColumns()).toBe(1);
+      expect(firstCell.getBackgroundColor()).toBe("#655bf5");
+      expect(firstCell.getVerticalAlign()).toBe("middle");
+      expect(firstCell.getColSpan()).toBe(1);
+    }, { discrete: true });
   });
 });
