@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { Plus } from "lucide-react";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
@@ -7,9 +7,10 @@ import {
   MenuOption,
   useBasicTypeaheadTriggerMatch,
 } from "@lexical/react/LexicalTypeaheadMenuPlugin";
-import type { TextNode } from "lexical";
+import type { NodeKey, TextNode } from "lexical";
 import {
   executeInsertCommand,
+  executeInsertCommandAfterBlock,
   INSERT_COMMANDS,
   type InsertCommand,
 } from "./inserts";
@@ -107,12 +108,28 @@ export function InsertMenu({
 }
 
 /** Compact insert control used beside the draggable block handle. */
-export function BlockInsertMenu({ language }: { language: string }) {
+export function BlockInsertMenu({
+  language,
+  targetBlockKey,
+  targetBlockKeyRef,
+}: {
+  language: string;
+  targetBlockKey: NodeKey | null;
+  targetBlockKeyRef: RefObject<NodeKey | null>;
+}) {
   const [editor] = useLexicalComposerContext();
   const [open, setOpen] = useState(false);
 
   return (
-    <div className="document-block-insert-menu">
+    <div
+      className="document-block-insert-menu"
+      onDragStart={(event) => {
+        // The Lexical plugin wraps the complete menu in a draggable element.
+        // Only the adjacent grip should initiate a block reorder.
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+    >
       <button
         className="document-block-add-button"
         type="button"
@@ -128,8 +145,10 @@ export function BlockInsertMenu({ language }: { language: string }) {
         <CommandList
           commands={INSERT_COMMANDS}
           onSelect={(command) => {
-            editor.focus();
-            executeInsertCommand(editor, command.id, language);
+            const blockKey = targetBlockKeyRef.current ?? targetBlockKey;
+            if (blockKey) {
+              executeInsertCommandAfterBlock(editor, command.id, language, blockKey);
+            }
             setOpen(false);
           }}
         />

@@ -33,6 +33,7 @@ import {
   BilingualBlockNode,
 } from "../BilingualBlockNode";
 import { $getCurrentTableCellKey } from "./EditorPlugins";
+import { executeInsertCommandAfterBlock } from "./inserts";
 import { findTextOffsets } from "./FindReplace";
 import { documentEditorTheme } from "./editorConfig";
 import {
@@ -319,6 +320,61 @@ describe("document URL and file validation", () => {
 });
 
 describe("editor commands", () => {
+  it("inserts a block after the supplied hover target instead of the active selection", () => {
+    const editor = createTestEditor();
+    let firstKey = "";
+    let secondKey = "";
+
+    editor.update(() => {
+      const first = $createParagraphNode().append($createTextNode("First"));
+      const second = $createParagraphNode().append($createTextNode("Second"));
+      firstKey = first.getKey();
+      secondKey = second.getKey();
+      $getRoot().append(first, second);
+      first.select();
+    }, { discrete: true });
+
+    expect(executeInsertCommandAfterBlock(editor, "callout", "Japanese", secondKey)).toBe(true);
+
+    editor.getEditorState().read(() => {
+      const children = $getRoot().getChildren();
+      expect(children[0]?.getKey()).toBe(firstKey);
+      expect(children[1]?.getKey()).toBe(secondKey);
+      expect($isRichBlockNode(children[2])).toBe(true);
+    });
+  });
+
+  it("inserts after the first and final hovered blocks", () => {
+    const editor = createTestEditor();
+    let firstKey = "";
+    let finalKey = "";
+
+    editor.update(() => {
+      const first = $createParagraphNode().append($createTextNode("First"));
+      const final = $createParagraphNode().append($createTextNode("Final"));
+      firstKey = first.getKey();
+      finalKey = final.getKey();
+      $getRoot().append(first, final);
+    }, { discrete: true });
+
+    expect(executeInsertCommandAfterBlock(editor, "callout", "Japanese", firstKey)).toBe(true);
+    expect(executeInsertCommandAfterBlock(editor, "sticky-note", "Japanese", finalKey)).toBe(true);
+
+    editor.getEditorState().read(() => {
+      const children = $getRoot().getChildren();
+      expect(children).toHaveLength(4);
+      expect(children[0]?.getKey()).toBe(firstKey);
+      expect($isRichBlockNode(children[1])).toBe(true);
+      expect(children[2]?.getKey()).toBe(finalKey);
+      expect($isRichBlockNode(children[3])).toBe(true);
+    });
+  });
+
+  it("does not insert when the hover target no longer exists", () => {
+    const editor = createTestEditor();
+    expect(executeInsertCommandAfterBlock(editor, "callout", "Japanese", "missing")).toBe(false);
+  });
+
   it("finds case-sensitive and insensitive text offsets", () => {
     expect(findTextOffsets("Meoi meoi MEOI", "meoi", false)).toEqual([
       { start: 0, end: 4 },

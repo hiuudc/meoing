@@ -17,14 +17,22 @@ import {
   Youtube,
 } from "lucide-react";
 import {
+  $createParagraphNode,
+  $getNodeByKey,
   $getSelection,
   $isRangeSelection,
   type LexicalEditor,
+  type LexicalNode,
+  type NodeKey,
 } from "lexical";
 import {
-  INSERT_HORIZONTAL_RULE_COMMAND,
+  $createHorizontalRuleNode,
 } from "@lexical/extension";
-import { INSERT_TABLE_COMMAND } from "@lexical/table";
+import {
+  $createTableNodeWithDimensions,
+  $isTableCellNode,
+  $isTableNode,
+} from "@lexical/table";
 import { $insertNodeToNearestRoot } from "@lexical/utils";
 import { $createBilingualBlockNode } from "../BilingualBlockNode";
 import { $createEmbedNode } from "./nodes/EmbedNode";
@@ -191,24 +199,55 @@ export const INSERT_COMMANDS: InsertCommand[] = [
   },
 ];
 
+function $createInsertNode(id: InsertCommandId, language: string): LexicalNode {
+  if (id === "horizontal-rule") return $createHorizontalRuleNode();
+  if (id === "table") {
+    return $createTableNodeWithDimensions(3, 3, {
+      columns: false,
+      rows: true,
+    });
+  }
+  if (id === "ruby") {
+    const paragraph = $createParagraphNode();
+    paragraph.append($createRubyNode("", ""));
+    return paragraph;
+  }
+  if (id === "bilingual") return $createBilingualBlockNode("", "", language);
+  if (id === "image") return $createImageNode();
+  if (id === "equation") return $createEquationNode();
+  if (id === "excalidraw") return $createExcalidrawNode();
+  if (id === "embed-youtube") return $createEmbedNode("youtube");
+  if (id === "embed-twitter") return $createEmbedNode("twitter");
+  if (id === "embed-figma") return $createEmbedNode("figma");
+  return $createRichBlockNode(id);
+}
+
+function $focusInsertedNode(node: LexicalNode): void {
+  if ($isTableNode(node)) {
+    const firstCell = node.getFirstDescendant();
+    if ($isTableCellNode(firstCell)) {
+      firstCell.selectStart();
+      return;
+    }
+  }
+  node.selectNext();
+}
+
+function $getTopLevelBlock(node: LexicalNode): LexicalNode | null {
+  let block = node;
+  let parent = block.getParent();
+  while (parent && parent.getType() !== "root") {
+    block = parent;
+    parent = block.getParent();
+  }
+  return parent ? block : null;
+}
+
 export function executeInsertCommand(
   editor: LexicalEditor,
   id: InsertCommandId,
   language: string,
 ): void {
-  if (id === "horizontal-rule") {
-    editor.dispatchCommand(INSERT_HORIZONTAL_RULE_COMMAND, undefined);
-    return;
-  }
-  if (id === "table") {
-    editor.dispatchCommand(INSERT_TABLE_COMMAND, {
-      columns: "3",
-      includeHeaders: { columns: false, rows: true },
-      rows: "3",
-    });
-    return;
-  }
-
   editor.update(() => {
     if (id === "ruby") {
       const selection = $getSelection();
@@ -218,22 +257,30 @@ export function executeInsertCommand(
       }
       return;
     }
-
-    const node = id === "bilingual"
-      ? $createBilingualBlockNode("", "", language)
-      : id === "image"
-        ? $createImageNode()
-        : id === "equation"
-          ? $createEquationNode()
-          : id === "excalidraw"
-            ? $createExcalidrawNode()
-            : id === "embed-youtube"
-              ? $createEmbedNode("youtube")
-              : id === "embed-twitter"
-                ? $createEmbedNode("twitter")
-                : id === "embed-figma"
-                  ? $createEmbedNode("figma")
-                  : $createRichBlockNode(id);
+    const node = $createInsertNode(id, language);
     $insertNodeToNearestRoot(node);
+    $focusInsertedNode(node);
   });
+}
+
+/** Inserts a block after the block currently targeted by the hover controls. */
+export function executeInsertCommandAfterBlock(
+  editor: LexicalEditor,
+  id: InsertCommandId,
+  language: string,
+  targetBlockKey: NodeKey,
+): boolean {
+  let inserted = false;
+  editor.update(() => {
+    const target = $getNodeByKey(targetBlockKey);
+    if (!target) return;
+    const block = $getTopLevelBlock(target);
+    if (!block) return;
+    const node = $createInsertNode(id, language);
+    block.insertAfter(node);
+    $focusInsertedNode(node);
+    inserted = true;
+  }, { discrete: true });
+  if (inserted) editor.focus();
+  return inserted;
 }

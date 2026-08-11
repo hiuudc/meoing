@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -475,6 +476,26 @@ function DocumentOutline({
 function DraggableBlocksPlugin({ anchorElement, language }: { anchorElement: HTMLElement; language: string }) {
   const menuRef = useRef<HTMLElement | null>(null);
   const targetLineRef = useRef<HTMLElement | null>(null);
+  const targetBlockKeyRef = useRef<NodeKey | null>(null);
+  const [targetBlockKey, setTargetBlockKey] = useState<NodeKey | null>(null);
+  const [editor] = useLexicalComposerContext();
+
+  const handleElementChanged = useCallback((element: HTMLElement | null) => {
+    let nextBlockKey: NodeKey | null = null;
+    if (element) {
+      editor.getEditorState().read(() => {
+        // The upstream plugin passes the DOM element for one of these direct
+        // root children. Comparing the elements avoids relying on a stale
+        // DOM-to-node map while the menu is portalled beside the editor.
+        const targetBlock = $getRoot().getChildren().find((node) => (
+          editor.getElementByKey(node.getKey()) === element
+        ));
+        nextBlockKey = targetBlock?.getKey() ?? null;
+      });
+    }
+    if (nextBlockKey) targetBlockKeyRef.current = nextBlockKey;
+    setTargetBlockKey((current) => current === nextBlockKey ? current : nextBlockKey);
+  }, [editor]);
 
   return (
     <DraggableBlockPlugin_EXPERIMENTAL
@@ -483,7 +504,11 @@ function DraggableBlocksPlugin({ anchorElement, language }: { anchorElement: HTM
       targetLineRef={targetLineRef as RefObject<HTMLElement | null>}
       menuComponent={(
         <div ref={menuRef as RefObject<HTMLDivElement>} className="document-block-actions">
-          <BlockInsertMenu language={language} />
+          <BlockInsertMenu
+            language={language}
+            targetBlockKey={targetBlockKey}
+            targetBlockKeyRef={targetBlockKeyRef}
+          />
           <button
             className="document-block-drag-handle"
             type="button"
@@ -496,6 +521,7 @@ function DraggableBlocksPlugin({ anchorElement, language }: { anchorElement: HTM
       )}
       targetLineComponent={<div ref={targetLineRef as RefObject<HTMLDivElement>} className="document-block-drop-line" />}
       isOnMenu={(element) => menuRef.current?.contains(element) ?? false}
+      onElementChanged={handleElementChanged}
     />
   );
 }
