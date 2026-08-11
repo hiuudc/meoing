@@ -75,7 +75,7 @@ export async function formatCodeWithPrettier(content: string, lang: string) {
   }
   let formatted = await format(content, options);
   if (lang === 'html') {
-    formatted = formatted.replaceAll(/<!-- prettier-ignore -->/g, '');
+    formatted = formatted.replace(/<!-- prettier-ignore -->/g, '');
   }
   return formatted;
 }

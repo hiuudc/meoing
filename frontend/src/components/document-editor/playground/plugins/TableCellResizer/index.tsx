@@ -25,6 +25,7 @@ import {
 } from '@lexical/table';
 import {calculateZoomLevel} from '@lexical/utils';
 import {
+  $nodesOfType,
   $getNearestNodeFromDOMNode,
   isHTMLElement,
   type LexicalEditor,
@@ -88,6 +89,12 @@ function TableCellResizer({editor}: {editor: LexicalEditor}): JSX.Element {
 
   useEffect(() => {
     const tableKeys = new Set<NodeKey>();
+    editor.getEditorState().read(() => {
+      for (const tableNode of $nodesOfType(TableNode)) {
+        tableKeys.add(tableNode.getKey());
+      }
+    });
+    setHasTable(tableKeys.size > 0);
     return mergeRegister(
       editor.registerMutationListener(TableNode, nodeMutations => {
         for (const [nodeKey, mutation] of nodeMutations) {
@@ -98,7 +105,7 @@ function TableCellResizer({editor}: {editor: LexicalEditor}): JSX.Element {
           }
         }
         setHasTable(tableKeys.size > 0);
-      }),
+      }, {skipInitialization: false}),
       editor.registerNodeTransform(TableNode, tableNode => {
         if (tableNode.getColWidths()) {
           return tableNode;

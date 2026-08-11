@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Pipette, X } from "lucide-react";
 import { isValidHex, normalizeHex } from "../theme";
@@ -11,10 +11,7 @@ import {
   SUPPORTED_LANGUAGE_NAMES,
 } from "../learning/languages";
 import { normalizeLearningProfile } from "../learning/profile";
-
-const DocumentEditor = lazy(() => import("./DocumentEditor").then((module) => ({
-  default: module.DocumentEditor,
-})));
+import { DocumentEditor } from "./DocumentEditor";
 
 export type EditorState =
   | { type: "collection"; value?: Collection }
@@ -328,17 +325,15 @@ export function EntityEditorModal({
               </div>
               <div className="form-field document-content-field">
                 <span>Document content</span>
-                <Suspense fallback={<div className="document-editor-loading" role="status">Loading editor...</div>}>
-                  <DocumentEditor
-                    key={activeEditor.value?.id ?? "new-document"}
-                    content={fields.content}
-                    language={targetLanguage}
-                    plainText={fields.body}
-                    onChange={(value) => {
-                      documentValueRef.current = value;
-                    }}
-                  />
-                </Suspense>
+                <DocumentEditor
+                  key={activeEditor.value?.id ?? "new-document"}
+                  content={fields.content}
+                  language={targetLanguage}
+                  plainText={fields.body}
+                  onChange={(value) => {
+                    documentValueRef.current = value;
+                  }}
+                />
               </div>
             </>
           ) : null}

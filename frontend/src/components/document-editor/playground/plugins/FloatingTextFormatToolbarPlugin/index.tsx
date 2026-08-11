@@ -47,23 +47,7 @@ import {getSelectedNode} from '../../utils/getSelectedNode';
 import {setFloatingElemPosition} from '../../utils/setFloatingElemPosition';
 import {INSERT_INLINE_COMMAND} from '../CommentPlugin';
 
-function TextFormatFloatingToolbar({
-  editor,
-  anchorElem,
-  isLink,
-  isBold,
-  isItalic,
-  isUnderline,
-  isUppercase,
-  isLowercase,
-  isCapitalize,
-  isCode,
-  isStrikethrough,
-  isSubscript,
-  isSuperscript,
-  setIsLinkEditMode,
-  ref,
-}: {
+interface TextFormatFloatingToolbarProps {
   editor: LexicalEditor;
   anchorElem: HTMLElement;
   isBold: boolean;
@@ -78,11 +62,34 @@ function TextFormatFloatingToolbar({
   isSuperscript: boolean;
   isUnderline: boolean;
   setIsLinkEditMode: Dispatch<boolean>;
-  ref?: React.Ref<HTMLDivElement | null>;
-}): JSX.Element {
+}
+
+const TextFormatFloatingToolbar = React.forwardRef<
+  HTMLDivElement,
+  TextFormatFloatingToolbarProps
+>(function TextFormatFloatingToolbar({
+  editor,
+  anchorElem,
+  isLink,
+  isBold,
+  isItalic,
+  isUnderline,
+  isUppercase,
+  isLowercase,
+  isCapitalize,
+  isCode,
+  isStrikethrough,
+  isSubscript,
+  isSuperscript,
+  setIsLinkEditMode,
+}, forwardedRef): JSX.Element {
   const popupCharStylesEditorRef = useRef<HTMLDivElement | null>(null);
   const rovingRef = useLexicalRovingTabIndexRef();
-  const mergedRef = useMergeRefs([popupCharStylesEditorRef, rovingRef, ref]);
+  const mergedRef = useMergeRefs([
+    popupCharStylesEditorRef,
+    rovingRef,
+    forwardedRef,
+  ]);
 
   const insertLink = useCallback(() => {
     if (!isLink) {
@@ -346,7 +353,7 @@ function TextFormatFloatingToolbar({
       </button>
     </div>
   );
-}
+});
 
 function useFloatingTextFormatToolbar(
   editor: LexicalEditor,

@@ -4257,6 +4257,41 @@ input[type="range"] {
   .question-format-grid { grid-template-columns: 1fr; }
 }
 
+/* Meoing adds its safe file/find actions to the upstream toolbar. Collapse
+   labels before they can overlap the Playground shortcut button. */
+@media (max-width: 1500px) {
+  .meoing-playground .toolbar .block-controls,
+  .meoing-playground .toolbar .font-family {
+    min-width: 34px;
+  }
+
+  .meoing-playground .toolbar .dropdown-button-text,
+  .meoing-playground .toolbar .font-family .text {
+    display: none;
+  }
+
+  .meoing-playground .toolbar .toolbar-item .icon {
+    margin-right: 0;
+  }
+
+  .meoing-playground-toolbar-slot {
+    position: absolute;
+    z-index: 24;
+    top: calc(100% + 6px);
+    right: 8px;
+    margin: 0;
+    padding: 3px;
+    background: var(--surface-elevated);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    box-shadow: 0 6px 18px rgb(0 0 0 / .2);
+  }
+
+  .meoing-playground .editor-scroller {
+    padding-top: 44px;
+  }
+}
+
 @media (max-width: 560px) {
   .question-settings-summary { grid-template-columns: 1fr; }
   .settings-section-heading { align-items: stretch; flex-direction: column; }
@@ -7905,7 +7940,8 @@ input[type="range"] {
 .meoing-playground-utilities > button,
 .meoing-playground-utilities .document-file-menu > button {
   display: inline-flex;
-  width: 34px;
+  width: auto;
+  min-width: 34px;
   height: 34px;
   flex: 0 0 auto;
   align-items: center;
@@ -7919,6 +7955,20 @@ input[type="range"] {
 }
 
 .meoing-playground button.toolbar-item.spaced { margin-right: 2px; }
+
+.meoing-playground .toolbar .block-controls {
+  min-width: 156px;
+  justify-content: flex-start;
+}
+
+.meoing-playground .toolbar .font-family {
+  min-width: 104px;
+  justify-content: flex-start;
+}
+
+.meoing-playground .toolbar .block-controls .dropdown-button-text {
+  width: 7em;
+}
 
 .meoing-playground button.toolbar-item:hover:not(:disabled),
 .meoing-playground button.toolbar-item.active,
@@ -7971,6 +8021,10 @@ input[type="range"] {
   mask-size: contain;
 }
 
+.meoing-playground .toolbar .toolbar-item .icon { margin-right: 8px; }
+.meoing-playground .toolbar .toolbar-item.color-picker .icon,
+.meoing-playground .toolbar .toolbar-item.spaced .icon.dropdown-more { margin-right: 0; }
+
 .meoing-playground .toolbar i.undo { -webkit-mask-image: url("./components/document-editor/playground/images/icons/arrow-counterclockwise.svg"); mask-image: url("./components/document-editor/playground/images/icons/arrow-counterclockwise.svg"); }
 .meoing-playground .toolbar i.redo { -webkit-mask-image: url("./components/document-editor/playground/images/icons/arrow-clockwise.svg"); mask-image: url("./components/document-editor/playground/images/icons/arrow-clockwise.svg"); }
 .meoing-playground .toolbar i.bold { -webkit-mask-image: url("./components/document-editor/playground/images/icons/type-bold.svg"); mask-image: url("./components/document-editor/playground/images/icons/type-bold.svg"); }
@@ -8002,12 +8056,16 @@ input[type="range"] {
 }
 
 .meoing-playground-utilities {
-  position: absolute;
-  z-index: 21;
-  top: 8px;
-  right: 9px;
   display: flex;
+  min-width: max-content;
+  flex: 0 0 auto;
   gap: 3px;
+}
+
+.meoing-playground-toolbar-slot {
+  display: flex;
+  min-width: 0;
+  margin-left: auto;
 }
 
 .meoing-playground .editor-container {
@@ -8126,9 +8184,318 @@ input[type="range"] {
 .link-editor .link-input,
 .link-editor .link-view { color: var(--text-primary); background: var(--surface-main); }
 
+/*
+ * Playground renders several controls through portals.  These rules are a
+ * source-compatible visual layer for only an active Meoing document editor:
+ * interaction, placement, and keyboard behaviour stay in the vendored
+ * Playground plugins rather than being reimplemented here.
+ */
+.meoing-playground .editor-scroller {
+  resize: none;
+  contain: layout paint;
+}
+
+.meoing-playground .editor,
+.meoing-playground .ContentEditable__root {
+  min-height: 0;
+}
+
+.meoing-playground .ContentEditable__root {
+  overflow-wrap: anywhere;
+}
+
+.meoing-playground .document-editor-table-scroll {
+  max-width: 100%;
+  scrollbar-gutter: stable;
+}
+
+.meoing-playground .document-editor-table {
+  width: max-content;
+  min-width: 100%;
+}
+
+.meoing-playground .toolbar i.paragraph { -webkit-mask-image: url("./components/document-editor/playground/images/icons/text-paragraph.svg"); mask-image: url("./components/document-editor/playground/images/icons/text-paragraph.svg"); }
+.meoing-playground .toolbar i.h1 { -webkit-mask-image: url("./components/document-editor/playground/images/icons/type-h1.svg"); mask-image: url("./components/document-editor/playground/images/icons/type-h1.svg"); }
+.meoing-playground .toolbar i.h2 { -webkit-mask-image: url("./components/document-editor/playground/images/icons/type-h2.svg"); mask-image: url("./components/document-editor/playground/images/icons/type-h2.svg"); }
+.meoing-playground .toolbar i.h3 { -webkit-mask-image: url("./components/document-editor/playground/images/icons/type-h3.svg"); mask-image: url("./components/document-editor/playground/images/icons/type-h3.svg"); }
+.meoing-playground .toolbar i.numbered-list { -webkit-mask-image: url("./components/document-editor/playground/images/icons/list-ol.svg"); mask-image: url("./components/document-editor/playground/images/icons/list-ol.svg"); }
+.meoing-playground .toolbar i.bullet-list { -webkit-mask-image: url("./components/document-editor/playground/images/icons/list-ul.svg"); mask-image: url("./components/document-editor/playground/images/icons/list-ul.svg"); }
+.meoing-playground .toolbar i.check-list { -webkit-mask-image: url("./components/document-editor/playground/images/icons/card-checklist.svg"); mask-image: url("./components/document-editor/playground/images/icons/card-checklist.svg"); }
+.meoing-playground .toolbar i.quote { -webkit-mask-image: url("./components/document-editor/playground/images/icons/chat-square-quote.svg"); mask-image: url("./components/document-editor/playground/images/icons/chat-square-quote.svg"); }
+.meoing-playground .toolbar i.left-align { -webkit-mask-image: url("./components/document-editor/playground/images/icons/text-left.svg"); mask-image: url("./components/document-editor/playground/images/icons/text-left.svg"); }
+.meoing-playground .toolbar i.center-align { -webkit-mask-image: url("./components/document-editor/playground/images/icons/text-center.svg"); mask-image: url("./components/document-editor/playground/images/icons/text-center.svg"); }
+.meoing-playground .toolbar i.right-align { -webkit-mask-image: url("./components/document-editor/playground/images/icons/text-right.svg"); mask-image: url("./components/document-editor/playground/images/icons/text-right.svg"); }
+.meoing-playground .toolbar i.justify-align { -webkit-mask-image: url("./components/document-editor/playground/images/icons/justify.svg"); mask-image: url("./components/document-editor/playground/images/icons/justify.svg"); }
+.meoing-playground .toolbar i.indent { -webkit-mask-image: url("./components/document-editor/playground/images/icons/indent.svg"); mask-image: url("./components/document-editor/playground/images/icons/indent.svg"); }
+.meoing-playground .toolbar i.outdent { -webkit-mask-image: url("./components/document-editor/playground/images/icons/outdent.svg"); mask-image: url("./components/document-editor/playground/images/icons/outdent.svg"); }
+.meoing-playground .toolbar i.font-family { -webkit-mask-image: url("./components/document-editor/playground/images/icons/font-family.svg"); mask-image: url("./components/document-editor/playground/images/icons/font-family.svg"); }
+.meoing-playground .toolbar i.dropdown-more { -webkit-mask-image: url("./components/document-editor/playground/images/icons/dropdown-more.svg"); mask-image: url("./components/document-editor/playground/images/icons/dropdown-more.svg"); }
+.meoing-playground .toolbar i.font-color,
+.meoing-playground .toolbar i.bg-color { background-color: transparent; background-position: center; background-repeat: no-repeat; background-size: contain; }
+.meoing-playground .toolbar i.font-color { background-image: url("./components/document-editor/playground/images/icons/font-color.svg"); }
+.meoing-playground .toolbar i.bg-color { background-image: url("./components/document-editor/playground/images/icons/bg-color.svg"); }
+
+/* The upstream toolbar uses both <i> and <span class="icon">. Keep their
+   masks in one active-editor scope so generic app icon styles cannot turn a
+   missing mask into a solid square. */
+body[data-meoing-playground-active="true"] .icon.paragraph { -webkit-mask-image: url("./components/document-editor/playground/images/icons/text-paragraph.svg"); mask-image: url("./components/document-editor/playground/images/icons/text-paragraph.svg"); }
+body[data-meoing-playground-active="true"] .icon.h1 { -webkit-mask-image: url("./components/document-editor/playground/images/icons/type-h1.svg"); mask-image: url("./components/document-editor/playground/images/icons/type-h1.svg"); }
+body[data-meoing-playground-active="true"] .icon.h2 { -webkit-mask-image: url("./components/document-editor/playground/images/icons/type-h2.svg"); mask-image: url("./components/document-editor/playground/images/icons/type-h2.svg"); }
+body[data-meoing-playground-active="true"] .icon.h3 { -webkit-mask-image: url("./components/document-editor/playground/images/icons/type-h3.svg"); mask-image: url("./components/document-editor/playground/images/icons/type-h3.svg"); }
+body[data-meoing-playground-active="true"] .icon.bullet-list,
+body[data-meoing-playground-active="true"] .icon.bullet { -webkit-mask-image: url("./components/document-editor/playground/images/icons/list-ul.svg"); mask-image: url("./components/document-editor/playground/images/icons/list-ul.svg"); }
+body[data-meoing-playground-active="true"] .icon.numbered-list,
+body[data-meoing-playground-active="true"] .icon.number { -webkit-mask-image: url("./components/document-editor/playground/images/icons/list-ol.svg"); mask-image: url("./components/document-editor/playground/images/icons/list-ol.svg"); }
+body[data-meoing-playground-active="true"] .icon.check-list,
+body[data-meoing-playground-active="true"] .icon.check { -webkit-mask-image: url("./components/document-editor/playground/images/icons/square-check.svg"); mask-image: url("./components/document-editor/playground/images/icons/square-check.svg"); }
+body[data-meoing-playground-active="true"] .icon.quote { -webkit-mask-image: url("./components/document-editor/playground/images/icons/chat-square-quote.svg"); mask-image: url("./components/document-editor/playground/images/icons/chat-square-quote.svg"); }
+body[data-meoing-playground-active="true"] .icon.table { -webkit-mask-image: url("./components/document-editor/playground/images/icons/table.svg"); mask-image: url("./components/document-editor/playground/images/icons/table.svg"); }
+body[data-meoing-playground-active="true"] .icon.font-family { -webkit-mask-image: url("./components/document-editor/playground/images/icons/font-family.svg"); mask-image: url("./components/document-editor/playground/images/icons/font-family.svg"); }
+body[data-meoing-playground-active="true"] .icon.dropdown-more { -webkit-mask-image: url("./components/document-editor/playground/images/icons/dropdown-more.svg"); mask-image: url("./components/document-editor/playground/images/icons/dropdown-more.svg"); }
+body[data-meoing-playground-active="true"] .icon.left-align,
+body[data-meoing-playground-active="true"] i.left-align { -webkit-mask-image: url("./components/document-editor/playground/images/icons/text-left.svg"); mask-image: url("./components/document-editor/playground/images/icons/text-left.svg"); }
+body[data-meoing-playground-active="true"] .icon.center-align,
+body[data-meoing-playground-active="true"] i.center-align { -webkit-mask-image: url("./components/document-editor/playground/images/icons/text-center.svg"); mask-image: url("./components/document-editor/playground/images/icons/text-center.svg"); }
+body[data-meoing-playground-active="true"] .icon.right-align,
+body[data-meoing-playground-active="true"] i.right-align { -webkit-mask-image: url("./components/document-editor/playground/images/icons/text-right.svg"); mask-image: url("./components/document-editor/playground/images/icons/text-right.svg"); }
+body[data-meoing-playground-active="true"] .icon.justify-align,
+body[data-meoing-playground-active="true"] i.justify-align { -webkit-mask-image: url("./components/document-editor/playground/images/icons/justify.svg"); mask-image: url("./components/document-editor/playground/images/icons/justify.svg"); }
+body[data-meoing-playground-active="true"] .icon.indent,
+body[data-meoing-playground-active="true"] i.indent { -webkit-mask-image: url("./components/document-editor/playground/images/icons/indent.svg"); mask-image: url("./components/document-editor/playground/images/icons/indent.svg"); }
+body[data-meoing-playground-active="true"] .icon.outdent,
+body[data-meoing-playground-active="true"] i.outdent { -webkit-mask-image: url("./components/document-editor/playground/images/icons/outdent.svg"); mask-image: url("./components/document-editor/playground/images/icons/outdent.svg"); }
+body[data-meoing-playground-active="true"] .toolbar i.chevron-down,
+body[data-meoing-playground-active="true"] .toolbar-item i.chevron-down { -webkit-mask-image: url("./components/document-editor/playground/images/icons/chevron-down.svg"); mask-image: url("./components/document-editor/playground/images/icons/chevron-down.svg"); }
+body[data-meoing-playground-active="true"] .toolbar .icon.font-color,
+body[data-meoing-playground-active="true"] .toolbar .icon.bg-color {
+  background-color: transparent;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+}
+body[data-meoing-playground-active="true"] .toolbar .icon.font-color { background-image: url("./components/document-editor/playground/images/icons/font-color.svg"); }
+body[data-meoing-playground-active="true"] .toolbar .icon.bg-color { background-image: url("./components/document-editor/playground/images/icons/bg-color.svg"); }
+
+body[data-meoing-playground-active="true"] .dropdown,
+body[data-meoing-playground-active="true"] .typeahead-popover,
+body[data-meoing-playground-active="true"] .link-editor {
+  box-sizing: border-box;
+  color: var(--text-primary);
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: 0 14px 32px rgb(0 0 0 / .34);
+}
+
+body[data-meoing-playground-active="true"] .dropdown {
+  position: fixed;
+  z-index: 1100;
+  max-height: min(60dvh, 520px);
+  overflow: auto;
+}
+
+body[data-meoing-playground-active="true"] .typeahead-popover {
+  z-index: 1110 !important;
+  max-width: min(320px, calc(100vw - 24px));
+}
+
+/* Lexical positions the slash-menu in this portal container. The menu itself
+ * is statically positioned, so its z-index cannot lift it over the editor. */
+body[data-meoing-playground-active="true"] > #typeahead-menu {
+  width: min(250px, calc(100vw - 24px)) !important;
+  z-index: 1110 !important;
+  pointer-events: auto;
+}
+
+body[data-meoing-playground-active="true"] .dropdown .item,
+body[data-meoing-playground-active="true"] .typeahead-popover li {
+  box-sizing: border-box;
+  min-width: 180px;
+  color: var(--text-primary);
+  background: transparent;
+}
+
+body[data-meoing-playground-active="true"] .dropdown .item:hover,
+body[data-meoing-playground-active="true"] .dropdown .item:focus-visible,
+body[data-meoing-playground-active="true"] .typeahead-popover li:hover,
+body[data-meoing-playground-active="true"] .typeahead-popover li.selected {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+body[data-meoing-playground-active="true"] .dropdown .item .icon,
+body[data-meoing-playground-active="true"] .typeahead-popover li .icon {
+  position: static;
+  flex: 0 0 auto;
+  margin: 0 9px 0 0;
+  background-color: currentColor;
+}
+
+body[data-meoing-playground-active="true"] .typeahead-popover .component-picker-search {
+  box-sizing: border-box;
+  color: var(--text-primary);
+  background: var(--surface-main);
+  border-color: var(--border);
+}
+
+body[data-meoing-playground-active="true"] .draggable-block-menu {
+  z-index: 1120;
+  padding: 3px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 20px rgb(0 0 0 / .22);
+}
+
+body[data-meoing-playground-active="true"] .draggable-block-menu .icon {
+  width: 18px;
+  height: 18px;
+  opacity: .85;
+  background-color: var(--text-secondary);
+  background-image: none;
+  -webkit-mask: url("./components/document-editor/playground/images/icons/draggable-block-menu.svg") center / contain no-repeat;
+  mask: url("./components/document-editor/playground/images/icons/draggable-block-menu.svg") center / contain no-repeat;
+}
+
+body[data-meoing-playground-active="true"] .draggable-block-menu .icon-plus {
+  background-color: var(--text-secondary);
+  -webkit-mask-image: url("./components/document-editor/playground/images/icons/plus.svg");
+  mask-image: url("./components/document-editor/playground/images/icons/plus.svg");
+}
+
+body[data-meoing-playground-active="true"] .draggable-block-menu .icon:hover {
+  background-color: var(--accent-readable);
+}
+
+body[data-meoing-playground-active="true"] .draggable-block-target-line {
+  z-index: 1120;
+  background: var(--accent-readable);
+}
+
+body[data-meoing-playground-active="true"] .link-editor {
+  z-index: 1110;
+  max-width: min(400px, calc(100vw - 24px));
+}
+
+body[data-meoing-playground-active="true"] .link-editor .link-input,
+body[data-meoing-playground-active="true"] .link-editor .link-view {
+  color: var(--text-primary);
+  background: var(--surface-main);
+  border: 1px solid var(--border);
+}
+
+body[data-meoing-playground-active="true"] .TableCellResizer__resizer {
+  z-index: 1115;
+  touch-action: none;
+}
+
+body[data-meoing-playground-active="true"] .table-cell-action-button-container {
+  z-index: 40;
+}
+
+body[data-meoing-playground-active="true"] .Modal__overlay {
+  z-index: 1200;
+  padding: 24px;
+  background: rgb(5 8 18 / .58);
+}
+
+body[data-meoing-playground-active="true"] .Modal__modal {
+  box-sizing: border-box;
+  width: min(680px, calc(100vw - 32px));
+  max-height: calc(100dvh - 48px);
+  min-width: 0;
+  overflow: auto;
+  color: var(--text-primary);
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 24px 60px rgb(0 0 0 / .46);
+}
+
+body[data-meoing-playground-active="true"] .Modal__title {
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+
+body[data-meoing-playground-active="true"] .Modal__closeButton {
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+}
+
+body[data-meoing-playground-active="true"] .Modal__modal :focus-visible {
+  outline: 2px solid var(--accent-readable);
+  outline-offset: 2px;
+}
+
+body[data-meoing-playground-active="true"] .floating-text-format-popup,
+body[data-meoing-playground-active="true"] .ruby-editor,
+body[data-meoing-playground-active="true"] .code-action-menu-container {
+  z-index: 1110;
+  color: var(--text-primary);
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 10px 24px rgb(0 0 0 / .3);
+}
+
+body[data-meoing-playground-active="true"] .floating-text-format-popup button.popup-item,
+body[data-meoing-playground-active="true"] .code-action-menu-container button.menu-item {
+  color: var(--text-secondary);
+}
+
+body[data-meoing-playground-active="true"] .floating-text-format-popup .popup-item:hover:not(:disabled),
+body[data-meoing-playground-active="true"] .floating-text-format-popup .popup-item.active,
+body[data-meoing-playground-active="true"] .code-action-menu-container button.menu-item:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+body[data-meoing-playground-active="true"] .floating-text-format-popup i.format,
+body[data-meoing-playground-active="true"] .floating-text-format-popup i.chevron-down {
+  background-color: var(--text-secondary);
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+
+body[data-meoing-playground-active="true"] .floating-text-format-popup i.bold { -webkit-mask-image: url("./components/document-editor/playground/images/icons/type-bold.svg"); mask-image: url("./components/document-editor/playground/images/icons/type-bold.svg"); }
+body[data-meoing-playground-active="true"] .floating-text-format-popup i.italic { -webkit-mask-image: url("./components/document-editor/playground/images/icons/type-italic.svg"); mask-image: url("./components/document-editor/playground/images/icons/type-italic.svg"); }
+body[data-meoing-playground-active="true"] .floating-text-format-popup i.underline { -webkit-mask-image: url("./components/document-editor/playground/images/icons/type-underline.svg"); mask-image: url("./components/document-editor/playground/images/icons/type-underline.svg"); }
+body[data-meoing-playground-active="true"] .floating-text-format-popup i.strikethrough { -webkit-mask-image: url("./components/document-editor/playground/images/icons/type-strikethrough.svg"); mask-image: url("./components/document-editor/playground/images/icons/type-strikethrough.svg"); }
+body[data-meoing-playground-active="true"] .floating-text-format-popup i.code { -webkit-mask-image: url("./components/document-editor/playground/images/icons/code.svg"); mask-image: url("./components/document-editor/playground/images/icons/code.svg"); }
+body[data-meoing-playground-active="true"] .floating-text-format-popup i.link { -webkit-mask-image: url("./components/document-editor/playground/images/icons/link.svg"); mask-image: url("./components/document-editor/playground/images/icons/link.svg"); }
+body[data-meoing-playground-active="true"] .floating-text-format-popup i.chevron-down,
+body[data-meoing-playground-active="true"] .table-cell-action-button i.chevron-down { -webkit-mask-image: url("./components/document-editor/playground/images/icons/chevron-down.svg"); mask-image: url("./components/document-editor/playground/images/icons/chevron-down.svg"); }
+
+body[data-meoing-playground-active="true"] .ruby-editor .ruby-base-text,
+body[data-meoing-playground-active="true"] .ruby-editor .ruby-input {
+  color: var(--text-primary);
+}
+
+body[data-meoing-playground-active="true"] .ruby-editor .ruby-input {
+  background: var(--surface-main);
+  border: 1px solid var(--border);
+}
+
+body[data-meoing-playground-active="true"] .table-cell-action-button-container {
+  z-index: 50;
+}
+
+body[data-meoing-playground-active="true"] .table-cell-action-button {
+  color: var(--text-secondary);
+  background: var(--surface-elevated);
+  border: 1px solid var(--border);
+}
+
+body[data-meoing-playground-active="true"] .table-cell-action-button:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
 @media (max-width: 820px) {
   .meoing-playground .ContentEditable__root { padding: 24px 18px 90px; }
   .meoing-playground .ContentEditable__placeholder { top: 24px; left: 18px; }
-  .meoing-playground-utilities { right: 6px; }
-  .meoing-playground .toolbar { padding-right: 86px; }
+  .meoing-playground .toolbar { padding-right: 6px; }
 }

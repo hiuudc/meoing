@@ -16,6 +16,7 @@ import {
 } from "./inserts";
 
 interface InsertMenuButtonProps {
+  customOnly?: boolean;
   language: string;
   onClose: () => void;
   onToggle: (trigger: HTMLButtonElement) => void;
@@ -72,12 +73,16 @@ function CommandList({
 }
 
 export function InsertMenu({
+  customOnly = false,
   language,
   onClose,
   onToggle,
   open,
 }: InsertMenuButtonProps) {
   const [editor] = useLexicalComposerContext();
+  const commands = customOnly
+    ? INSERT_COMMANDS.filter((command) => command.id !== "horizontal-rule" && command.id !== "table")
+    : INSERT_COMMANDS;
 
   return (
     <div className="document-insert-menu">
@@ -90,12 +95,12 @@ export function InsertMenu({
         onClick={(event) => onToggle(event.currentTarget)}
       >
         <Plus size={17} />
-        <span>Insert</span>
+        <span>{customOnly ? "More blocks" : "Insert"}</span>
       </button>
       {open ? (
         <div className="document-toolbar-popover document-insert-popover">
           <CommandList
-            commands={INSERT_COMMANDS}
+            commands={commands}
             onSelect={(command) => {
               executeInsertCommand(editor, command.id, language);
               onClose();

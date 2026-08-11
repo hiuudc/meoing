@@ -7,7 +7,11 @@ import {
   type EditorThemeClasses,
   type InitialEditorStateType,
 } from "lexical";
-import { FocusManagerExtension, RovingTabIndexExtension } from "@lexical/a11y";
+import {
+  FocusManagerExtension,
+  FocusTrapExtension,
+  RovingTabIndexExtension,
+} from "@lexical/a11y";
 import { CodeExtension } from "@lexical/code-core";
 import { HorizontalRuleExtension, TabIndentationExtension } from "@lexical/extension";
 import { HashtagExtension } from "@lexical/hashtag";
@@ -32,7 +36,7 @@ import { RubyNode } from "./nodes/RubyNode";
 import { sanitizeLinkUrl } from "./editorUtils";
 
 export const documentEditorTheme: EditorThemeClasses = {
-  code: "document-editor-code",
+  code: "document-editor-code PlaygroundEditorTheme__code",
   codeHighlight: {
     atrule: "token-atrule",
     attr: "token-attr",
@@ -94,7 +98,7 @@ export const documentEditorTheme: EditorThemeClasses = {
   tableCellHeader: "document-editor-table-cell-header",
   tableCellSelected: "document-editor-table-cell-selected",
   tableCellResizer: "document-editor-table-resizer",
-  tableScrollableWrapper: "document-editor-table-scroll",
+  tableScrollableWrapper: "document-editor-table-scroll PlaygroundEditorTheme__tableScrollableWrapper",
   tableSelected: "document-editor-table-selected",
   tableSelection: "document-editor-table-selection",
   text: {
@@ -148,6 +152,7 @@ export function createDocumentEditorExtension(
     },
     dependencies: [
       RichTextExtension,
+      FocusTrapExtension,
       RovingTabIndexExtension,
       FocusManagerExtension,
       configExtension(HistoryExtension, { maxDepth: 100 }),

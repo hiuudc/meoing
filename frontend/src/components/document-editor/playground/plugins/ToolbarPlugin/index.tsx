@@ -548,12 +548,14 @@ export default function ToolbarPlugin({
   setActiveEditor,
   setIsLinkEditMode,
   setIsRubyEditMode,
+  utilitySlot,
 }: {
   editor: LexicalEditor;
   activeEditor: LexicalEditor;
   setActiveEditor: Dispatch<LexicalEditor>;
   setIsLinkEditMode: Dispatch<boolean>;
   setIsRubyEditMode: Dispatch<boolean>;
+  utilitySlot?: JSX.Element;
 }): JSX.Element {
   const [selectedElementKey, setSelectedElementKey] = useState<NodeKey | null>(
     null,
@@ -1290,6 +1292,7 @@ export default function ToolbarPlugin({
         isRTL={toolbarState.isRTL}
       />
       <Divider />
+      {utilitySlot ? <div className="meoing-playground-toolbar-slot">{utilitySlot}</div> : null}
       <button
         type="button"
         className="toolbar-item spaced"
