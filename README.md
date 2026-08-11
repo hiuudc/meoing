@@ -52,6 +52,9 @@ used by the local Worker; it never connects the API as the `postgres` role.
 On Windows, it automatically stops only an existing Meoing local frontend or
 API Worker detected on ports `5173` and `8787`; a different process on either
 port remains protected and produces an explicit error.
+If Wrangler loses its local proxy connection, the launcher restarts the API
+Worker up to three times in one minute while keeping Vite running. Repeated
+crashes still stop the command and leave the Worker error visible for diagnosis.
 
 `npm run dev:local` never resets local data. Apply new migrations explicitly
 when needed with `npm --prefix backend run db:reset`.

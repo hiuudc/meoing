@@ -5,6 +5,9 @@ import { fileURLToPath } from "node:url";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const minimumNodeMajor = 22;
+export const WORKER_RESTART_DELAY_MS = 750;
+export const WORKER_RESTART_LIMIT = 3;
+export const WORKER_RESTART_WINDOW_MS = 60_000;
 const localHyperdriveConnection =
   "postgresql://meoing_api_login:meoing-local-api-password@127.0.0.1:54322/postgres";
 const localDevVariableExpectations = {
@@ -177,6 +180,19 @@ export function workerEnvironment(environment = process.env) {
     ...environment,
     CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: localHyperdriveConnection,
   };
+}
+
+export function nextWorkerRestart(restartTimes, now = Date.now()) {
+  const recentRestarts = restartTimes.filter((timestamp) => now - timestamp < WORKER_RESTART_WINDOW_MS);
+  if (recentRestarts.length >= WORKER_RESTART_LIMIT) {
+    return { restart: false, restartTimes: recentRestarts };
+  }
+
+  return { restart: true, restartTimes: [...recentRestarts, now] };
+}
+
+export function isLauncherStopSignal(result) {
+  return result?.label === "SIGINT" || result?.label === "SIGTERM";
 }
 
 function runCommand(label, args, environment = process.env) {
@@ -384,6 +400,10 @@ function waitForExit(child, label) {
   });
 }
 
+function wait(delayMs) {
+  return new Promise((resolvePromise) => setTimeout(resolvePromise, delayMs));
+}
+
 function terminateProcessTree(child) {
   if (child.exitCode !== null || child.pid === undefined) {
     return Promise.resolve();
@@ -433,17 +453,21 @@ export async function startLocalDevelopment() {
   const processes = [
     {
       label: "API Worker",
-      child: startDevProcess(
-        "API Worker",
-        ["--prefix", "backend", "run", "dev"],
-        workerEnvironment(),
-      ),
+      args: ["--prefix", "backend", "run", "dev"],
+      environment: workerEnvironment(),
+      child: null,
     },
     {
       label: "Frontend",
-      child: startDevProcess("Frontend", ["--prefix", "frontend", "run", "dev"], process.env),
+      args: ["--prefix", "frontend", "run", "dev"],
+      environment: process.env,
+      child: null,
     },
   ];
+
+  for (const process of processes) {
+    process.child = startDevProcess(process.label, process.args, process.environment);
+  }
 
   console.log("\nMeoing local development is starting at http://127.0.0.1:5173");
   console.log("Press Ctrl+C once to stop the API Worker and frontend.\n");
@@ -453,16 +477,41 @@ export async function startLocalDevelopment() {
       process.once(signal, () => resolvePromise({ label: signal, signal }));
     }
   });
-  const childExit = Promise.race(processes.map(({ child, label }) => waitForExit(child, label)));
-  const result = await Promise.race([stopSignal, childExit]);
+  const frontendExit = waitForExit(processes[1].child, processes[1].label);
+  let workerExit = waitForExit(processes[0].child, processes[0].label);
+  let workerRestartTimes = [];
 
-  await stopDevProcesses(processes);
+  while (true) {
+    const result = await Promise.race([stopSignal, frontendExit, workerExit]);
 
-  if (result.signal) {
-    return;
+    if (isLauncherStopSignal(result)) {
+      await stopDevProcesses(processes);
+      return;
+    }
+
+    if (result.label !== "API Worker") {
+      await stopDevProcesses(processes);
+      throw new Error(`${result.label} stopped unexpectedly with ${result.signal ?? `code ${result.code}`}.`);
+    }
+
+    const restart = nextWorkerRestart(workerRestartTimes);
+    workerRestartTimes = restart.restartTimes;
+    if (!restart.restart) {
+      await stopDevProcesses(processes);
+      throw new Error(
+        `API Worker stopped unexpectedly ${WORKER_RESTART_LIMIT} times within one minute. `
+        + "Check the Worker output above for a persistent configuration or runtime error.",
+      );
+    }
+
+    console.warn(
+      `API Worker stopped unexpectedly with ${result.signal ?? `code ${result.code}`}. `
+      + `Restarting it in ${WORKER_RESTART_DELAY_MS}ms while the frontend stays available...`,
+    );
+    await wait(WORKER_RESTART_DELAY_MS);
+    processes[0].child = startDevProcess(processes[0].label, processes[0].args, processes[0].environment);
+    workerExit = waitForExit(processes[0].child, processes[0].label);
   }
-
-  throw new Error(`${result.label} stopped unexpectedly with ${result.signal ?? `code ${result.code}`}.`);
 }
 
 const invokedDirectly = process.argv[1]

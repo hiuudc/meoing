@@ -7,15 +7,19 @@ import test from "node:test";
 import {
   developmentProcessRoot,
   isKnownLocalServerResponse,
+  isLauncherStopSignal,
   isMeoingDevRunner,
   npmExecutable,
   npmInvocation,
+  nextWorkerRestart,
   parseNodeMajor,
   parseWindowsListeningPids,
   validateLocalDevVariables,
   validatePreflight,
   windowsProcessQuery,
   workerEnvironment,
+  WORKER_RESTART_LIMIT,
+  WORKER_RESTART_WINDOW_MS,
 } from "./dev-local.mjs";
 
 test("requires Node 22 or newer", () => {
@@ -90,6 +94,27 @@ test("keeps an explicit Hyperdrive connection and supplies a local default", () 
     defaulted.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE,
     "postgresql://meoing_api_login:meoing-local-api-password@127.0.0.1:54322/postgres",
   );
+});
+
+test("restarts a transient Worker failure but stops after repeated crashes", () => {
+  let restartTimes = [];
+  for (let attempt = 0; attempt < WORKER_RESTART_LIMIT; attempt += 1) {
+    const result = nextWorkerRestart(restartTimes, 1_000 + attempt);
+    assert.equal(result.restart, true);
+    restartTimes = result.restartTimes;
+  }
+
+  assert.deepEqual(nextWorkerRestart(restartTimes, 1_000 + WORKER_RESTART_LIMIT), {
+    restart: false,
+    restartTimes,
+  });
+  assert.equal(nextWorkerRestart(restartTimes, 1_000 + WORKER_RESTART_WINDOW_MS).restart, true);
+});
+
+test("treats Ctrl+C and SIGTERM as a clean launcher shutdown", () => {
+  assert.equal(isLauncherStopSignal({ label: "SIGINT", signal: "SIGINT" }), true);
+  assert.equal(isLauncherStopSignal({ label: "SIGTERM", signal: "SIGTERM" }), true);
+  assert.equal(isLauncherStopSignal({ label: "API Worker", signal: "SIGTERM" }), false);
 });
 
 test("uses the platform appropriate npm executable", () => {
