@@ -8384,6 +8384,88 @@ body[data-meoing-playground-active="true"] .link-editor .link-view {
   border: 1px solid var(--border);
 }
 
+body[data-meoing-playground-active="true"] .link-editor .link-input {
+  display: block;
+  width: calc(100% - 75px);
+  box-sizing: border-box;
+  margin: 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  outline: 0;
+  font: inherit;
+}
+
+body[data-meoing-playground-active="true"] .link-editor .link-view {
+  display: block;
+  width: calc(100% - 24px);
+  box-sizing: border-box;
+  min-height: 38px;
+  margin: 8px 12px;
+  padding: 8px 76px 8px 12px;
+  border-radius: 8px;
+  font: inherit;
+}
+
+body[data-meoing-playground-active="true"] .link-editor .link-view a {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  color: var(--accent-readable);
+  text-decoration: underline;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body[data-meoing-playground-active="true"] .link-editor div.link-edit,
+body[data-meoing-playground-active="true"] .link-editor div.link-trash,
+body[data-meoing-playground-active="true"] .link-editor div.link-cancel,
+body[data-meoing-playground-active="true"] .link-editor div.link-confirm {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 35px;
+  cursor: pointer;
+  background-color: var(--text-secondary);
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: 16px;
+  mask-size: 16px;
+}
+
+body[data-meoing-playground-active="true"] .link-editor div.link-edit {
+  right: 38px;
+  -webkit-mask-image: url("./components/document-editor/playground/images/icons/pencil-fill.svg");
+  mask-image: url("./components/document-editor/playground/images/icons/pencil-fill.svg");
+}
+
+body[data-meoing-playground-active="true"] .link-editor div.link-trash {
+  right: 4px;
+  -webkit-mask-image: url("./components/document-editor/playground/images/icons/trash.svg");
+  mask-image: url("./components/document-editor/playground/images/icons/trash.svg");
+}
+
+body[data-meoing-playground-active="true"] .link-editor div.link-cancel {
+  right: 36px;
+  -webkit-mask-image: url("./components/document-editor/playground/images/icons/close.svg");
+  mask-image: url("./components/document-editor/playground/images/icons/close.svg");
+}
+
+body[data-meoing-playground-active="true"] .link-editor div.link-confirm {
+  right: 2px;
+  background-color: var(--accent-readable);
+  -webkit-mask-image: url("./components/document-editor/playground/images/icons/success-alt.svg");
+  mask-image: url("./components/document-editor/playground/images/icons/success-alt.svg");
+}
+
+body[data-meoing-playground-active="true"] .link-editor div.link-edit:hover,
+body[data-meoing-playground-active="true"] .link-editor div.link-trash:hover,
+body[data-meoing-playground-active="true"] .link-editor div.link-cancel:hover,
+body[data-meoing-playground-active="true"] .link-editor div.link-confirm:hover {
+  filter: brightness(1.25);
+}
+
 body[data-meoing-playground-active="true"] .TableCellResizer__resizer {
   z-index: 1115;
   touch-action: none;
