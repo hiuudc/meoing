@@ -7,6 +7,7 @@ import {
   type EditorThemeClasses,
   type InitialEditorStateType,
 } from "lexical";
+import { FocusManagerExtension, RovingTabIndexExtension } from "@lexical/a11y";
 import { CodeExtension } from "@lexical/code-core";
 import { HorizontalRuleExtension, TabIndentationExtension } from "@lexical/extension";
 import { HashtagExtension } from "@lexical/hashtag";
@@ -147,6 +148,8 @@ export function createDocumentEditorExtension(
     },
     dependencies: [
       RichTextExtension,
+      RovingTabIndexExtension,
+      FocusManagerExtension,
       configExtension(HistoryExtension, { maxDepth: 100 }),
       ListExtension,
       CheckListExtension,

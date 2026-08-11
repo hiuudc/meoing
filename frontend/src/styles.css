@@ -7862,3 +7862,273 @@ input[type="range"] {
     break-after: page;
   }
 }
+
+/* Vendored Lexical Playground adapter. Interaction code stays upstream; these
+   rules only map its generic demo classes onto the Meoing document surface. */
+.document-editor .meoing-playground {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--text-primary);
+  background: var(--bg-main);
+}
+
+.meoing-playground .toolbar {
+  position: relative;
+  z-index: 20;
+  display: flex;
+  min-height: 50px;
+  flex: 0 0 auto;
+  align-items: center;
+  padding: 7px 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--surface-panel) 94%, var(--surface-main));
+  border-bottom: 1px solid var(--border);
+  scrollbar-width: thin;
+}
+
+.meoing-playground .toolbar .divider {
+  width: 1px;
+  height: 25px;
+  flex: 0 0 auto;
+  margin: 0 5px;
+  background: var(--border);
+}
+
+.meoing-playground button.toolbar-item,
+.meoing-playground-utilities > button,
+.meoing-playground-utilities .document-file-menu > button {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.meoing-playground button.toolbar-item.spaced { margin-right: 2px; }
+
+.meoing-playground button.toolbar-item:hover:not(:disabled),
+.meoing-playground button.toolbar-item.active,
+.meoing-playground-utilities > button:hover,
+.meoing-playground-utilities > button.is-active,
+.meoing-playground-utilities .document-file-menu > button:hover,
+.meoing-playground-utilities .document-file-menu > button.is-active {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.meoing-playground button.toolbar-item:disabled {
+  cursor: not-allowed;
+  opacity: .4;
+}
+
+.meoing-playground button.toolbar-item:focus-visible,
+.meoing-playground-utilities > button:focus-visible,
+.meoing-playground-utilities .document-file-menu > button:focus-visible,
+.dropdown button:focus-visible,
+.typeahead-popover input:focus-visible {
+  outline: 2px solid var(--accent-readable);
+  outline-offset: 2px;
+}
+
+.meoing-playground .toolbar .toolbar-item .text {
+  max-width: 138px;
+  overflow: hidden;
+  color: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meoing-playground .toolbar .toolbar-item .icon,
+.meoing-playground .toolbar i.format,
+.meoing-playground .toolbar i.chevron-down,
+.meoing-playground .toolbar .icon {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  background-color: currentColor;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+
+.meoing-playground .toolbar i.undo { -webkit-mask-image: url("./components/document-editor/playground/images/icons/arrow-counterclockwise.svg"); mask-image: url("./components/document-editor/playground/images/icons/arrow-counterclockwise.svg"); }
+.meoing-playground .toolbar i.redo { -webkit-mask-image: url("./components/document-editor/playground/images/icons/arrow-clockwise.svg"); mask-image: url("./components/document-editor/playground/images/icons/arrow-clockwise.svg"); }
+.meoing-playground .toolbar i.bold { -webkit-mask-image: url("./components/document-editor/playground/images/icons/type-bold.svg"); mask-image: url("./components/document-editor/playground/images/icons/type-bold.svg"); }
+.meoing-playground .toolbar i.italic { -webkit-mask-image: url("./components/document-editor/playground/images/icons/type-italic.svg"); mask-image: url("./components/document-editor/playground/images/icons/type-italic.svg"); }
+.meoing-playground .toolbar i.underline { -webkit-mask-image: url("./components/document-editor/playground/images/icons/type-underline.svg"); mask-image: url("./components/document-editor/playground/images/icons/type-underline.svg"); }
+.meoing-playground .toolbar i.code { -webkit-mask-image: url("./components/document-editor/playground/images/icons/code.svg"); mask-image: url("./components/document-editor/playground/images/icons/code.svg"); }
+.meoing-playground .toolbar i.link { -webkit-mask-image: url("./components/document-editor/playground/images/icons/link.svg"); mask-image: url("./components/document-editor/playground/images/icons/link.svg"); }
+.meoing-playground .toolbar i.plus { -webkit-mask-image: url("./components/document-editor/playground/images/icons/plus.svg"); mask-image: url("./components/document-editor/playground/images/icons/plus.svg"); }
+.meoing-playground .toolbar i.horizontal-rule { -webkit-mask-image: url("./components/document-editor/playground/images/icons/horizontal-rule.svg"); mask-image: url("./components/document-editor/playground/images/icons/horizontal-rule.svg"); }
+.meoing-playground .toolbar i.clear { -webkit-mask-image: url("./components/document-editor/playground/images/icons/trash.svg"); mask-image: url("./components/document-editor/playground/images/icons/trash.svg"); }
+.meoing-playground .toolbar i.lowercase { -webkit-mask-image: url("./components/document-editor/playground/images/icons/type-lowercase.svg"); mask-image: url("./components/document-editor/playground/images/icons/type-lowercase.svg"); }
+.meoing-playground .toolbar i.uppercase { -webkit-mask-image: url("./components/document-editor/playground/images/icons/type-uppercase.svg"); mask-image: url("./components/document-editor/playground/images/icons/type-uppercase.svg"); }
+.meoing-playground .toolbar i.capitalize { -webkit-mask-image: url("./components/document-editor/playground/images/icons/type-capitalize.svg"); mask-image: url("./components/document-editor/playground/images/icons/type-capitalize.svg"); }
+.meoing-playground .toolbar i.strikethrough { -webkit-mask-image: url("./components/document-editor/playground/images/icons/type-strikethrough.svg"); mask-image: url("./components/document-editor/playground/images/icons/type-strikethrough.svg"); }
+.meoing-playground .toolbar i.subscript { -webkit-mask-image: url("./components/document-editor/playground/images/icons/type-subscript.svg"); mask-image: url("./components/document-editor/playground/images/icons/type-subscript.svg"); }
+.meoing-playground .toolbar i.superscript { -webkit-mask-image: url("./components/document-editor/playground/images/icons/type-superscript.svg"); mask-image: url("./components/document-editor/playground/images/icons/type-superscript.svg"); }
+
+.meoing-playground .toolbar .font-size-input {
+  width: 42px;
+  height: 30px;
+  padding: 0 4px;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  text-align: center;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+
+.meoing-playground-utilities {
+  position: absolute;
+  z-index: 21;
+  top: 8px;
+  right: 9px;
+  display: flex;
+  gap: 3px;
+}
+
+.meoing-playground .editor-container {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.meoing-playground .editor-scroller {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  overflow-x: auto;
+  overflow-y: scroll;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scroll-padding: 90px 0 70px;
+}
+
+.meoing-playground .editor {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  min-height: 100%;
+}
+
+.meoing-playground .ContentEditable__root {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 100%;
+  padding: 34px max(38px, calc((100% - 960px) / 2)) 120px;
+  color: var(--text-primary);
+  font-size: 17px;
+  line-height: 1.7;
+  outline: none;
+}
+
+.meoing-playground .ContentEditable__root > * {
+  box-sizing: border-box;
+  max-width: 100%;
+}
+
+.meoing-playground .ContentEditable__placeholder {
+  position: absolute;
+  top: 34px;
+  left: max(38px, calc((100% - 960px) / 2));
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.meoing-playground[data-read-only] .ContentEditable__root { cursor: default; }
+
+.dropdown,
+.typeahead-popover,
+.link-editor {
+  color: var(--text-primary);
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: 0 14px 32px rgb(0 0 0 / .34);
+}
+
+.dropdown { z-index: 100; }
+
+.dropdown .item,
+.typeahead-popover li {
+  display: flex;
+  min-width: 150px;
+  align-items: center;
+  gap: 8px;
+  margin: 3px;
+  padding: 8px 10px;
+  color: var(--text-primary);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.dropdown .item:hover,
+.typeahead-popover li:hover,
+.typeahead-popover li.selected { background: var(--bg-hover); }
+.dropdown .item .shortcut { margin-left: auto; color: var(--text-muted); font-size: 11px; }
+.dropdown .item .icon { width: 17px; height: 17px; background-color: currentColor; }
+.typeahead-popover ul { max-height: 260px; margin: 0; padding: 4px; overflow-y: auto; list-style: none; }
+.typeahead-popover .component-picker-search { width: 100%; padding: 9px; color: var(--text-primary); background: var(--surface-main); border: 0; border-bottom: 1px solid var(--border); }
+
+.document-editor .draggable-block-menu {
+  z-index: 22;
+  padding: 3px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 20px rgb(0 0 0 / .22);
+}
+
+.document-editor .draggable-block-menu .icon { opacity: .85; background-color: var(--text-secondary); }
+.document-editor .draggable-block-menu .icon-plus { width: 18px; height: 18px; background-color: transparent; }
+.document-editor .draggable-block-target-line { height: 3px; background: var(--accent-readable); }
+
+.document-editor .floating-add-indicator,
+.document-editor .floating-filter-indicator,
+.document-editor .floating-drag-indicator {
+  background-color: var(--surface-elevated);
+  border-color: var(--border-strong);
+}
+
+.link-editor { z-index: 30; min-width: 260px; }
+.link-editor .link-input,
+.link-editor .link-view { color: var(--text-primary); background: var(--surface-main); }
+
+@media (max-width: 820px) {
+  .meoing-playground .ContentEditable__root { padding: 24px 18px 90px; }
+  .meoing-playground .ContentEditable__placeholder { top: 24px; left: 18px; }
+  .meoing-playground-utilities { right: 6px; }
+  .meoing-playground .toolbar { padding-right: 86px; }
+}
