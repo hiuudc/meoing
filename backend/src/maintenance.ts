@@ -74,6 +74,9 @@ export async function runMaintenance(
     batchSize: 500,
     now: new Date().toISOString(),
   });
+  const aiOperationCleanup = repository.cleanupAiOperations
+    ? await repository.cleanupAiOperations({ batchSize: 500 })
+    : {};
   const r2Keys = stringArray(result.r2Keys);
   const authUserIds = stringArray(result.authUserIds);
   const dueCollectionIds = stringArray(result.dueCollectionIds);
@@ -108,6 +111,7 @@ export async function runMaintenance(
     event: "maintenance_complete",
     expiredRateLimitBuckets: numberValue(result.expiredRateLimitBuckets),
     expiredUploads: numberValue(result.expiredUploads),
+    expiredAiOperations: numberValue(aiOperationCleanup.expiredAiOperations),
     expiredUsernameReservations: numberValue(result.expiredUsernameReservations),
     purgedAssets: numberValue(finalized.purgedAssets),
     r2DeleteCount: r2Keys.length,
@@ -143,5 +147,5 @@ export async function runMaintenance(
     }
   }
 
-  return { ...result, finalized, observation };
+  return { ...result, aiOperationCleanup, finalized, observation };
 }

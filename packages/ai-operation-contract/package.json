@@ -1,0 +1,10 @@
+{
+  "name": "@meoing/ai-operation-contract",
+  "version": "1.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": ["src"],
+  "sideEffects": false
+}

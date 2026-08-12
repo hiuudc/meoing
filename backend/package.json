@@ -36,6 +36,7 @@
     "types": "wrangler types --config wrangler.api.jsonc --env-file .dev.vars.example --env-interface ApiEnv worker-configuration.d.ts && wrangler types --config wrangler.maintenance.jsonc --env-file .dev.vars.maintenance.example --env-interface MaintenanceEnv --include-runtime=false worker-maintenance-configuration.d.ts && wrangler types --config wrangler.cost-guard.jsonc --env-file .dev.vars.cost-guard.example --env-interface CostGuardEnv --include-runtime=false worker-cost-guard-configuration.d.ts"
   },
   "dependencies": {
+    "@meoing/ai-operation-contract": "file:../packages/ai-operation-contract",
     "@hono/zod-openapi": "1.5.1",
     "aws4fetch": "1.0.20",
     "hono": "4.12.32",

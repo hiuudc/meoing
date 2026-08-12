@@ -608,7 +608,7 @@ describe("lesson schema", () => {
   });
 });
 
-describe("direct ChatGPT evaluation schema", () => {
+describe("direct AI evaluation schema", () => {
   it("accepts a strict bounded evaluation and rejects extra fields", () => {
     const evaluation = {
       status: "partial",

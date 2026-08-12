@@ -393,10 +393,10 @@ describe("account-wide singleton controller topology", () => {
     expect(rawConfig.env.staging.vars.APP_ENV).toBe("staging");
     expect(rawConfig.env.production.vars.APP_ENV).toBe("production");
     expect(rawConfig.env.staging.account_id).toBe(
-      "29e80074abc5eb106165d2349db7ca56",
+      "00000000000000000000000000000000",
     );
     expect(rawConfig.env.production.account_id).toBe(
-      "29e80074abc5eb106165d2349db7ca56",
+      "00000000000000000000000000000000",
     );
     expect(rawConfig.env.staging.account_id).toBe(
       rawConfig.env.staging.vars.CLOUDFLARE_ACCOUNT_ID,
@@ -674,7 +674,7 @@ function resumeEnvironment(stateBucket: R2Bucket): CostGuardEnv {
       },
     } as SendEmail,
     APP_ENV: "staging",
-    CLOUDFLARE_ACCOUNT_ID: "29e80074abc5eb106165d2349db7ca56",
+    CLOUDFLARE_ACCOUNT_ID: "00000000000000000000000000000000",
     BILLING_CYCLE_ANCHOR_DAY_UTC: "30",
     WORKERS_REQUEST_GUARD_LIMIT: "1350000",
     WORKERS_INCLUDED_CPU_MS: "30000000",
@@ -1012,7 +1012,7 @@ describe("notification and STOP idempotency", () => {
       STATE: stateBucket,
       ALERT_EMAIL: email,
       APP_ENV: "staging",
-      CLOUDFLARE_ACCOUNT_ID: "29e80074abc5eb106165d2349db7ca56",
+      CLOUDFLARE_ACCOUNT_ID: "00000000000000000000000000000000",
       BILLING_CYCLE_ANCHOR_DAY_UTC: "30",
       WORKERS_REQUEST_GUARD_LIMIT: "1350000",
       WORKERS_INCLUDED_CPU_MS: "30000000",

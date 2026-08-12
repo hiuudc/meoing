@@ -765,7 +765,7 @@ export function LessonPlayer({
       } else if (currentQuestion.type === "characterTracing") {
         setError("Character tracing could not be graded locally.");
       } else if (!onEvaluate) {
-        setError("This question needs ChatGPT evaluation and is unavailable in local-only mode.");
+        setError("This question needs AI evaluation and is unavailable in local-only mode.");
       } else {
         evaluationSourceRef.current = "client_extension";
         setEvaluation(await onEvaluate(currentQuestion, candidateAnswer, speaking, currentSlotId));
@@ -871,7 +871,7 @@ export function LessonPlayer({
     setCoachError("");
     try {
       const reply = (await onAskCoach(currentQuestion, evaluation, message, history)).trim();
-      if (!reply) throw new Error("ChatGPT returned an empty coaching reply.");
+      if (!reply) throw new Error("The AI provider returned an empty coaching reply.");
       setChatByQuestion((current) => ({
         ...current,
         [chatKey]: [
@@ -1253,22 +1253,22 @@ export function LessonPlayer({
 
             <section className="lesson-coach-chat" aria-labelledby="lesson-coach-title">
               <div className="lesson-coach-heading">
-                <div><MessageCircle size={17} /><strong id="lesson-coach-title">Discuss this answer with ChatGPT</strong></div>
+                <div><MessageCircle size={17} /><strong id="lesson-coach-title">Discuss this answer with the AI provider</strong></div>
                 <span>Session only</span>
               </div>
               {currentMessages.length ? (
                 <div className="lesson-coach-messages" aria-live="polite">
                   {currentMessages.map((message, index) => (
-                    <p className={`is-${message.role}`} key={`${message.role}-${index}`}><span>{message.role === "user" ? "You" : "ChatGPT"}</span>{message.content}</p>
+                    <p className={`is-${message.role}`} key={`${message.role}-${index}`}><span>{message.role === "user" ? "You" : "AI provider"}</span>{message.content}</p>
                   ))}
                 </div>
               ) : null}
-              {!coachingAvailable ? <p className="lesson-coach-status">Meoi Bridge is offline. Connect the extension to discuss this answer.</p> : null}
+              {!coachingAvailable ? <p className="lesson-coach-status">The selected AI provider is unavailable for coaching.</p> : null}
               {coachError ? (
                 <p className="lesson-coach-error" role="alert">{coachError} <button type="button" onClick={() => void sendCoachMessage()}>Retry</button></p>
               ) : null}
               <form onSubmit={(event) => void sendCoachMessage(event)}>
-                <label className="sr-only" htmlFor={`coach-${currentQuestion.id}`}>Message ChatGPT about this answer</label>
+                <label className="sr-only" htmlFor={`coach-${currentQuestion.id}`}>Message the AI provider about this answer</label>
                 <textarea
                   id={`coach-${currentQuestion.id}`}
                   rows={2}

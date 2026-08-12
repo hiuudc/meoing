@@ -5,6 +5,7 @@ import type { DatabaseIdentity } from "./repository";
 
 export interface MaintenanceRepository {
   cleanup(input: JsonObject): Promise<JsonObject>;
+  cleanupAiOperations?(input: JsonObject): Promise<JsonObject>;
   finalize(input: JsonObject): Promise<JsonObject>;
   observe?(): Promise<JsonObject>;
 }
@@ -19,7 +20,7 @@ export class PostgresMaintenanceRepository implements MaintenanceRepository {
   }
 
   async #call(
-    functionName: "maintenance_cleanup" | "maintenance_finalize" | "maintenance_observe",
+    functionName: "maintenance_cleanup" | "maintenance_finalize" | "maintenance_observe" | "maintenance_ai_operation_cleanup",
     input: JsonObject,
   ) {
     const client = new Client({
@@ -57,6 +58,10 @@ export class PostgresMaintenanceRepository implements MaintenanceRepository {
 
   cleanup(input: JsonObject): Promise<JsonObject> {
     return this.#call("maintenance_cleanup", input);
+  }
+
+  cleanupAiOperations(input: JsonObject): Promise<JsonObject> {
+    return this.#call("maintenance_ai_operation_cleanup", input);
   }
 
   finalize(input: JsonObject): Promise<JsonObject> {

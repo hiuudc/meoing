@@ -517,7 +517,7 @@ describe("fullscreen lesson player", () => {
     expect(document.querySelector(".lesson-feedback-tray.is-correct")).not.toBeNull();
   });
 
-  it("grades a Translation word bank locally but keeps keyboard input on ChatGPT evaluation", async () => {
+  it("grades a Translation word bank locally but keeps keyboard input on AI evaluation", async () => {
     const translation: LessonQuestion = {
       id: "translation-input-mode",
       type: "translation",
@@ -576,7 +576,7 @@ describe("fullscreen lesson player", () => {
     expect(document.querySelector(".lesson-feedback-tray.is-correct")).not.toBeNull();
   });
 
-  it("grades a Short Answer word bank locally without calling ChatGPT", async () => {
+  it("grades a Short Answer word bank locally without calling the AI provider", async () => {
     const shortAnswer: LessonQuestion = {
       id: "short-answer-input-mode",
       type: "shortAnswer",

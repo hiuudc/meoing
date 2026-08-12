@@ -18,7 +18,14 @@ import {
   Upload,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  AI_OPERATION_CONTRACT_VERSION,
+  type AiOperationKind,
+  type AiOperationResult,
+  type AiProvider,
+} from "@meoing/ai-operation-contract";
 import type { ApiClient, ApiSuccess } from "../api/client";
+import { readSettings, settingsValues, upsertSetting } from "../api/settings";
 import {
   buildProgressBatch,
   discardProgressOutboxIssues,
@@ -48,11 +55,6 @@ import type {
   SpeakingSubmission,
 } from "../learning/types";
 import {
-  ExtensionBridgeError,
-  extensionBridge,
-  type ExtensionCompatibility,
-} from "../integration/extensionBridge";
-import {
   createLearningSession,
   putSessionLesson,
   putSessionProgress,
@@ -67,31 +69,11 @@ import {
   type LocalLearningCache,
   type StoredLessonEntry,
 } from "../integration/learningStorage";
-import {
-  createPendingLearningOperationStore,
-  pendingLearningOperationForUnit,
-  putPendingLearningOperation,
-  removePendingLearningOperation,
-  type PendingLearningOperation,
-  type PendingLearningOperationStore,
-} from "../integration/pendingLearningOperations";
-import {
-  buildOperationPrompt,
-  MEOI_EXTENSION_MIN_VERSION,
-  MEOI_EXTENSION_PROTOCOL_VERSION,
-  MEOI_TEXT_FIELD_MAX_BYTES,
-  MEOI_TRANSCRIPT_MAX_BYTES,
-  type ChatOperationKind,
-  type ChatOperationResult,
-  type ChatOperationState,
-  type OperationExpectation,
-} from "../integration/protocol";
-import { buildUnitContext } from "../integration/unitContext";
-import { runWithUnitChatRecovery } from "../integration/unitChatRecovery";
 import { isAllowedTranscriptFile, youtubeNoCookieEmbedUrl } from "../integration/youtube";
 import type { Collection, Document, StudyItem, Unit } from "../types";
 import { cleanUnitName } from "../unit";
 import { WorkspaceModeSwitch, type WorkspaceMode } from "./WorkspaceModeSwitch";
+import { AnimatedModal } from "./AnimatedModal";
 
 interface LearningWorkspaceProps {
   collection: Collection;
@@ -109,20 +91,22 @@ interface LearningWorkspaceProps {
   canManageCollectionProfile?: boolean;
 }
 
-interface RetryAttempt {
-  fingerprint: string;
-  operationId: string;
-  failed: boolean;
-}
+type ChatOperationKind = AiOperationKind;
+type ChatOperationResult = AiOperationResult;
 
-interface SendOperationOptions {
-  beforeDispatch?: (operationId: string) => void | Promise<void>;
-  retainFailedResult?: boolean;
+interface OperationExpectation {
+  unitId: string;
+  targetLanguage: string;
+  sourceLanguage: string;
+  level: LearningProfile["level"];
+  questionCount: number;
+  speaking: boolean;
+  allowedFormats: string[];
 }
 
 type LearningView = "choose" | "new" | "lesson";
-type BridgeGateState = ExtensionCompatibility | { state: "checking" };
-type PendingLessonState = "idle" | "recovering" | "save_failed" | "failed" | "missing";
+type ProviderGateState = "checking" | "ready" | "consent_required" | "unavailable";
+type PendingLessonState = "idle" | "failed";
 
 interface UnitLearningView {
   unitId?: string;
@@ -140,7 +124,9 @@ interface SavedLessonChooserProps {
   canDeleteContent: boolean;
 }
 
-const INITIAL_STATUS = "Meoing syncs validated lessons and progress through its secure API. ChatGPT requests still use this unit's linked conversation.";
+const MEOI_TEXT_FIELD_MAX_BYTES = 16 * 1024;
+const MEOI_TRANSCRIPT_MAX_BYTES = 500 * 1024;
+const INITIAL_STATUS = "Meoing sends authorized learning operations through its secure API.";
 const LESSON_DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
   year: "numeric",
   month: "short",
@@ -179,39 +165,17 @@ interface WireProgressHistory {
 
 type PendingEvaluationAcks = Map<string, string[]>;
 
-interface ProgressPersistenceDependencies {
-  enqueue: typeof enqueueProgressBatch;
-  acknowledge: (operationId: string) => Promise<boolean>;
-}
-
 export async function persistProgressBeforeEvaluationAck(
   userId: string,
   progressId: string,
   payload: ProgressBatchPayload,
   attempts: AttemptRecord[],
   pendingAcks: PendingEvaluationAcks,
-  dependencies: ProgressPersistenceDependencies = {
-    enqueue: enqueueProgressBatch,
-    acknowledge: (operationId) => extensionBridge.acknowledgeOperation(operationId),
-  },
+  enqueue: typeof enqueueProgressBatch = enqueueProgressBatch,
 ): Promise<number> {
-  await dependencies.enqueue(userId, progressId, payload);
-  let failedAcks = 0;
-  const attemptedOperationIds = new Set<string>();
-  for (const attempt of attempts) {
-    const queue = pendingAcks.get(attempt.questionId);
-    const operationId = queue?.[0];
-    if (!queue?.length || !operationId || attemptedOperationIds.has(operationId)) continue;
-    attemptedOperationIds.add(operationId);
-    const acknowledged = await dependencies.acknowledge(operationId).catch(() => false);
-    if (!acknowledged) {
-      failedAcks += 1;
-      continue;
-    }
-    queue.shift();
-    if (!queue.length) pendingAcks.delete(attempt.questionId);
-  }
-  return failedAcks;
+  await enqueue(userId, progressId, payload);
+  for (const attempt of attempts) pendingAcks.delete(attempt.questionId);
+  return 0;
 }
 
 async function fetchCursorPages<T>(
@@ -304,30 +268,12 @@ function formatLessonDate(value: string): string {
   return LESSON_DATE_FORMATTER.format(new Date(value));
 }
 
-function operationPhaseStatus(state: ChatOperationState): string {
-  switch (state.phase) {
-    case "queued": return state.error?.code === "CHATGPT_LIMIT_REACHED" ? "The queue is paused because ChatGPT reached its quota." : "Request queued in Meoi Bridge...";
-    case "opening_chat": return "Opening this unit's ChatGPT conversation...";
-    case "sending": return "Sending the request to ChatGPT...";
-    case "awaiting_response": return "Waiting for ChatGPT's complete response...";
-    case "repairing_response": return `Repairing the response format ${state.repairAttempt}/3...`;
-    case "completed": return "ChatGPT returned a validated result. Loading it in Meoi...";
-    case "failed": return state.error?.message ?? "Meoi Bridge could not read a valid ChatGPT result.";
-  }
-}
-
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
 
 export function publicLearningError(error: unknown): string {
   const message = error instanceof Error ? error.message : "";
-  if (
-    (error instanceof ExtensionBridgeError && error.code === "EXTENSION_NOT_READY")
-    || /receiving end does not exist|extension context invalidated/i.test(message)
-  ) {
-    return "Meoi Bridge disconnected after an extension reload. Reload this page, then check the answer again. Your current answer is still here.";
-  }
   return message || "This action could not be completed right now.";
 }
 
@@ -386,8 +332,8 @@ function SavedLessonChooser({
                 <div>
                   <dt>Level</dt>
                   <dd>
-                    {entry.lesson.sourceLanguage ? `${entry.lesson.sourceLanguage} → ` : ""}
-                    {entry.lesson.targetLanguage} · {entry.lesson.level}
+                    {entry.lesson.sourceLanguage ? `${entry.lesson.sourceLanguage} to ` : ""}
+                    {entry.lesson.targetLanguage} - {entry.lesson.level}
                   </dd>
                 </div>
                 <div><dt>Questions</dt><dd>{entry.lesson.questions.length}</dd></div>
@@ -437,7 +383,9 @@ export function LearningWorkspace({
     view: "new",
     playerRunId: "inactive",
   });
-  const [bridgeGate, setBridgeGate] = useState<BridgeGateState>({ state: "checking" });
+  const [provider, setProvider] = useState<AiProvider>("api");
+  const [providerGate, setProviderGate] = useState<ProviderGateState>("checking");
+  const [consentOpen, setConsentOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState(INITIAL_STATUS);
   const [error, setError] = useState("");
@@ -449,10 +397,7 @@ export function LearningWorkspace({
   const [sourceRequest, setSourceRequest] = useState("");
   const [pendingLessonState, setPendingLessonState] = useState<PendingLessonState>("idle");
   const activeAbortRef = useRef<AbortController | null>(null);
-  const recoveryAbortRef = useRef<AbortController | null>(null);
-  const retryAttemptsRef = useRef<Partial<Record<ChatOperationKind, RetryAttempt>>>({});
   const learningCacheRef = useRef(learningCache);
-  const pendingOperationsRef = useRef<PendingLearningOperationStore>(createPendingLearningOperationStore());
   const pendingEvaluationAcksRef = useRef<PendingEvaluationAcks>(new Map());
   const progressSessionIdRef = useRef<string | null>(null);
   const learningScrollRef = useRef<HTMLDivElement>(null);
@@ -464,20 +409,16 @@ export function LearningWorkspace({
     : defaultLearningView(unit?.id, learningCache);
   const playerRunId = unitView.unitId === unit?.id ? unitView.playerRunId : "inactive";
   const embedUrl = youtubeUrl ? youtubeNoCookieEmbedUrl(youtubeUrl) : null;
-  const currentProgress = lesson ? session.progressByLesson[lesson.id] : undefined;
-  const extensionConnected = bridgeGate.state === "ready";
+  const providerReady = providerGate === "ready";
 
   useEffect(() => () => {
     activeAbortRef.current?.abort();
-    recoveryAbortRef.current?.abort();
   }, []);
 
   useEffect(() => {
     activeAbortRef.current?.abort();
-    recoveryAbortRef.current?.abort();
     progressSessionIdRef.current = null;
     learningScrollRef.current?.scrollTo({ top: 0 });
-    retryAttemptsRef.current = {};
     pendingEvaluationAcksRef.current.clear();
     setBusy(false);
     setStatus(INITIAL_STATUS);
@@ -492,12 +433,24 @@ export function LearningWorkspace({
 
   useEffect(() => {
     let active = true;
-    setBridgeGate({ state: "checking" });
-    void extensionBridge.detectCompatibility(unit?.id).then((compatibility) => {
-      if (active) setBridgeGate(compatibility);
+    if (!api) {
+      setProviderGate("unavailable");
+      return () => { active = false; };
+    }
+    setProviderGate("checking");
+    void readSettings(api, { scope: "user" }).then((records) => {
+      if (!active) return;
+      const values = settingsValues(records);
+      const selected = values.aiProvider === "bridge" ? "bridge" : "api";
+      const consent = values.aiConsent;
+      const granted = Boolean(consent && typeof consent === "object" && "grantedAt" in consent);
+      setProvider(selected);
+      setProviderGate(selected === "api" ? (granted ? "ready" : "consent_required") : "unavailable");
+    }).catch(() => {
+      if (active) setProviderGate("unavailable");
     });
     return () => { active = false; };
-  }, [unit?.id]);
+  }, [api, userId]);
 
   useEffect(() => {
     if (!api || !unit) {
@@ -594,58 +547,80 @@ export function LearningWorkspace({
     return () => window.removeEventListener("online", flush);
   }, [api, userId]);
 
-  useEffect(() => {
-    if (bridgeGate.state !== "ready" || !unit) return;
-    const controller = new AbortController();
-    recoveryAbortRef.current?.abort();
-    recoveryAbortRef.current = controller;
-    void (async () => {
-      const remembered = pendingLearningOperationForUnit(
-        pendingOperationsRef.current,
-        unit.id,
-      );
-      if (remembered) {
-        await recoverPendingLesson(remembered, controller.signal);
-        return;
-      }
-      try {
-        const operationState = await extensionBridge.getLatestUnitOperation(unit.id, "create_lesson");
-        if (controller.signal.aborted || !operationState) return;
-        if (operationState.unitId !== unit.id) {
-          throw new Error("Meoi Bridge returned a pending lesson operation for a different unit.");
-        }
-        const recovered: PendingLearningOperation = {
-          operationId: operationState.operationId,
-          unitId: operationState.unitId,
-          kind: "create_lesson",
-          createdAt: operationState.updatedAt,
-        };
-        rememberPendingOperation(recovered);
-        await recoverPendingLesson(recovered, controller.signal, operationState);
-      } catch (caught) {
-        if (isAbortError(caught) || controller.signal.aborted) return;
-        setError(publicError(caught));
-        setStatus("Meoi could not inspect the extension for a pending lesson operation.");
-      }
-    })();
-    return () => {
-      controller.abort();
-      if (recoveryAbortRef.current === controller) recoveryAbortRef.current = null;
-    };
-  }, [bridgeGate.state, unit?.id]);
-
   async function refreshConnection() {
+    if (!api) {
+      setProviderGate("unavailable");
+      return;
+    }
     setBusy(true);
     setError("");
-    setBridgeGate({ state: "checking" });
+    setProviderGate("checking");
     try {
-      const compatibility = await extensionBridge.detectCompatibility(unit?.id);
-      setBridgeGate(compatibility);
-      if (compatibility.state === "ready") {
-        setStatus("Meoi Bridge v8 is ready. ChatGPT Web performs AI work; Meoing’s Worker stores only validated results.");
+      const records = await readSettings(api, { scope: "user" });
+      const values = settingsValues(records);
+      const selected = values.aiProvider === "bridge" ? "bridge" : "api";
+      const consent = values.aiConsent;
+      const granted = Boolean(consent && typeof consent === "object" && "grantedAt" in consent);
+      setProvider(selected);
+      const nextGate = selected === "api" ? (granted ? "ready" : "consent_required") : "unavailable";
+      setProviderGate(nextGate);
+      if (nextGate === "ready") {
+        setStatus("The OpenAI API provider is ready. Meoing stores only validated learning results.");
       }
     } catch (caught) {
-      setBridgeGate({ state: "unavailable" });
+      setProviderGate("unavailable");
+      setError(publicError(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function chooseProvider(nextProvider: AiProvider) {
+    if (!api) return;
+    setBusy(true);
+    setError("");
+    try {
+      await upsertSetting(api, { scope: "user" }, "aiProvider", nextProvider);
+      setProvider(nextProvider);
+      setProviderGate(nextProvider === "api" ? "consent_required" : "unavailable");
+      setStatus(nextProvider === "api"
+        ? "Review the API data disclosure before continuing."
+        : "No compatible Bridge is available in this public build. Choose API to continue.");
+    } catch (caught) {
+      setError(publicError(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function grantApiConsent() {
+    if (!api) return;
+    setBusy(true);
+    try {
+      await upsertSetting(api, { scope: "user" }, "aiConsent", {
+        version: AI_OPERATION_CONTRACT_VERSION,
+        grantedAt: new Date().toISOString(),
+      });
+      await upsertSetting(api, { scope: "user" }, "aiProvider", "api");
+      setProvider("api");
+      setProviderGate("ready");
+      setConsentOpen(false);
+      setStatus("OpenAI API is enabled for learning operations.");
+    } catch (caught) {
+      setError(publicError(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function withdrawApiConsent() {
+    if (!api) return;
+    setBusy(true);
+    try {
+      await upsertSetting(api, { scope: "user" }, "aiConsent", { version: AI_OPERATION_CONTRACT_VERSION });
+      setProviderGate("consent_required");
+      setStatus("API consent was withdrawn. AI operations are blocked immediately.");
+    } catch (caught) {
       setError(publicError(caught));
     } finally {
       setBusy(false);
@@ -658,29 +633,6 @@ export function LearningWorkspace({
     return true;
   }
 
-  function pendingOperationForUnit(unitId: string): PendingLearningOperation | undefined {
-    return pendingLearningOperationForUnit(pendingOperationsRef.current, unitId);
-  }
-
-  function rememberPendingOperation(operation: PendingLearningOperation): boolean {
-    pendingOperationsRef.current = putPendingLearningOperation(pendingOperationsRef.current, operation);
-    return true;
-  }
-
-  function forgetPendingOperation(operation: PendingLearningOperation): boolean {
-    pendingOperationsRef.current = removePendingLearningOperation(
-      pendingOperationsRef.current,
-      operation.unitId,
-      operation.operationId,
-    );
-    return true;
-  }
-
-  async function acknowledgeAndForgetPending(operation: PendingLearningOperation): Promise<boolean> {
-    const acknowledged = await extensionBridge.acknowledgeOperation(operation.operationId).catch(() => false);
-    return acknowledged && forgetPendingOperation(operation);
-  }
-
   function showPendingFailure(message: string) {
     setPendingLessonState("failed");
     setError(message);
@@ -688,46 +640,42 @@ export function LearningWorkspace({
     setStatus("The lesson result failed validation. Create the lesson again after reviewing the error.");
   }
 
-  async function acceptPendingLessonResult(
-    operation: PendingLearningOperation,
-    result: ChatOperationResult,
-  ): Promise<boolean> {
-    if (!unit || operation.unitId !== unit.id) return false;
+  async function acceptLessonResult(result: ChatOperationResult): Promise<boolean> {
+    if (!unit) return false;
     if (result.outcome === "failed") {
-      showPendingFailure(result.error?.message ?? "ChatGPT could not create a valid lesson.");
+      showPendingFailure(result.error?.message ?? "OpenAI API could not create a valid lesson.");
       return false;
     }
     if (result.outcome === "needs_source") {
-      const request = result.result?.sourceRequest ?? "Add a transcript or notes to continue.";
+      const request = typeof result.result?.sourceRequest === "string"
+        ? result.result.sourceRequest
+        : "Add a transcript or notes to continue.";
       setSourceRequest(request);
       setStatus(request);
       setPendingLessonState("idle");
-      if (!await acknowledgeAndForgetPending(operation)) {
-        setWarning("The source request was received, but Meoi Bridge could not clear its retained result yet.");
-      }
       return true;
     }
     if (result.outcome !== "completed" || !result.result?.lesson) {
-      showPendingFailure("ChatGPT did not return a valid lesson.");
+      showPendingFailure("OpenAI API did not return a valid lesson.");
       return false;
     }
 
     let preparedLesson: StoredLessonEntry["lesson"];
     try {
       const parsedLesson = parseLesson(result.result.lesson);
-      if (parsedLesson.unitId !== operation.unitId) {
+      if (parsedLesson.unitId !== unit.id) {
         throw new Error("The returned lesson does not match the unit that requested it.");
       }
       preparedLesson = decorateLessonPresentation(parsedLesson, collection.questionSettings, profile);
     } catch (caught) {
-      showPendingFailure(`Meoi Bridge returned a lesson that this page could not validate: ${publicError(caught)}`);
+      showPendingFailure(`AI provider returned a lesson that this page could not validate: ${publicError(caught)}`);
       return false;
     }
 
     if (!api) {
-      setPendingLessonState("save_failed");
-      setError("The lesson is ready in Meoi Bridge, but the secure API is unavailable.");
-      setWarning("The Bridge result was kept. Reconnect to the API, then retry saving.");
+      setPendingLessonState("failed");
+      setError("The lesson is ready in AI provider, but the secure API is unavailable.");
+      setWarning("Reconnect to the API, then retry saving the lesson.");
       setStatus("Lesson received but not acknowledged because cloud saving failed.");
       return false;
     }
@@ -742,7 +690,7 @@ export function LearningWorkspace({
         title: preparedLesson.title,
         languageCode: unit.languageCode ?? preparedLesson.targetLanguage,
         payload: preparedLesson,
-      }, operation.operationId);
+      }, result.operationId);
       preparedLesson = saved.data.payload
         ? lessonFromWire(saved.data)
         : {
@@ -753,78 +701,18 @@ export function LearningWorkspace({
             revision: saved.data.revision,
           };
     } catch (caught) {
-      setPendingLessonState("save_failed");
-      setError(`The lesson is ready in Meoi Bridge, but the API could not save it: ${publicError(caught)}`);
-      setWarning("The Bridge result remains unacknowledged so you can retry safely.");
+      setPendingLessonState("failed");
+      setError(`The lesson is ready in AI provider, but the API could not save it: ${publicError(caught)}`);
+      setWarning("The validated result remains available so you can retry safely.");
       setStatus("Lesson received but cloud saving failed.");
       return false;
     }
 
     commitLearningCache(putStoredLesson(learningCacheRef.current, preparedLesson));
-    await startLesson(preparedLesson, "Lesson received from ChatGPT and synced to Meoing.");
+    await startLesson(preparedLesson, "Lesson received from OpenAI API and synced to Meoing.");
     setPendingLessonState("idle");
-    if (!await acknowledgeAndForgetPending(operation)) {
-      setWarning("The lesson is synced, but Meoi Bridge could not clear its retained result in this tab.");
-    }
     return true;
   }
-
-  async function recoverPendingLesson(
-    operation: PendingLearningOperation,
-    signal?: AbortSignal,
-    initialState?: ChatOperationState,
-  ): Promise<void> {
-    if (!unit || operation.unitId !== unit.id) return;
-    setBusy(true);
-    setError("");
-    setWarning("");
-    setPendingLessonState("recovering");
-    setStatus("Reconnecting to the pending lesson operation in Meoi Bridge...");
-    try {
-      let state = initialState ?? await extensionBridge.getOperationState(operation.operationId);
-      if (signal?.aborted) throw signal.reason ?? new DOMException("Operation aborted", "AbortError");
-      if (state.operationId !== operation.operationId || state.unitId !== operation.unitId) {
-        throw new Error("Meoi Bridge returned a different pending lesson operation.");
-      }
-      if (state.phase === "failed") {
-        showPendingFailure(state.error?.message ?? "Meoi Bridge could not create a valid lesson.");
-        return;
-      }
-      if (state.phase !== "completed") {
-        state = await extensionBridge.waitForOperation(operation.operationId, {
-          signal,
-          onState: (nextState) => setStatus(operationPhaseStatus(nextState)),
-        });
-      }
-      if (!state.result) throw new Error("The extension completed without a ChatGPT result.");
-      await acceptPendingLessonResult(operation, state.result);
-    } catch (caught) {
-      if (isAbortError(caught)) return;
-      if (caught instanceof ExtensionBridgeError && caught.code === "OPERATION_STATE_NOT_FOUND") {
-        forgetPendingOperation(operation);
-        setPendingLessonState("missing");
-        setError("Meoi Bridge was reloaded or updated and no longer has this lesson operation. Create the lesson again.");
-        setStatus("The pending operation is no longer available in the extension.");
-        return;
-      }
-      if (caught instanceof ExtensionBridgeError && caught.state?.phase === "failed") {
-        showPendingFailure(caught.state.error?.message ?? caught.message);
-        return;
-      }
-      setError(publicError(caught));
-      setStatus("Meoi could not reconnect to the pending lesson operation.");
-    } finally {
-      if (!signal?.aborted) setBusy(false);
-    }
-  }
-
-  async function discardFailedPendingOperation(operation: PendingLearningOperation): Promise<void> {
-    await extensionBridge.acknowledgeOperation(operation.operationId).catch(() => false);
-    forgetPendingOperation(operation);
-    delete retryAttemptsRef.current.create_lesson;
-    setPendingLessonState("idle");
-  }
-
   function resetLessonPanels() {
     setError("");
     setWarning("");
@@ -874,7 +762,7 @@ export function LearningWorkspace({
     setTranscript("");
     setSourceRequest("");
     resetLessonPanels();
-    setStatus("Describe the lesson you want, then send it to this unit's linked ChatGPT conversation.");
+    setStatus("Describe the lesson you want, then send it to this unit's linked OpenAI API conversation.");
   }
 
   function openSavedLessons() {
@@ -885,7 +773,7 @@ export function LearningWorkspace({
   }
 
   function reviewStoredLesson(entry: StoredLessonEntry) {
-    void startLesson(entry.lesson, `Reviewing “${entry.lesson.title}” from question one. Progress will sync as a new session.`);
+    void startLesson(entry.lesson, `Reviewing "${entry.lesson.title}" from question one. Progress will sync as a new session.`);
   }
 
   async function deleteStoredLesson(entry: StoredLessonEntry) {
@@ -922,13 +810,6 @@ export function LearningWorkspace({
     setStatus(`Deleted lesson "${entry.lesson.title}".`);
   }
 
-  function currentUnitContext() {
-    if (!unit) throw new Error("Select a unit first.");
-    const summary = session.unitSummaries[unit.id];
-    const mostRecentProgress = currentProgress ?? savedLessons.find((entry) => entry.progress)?.progress;
-    return buildUnitContext(collection, unit, documents, studyItems, profile, mostRecentProgress, summary?.commonErrors ?? []);
-  }
-
   function currentExpectation(): OperationExpectation {
     if (!unit) throw new Error("Select a unit first.");
     const targetLanguage = profile.targetLanguage.trim();
@@ -949,61 +830,22 @@ export function LearningWorkspace({
   async function sendOperation(
     kind: ChatOperationKind,
     input: unknown,
-    operationOptions: SendOperationOptions = {},
   ): Promise<ChatOperationResult> {
     if (!unit) throw new Error("Select a unit first.");
-    if (bridgeGate.state !== "ready") throw new Error("Meoi Bridge v8 is required before Learn can run.");
-    const expectation = currentExpectation();
-    const fingerprint = JSON.stringify({ unitId: unit.id, kind, expectation, input });
-    const previous = retryAttemptsRef.current[kind];
-    const retrying = Boolean(previous?.failed && previous.fingerprint === fingerprint);
-    const operationId = retrying && previous ? previous.operationId : crypto.randomUUID();
-    const prompt = buildOperationPrompt({ operationId, kind, expectation, input });
-    await operationOptions.beforeDispatch?.(operationId);
-    retryAttemptsRef.current[kind] = { fingerprint, operationId, failed: false };
-
-    activeAbortRef.current?.abort();
-    const controller = new AbortController();
-    activeAbortRef.current = controller;
-    try {
-      const options = { signal: controller.signal, onState: (state: ChatOperationState) => setStatus(operationPhaseStatus(state)) };
-      const state: ChatOperationState = await runWithUnitChatRecovery(
-        () => retrying
-          ? extensionBridge.retryAndWait(operationId, options)
-          : extensionBridge.dispatchAndWait({ unitId: unit.id, operationId, kind, prompt, expectation }, options),
-        async () => {
-          setStatus("The saved ChatGPT conversation is unavailable. Starting a new unit chat and retrying once...");
-          await extensionBridge.resetUnitChat(unit.id);
-          return extensionBridge.retryAndWait(operationId, options);
-        },
-      );
-      setBridgeGate((current) => current.state === "ready" ? current : {
-        state: "ready",
-        version: MEOI_EXTENSION_PROTOCOL_VERSION,
-        integration: {
-          installed: true,
-          extensionVersion: MEOI_EXTENSION_MIN_VERSION,
-          pausedForQuota: false,
-          queueLength: 0,
-        },
-      });
-      delete retryAttemptsRef.current[kind];
-      if (!state.result) throw new Error("The extension completed without a ChatGPT result.");
-      if (state.result.outcome === "failed") {
-        if (!operationOptions.retainFailedResult) {
-          await extensionBridge.acknowledgeOperation(operationId).catch(() => false);
-          throw new Error(state.result.error?.message ?? "ChatGPT could not complete this request.");
-        }
-      }
-      return state.result;
-    } catch (caught) {
-      if (!isAbortError(caught) && caught instanceof ExtensionBridgeError && caught.state?.phase === "failed") {
-        retryAttemptsRef.current[kind] = { fingerprint, operationId, failed: true };
-      }
-      throw caught;
-    } finally {
-      if (activeAbortRef.current === controller) activeAbortRef.current = null;
-    }
+    if (!api || provider !== "api") throw new Error("Choose the API provider before running Learn.");
+    if (providerGate === "consent_required") throw new Error("Consent is required before sending learning data to the API.");
+    if (!providerReady) throw new Error("The API provider is unavailable.");
+    const operationId = crypto.randomUUID();
+    setStatus(kind === "create_lesson" ? "Creating lesson with the API..." : "Requesting learning feedback from the API...");
+    const response = await api.post<ChatOperationResult>("/v1/ai/operations", {
+      contractVersion: AI_OPERATION_CONTRACT_VERSION,
+      operationId,
+      kind,
+      collectionId: collection.id,
+      unitId: unit.id,
+      input: input && typeof input === "object" && !Array.isArray(input) ? input : {},
+    }, operationId);
+    return response.data;
   }
 
   async function createLesson() {
@@ -1020,71 +862,30 @@ export function LearningWorkspace({
       setError("Enter a valid YouTube URL.");
       return;
     }
-    if (textByteLength(customRequest) > MEOI_TEXT_FIELD_MAX_BYTES) {
-      setError("The lesson request must be 16 KiB or smaller.");
+    if (textByteLength(customRequest) > MEOI_TEXT_FIELD_MAX_BYTES || textByteLength(transcript) > MEOI_TRANSCRIPT_MAX_BYTES) {
+      setError("Lesson request or transcript is too large.");
       return;
     }
-    if (textByteLength(transcript) > MEOI_TRANSCRIPT_MAX_BYTES) {
-      setError("The transcript or notes must be 500 KiB or smaller.");
-      return;
-    }
-
-    const existingPending = pendingOperationForUnit(unit.id);
-    if (existingPending && pendingLessonState !== "failed") {
-      await recoverPendingLesson(existingPending);
-      return;
-    }
-
     setBusy(true);
     setError("");
     setWarning("");
     setSourceRequest("");
-    let pendingOperation: PendingLearningOperation | undefined;
     try {
-      if (existingPending) await discardFailedPendingOperation(existingPending);
       const result = await sendOperation("create_lesson", {
-        context: currentUnitContext(),
+        expectation: currentExpectation(),
         request: {
-          unitId: unit.id,
           customRequest: customRequest.trim() || unit.instructionOverride?.trim() || "Create a varied lesson from this unit's learning material.",
           youtubeUrl: youtubeUrl.trim() || undefined,
           transcript: transcript.trim() || undefined,
         },
-      }, {
-        retainFailedResult: true,
-        beforeDispatch: (operationId) => {
-          pendingOperation = {
-            operationId,
-            unitId: unit.id,
-            kind: "create_lesson",
-            createdAt: new Date().toISOString(),
-          };
-          if (!rememberPendingOperation(pendingOperation)) {
-            pendingOperation = undefined;
-            throw new Error("The page could not retain the pending lesson operation. Nothing was sent.");
-          }
-          setPendingLessonState("recovering");
-        },
       });
-      const recorded = pendingOperation ?? pendingOperationForUnit(unit.id);
-      if (!recorded || recorded.operationId !== result.operationId) {
-        throw new Error("Meoi lost the pending operation metadata before it could save the lesson.");
-      }
-      await acceptPendingLessonResult(recorded, result);
+      await acceptLessonResult(result);
     } catch (caught) {
-      if (!isAbortError(caught)) {
-        if (caught instanceof ExtensionBridgeError && caught.state?.phase === "failed") {
-          showPendingFailure(caught.state.error?.message ?? caught.message);
-        } else {
-          setError(publicError(caught));
-          if (pendingOperation) {
-            setStatus("The lesson operation remains recorded and Meoi will reconnect to it.");
-          }
-        }
-      }
+      if (!isAbortError(caught)) setError(publicError(caught));
     } finally {
       setBusy(false);
     }
+    return;
   }
 
   async function evaluateAnswer(
@@ -1099,30 +900,22 @@ export function LearningWorkspace({
     let result: ChatOperationResult;
     try {
       result = await sendOperation("evaluate_answer", {
-        unit: { id: unit.id, name: unit.name },
-        collection: { id: collection.id, name: collection.name, learningProfile: profile },
-        lesson: {
-          id: lesson.id,
-          title: lesson.title,
-          targetLanguage: lesson.targetLanguage,
-          sourceLanguage: lesson.sourceLanguage ?? "English",
-          level: lesson.level,
-        },
-        question,
+        lesson: { id: lesson.id },
+        questionId: question.id,
         answer,
         speaking: metadata,
       });
     } catch (caught) {
       throw new Error(publicLearningError(caught));
     }
-    if (result.outcome !== "completed" || !result.result?.evaluation) throw new Error("ChatGPT did not return a valid evaluation.");
+    if (result.outcome !== "completed" || !result.result?.evaluation) throw new Error("OpenAI API did not return a valid evaluation.");
     const evaluation = parseEvaluation(result.result.evaluation);
     const normalized = metadata && !metadata.pronunciationAvailable
       ? { ...evaluation, pronunciationAssessed: false }
       : evaluation;
     const pendingAcks = pendingEvaluationAcksRef.current.get(progressQuestionId) ?? [];
     pendingEvaluationAcksRef.current.set(progressQuestionId, [...pendingAcks, result.operationId]);
-    setStatus("Evaluation received from ChatGPT. It will be released by Meoi Bridge after progress is safely queued.");
+    setStatus("Evaluation received from OpenAI API. It will be released by AI provider after progress is safely queued.");
     return normalized;
   }
 
@@ -1149,7 +942,7 @@ export function LearningWorkspace({
         pendingEvaluationAcksRef.current,
       );
       if (failedAcks) {
-        setWarning("Progress is safely queued, but Meoi Bridge could not clear one retained evaluation result.");
+        setWarning("Progress is safely queued, but AI provider could not clear one retained evaluation result.");
       }
     } catch (caught) {
       setWarning("Progress could not be saved to this device. Keep this lesson open and try Continue again.");
@@ -1197,35 +990,24 @@ export function LearningWorkspace({
     history: CoachChatMessage[],
   ): Promise<string> {
     if (!unit || !lesson) throw new Error("No active lesson was found.");
-    if (bridgeGate.state !== "ready") throw new Error("Meoi Bridge v8 is unavailable. Check the extension and try again.");
     const text = message.trim();
     if (textByteLength(text) > MEOI_TEXT_FIELD_MAX_BYTES) {
       throw new Error("The coaching message must be 16 KiB or smaller.");
     }
-    const recentHistory = history.slice(-8).map((entry) => ({
-      role: entry.role,
-      content: entry.content.slice(0, 2_000),
-    }));
     const result = await sendOperation("coaching", {
-      unit: { id: unit.id, name: unit.name },
-      collection: { id: collection.id, name: collection.name, learningProfile: profile },
-      lesson: {
-        id: lesson.id,
-        title: lesson.title,
-        targetLanguage: lesson.targetLanguage,
-        sourceLanguage: lesson.sourceLanguage ?? "English",
-      },
-      question,
+      lesson: { id: lesson.id },
+      questionId: question.id,
       evaluation,
       message: text,
-      history: recentHistory,
+      history: history.slice(-8).map((entry) => ({ role: entry.role, content: entry.content.slice(0, 2_000) })),
     });
-    const reply = result.result?.coachingReply?.trim();
+    const reply = typeof result.result?.coachingReply === "string"
+      ? result.result.coachingReply.trim()
+      : "";
     if (result.outcome !== "completed" || !reply || textByteLength(reply) > MEOI_TEXT_FIELD_MAX_BYTES) {
-      throw new Error("ChatGPT did not return a valid coaching reply.");
+      throw new Error("The API did not return a valid coaching reply.");
     }
-    await extensionBridge.acknowledgeOperation(result.operationId).catch(() => false);
-    setStatus("Coaching reply received from ChatGPT and loaded in Meoi.");
+    setStatus("Coaching reply received from the API.");
     return reply;
   }
 
@@ -1248,15 +1030,15 @@ export function LearningWorkspace({
     );
   }
 
-  const bridgeLabel = bridgeGate.state === "ready"
-    ? `Bridge ${bridgeGate.integration.extensionVersion ?? MEOI_EXTENSION_MIN_VERSION} ready`
-    : bridgeGate.state === "outdated"
-      ? bridgeGate.version === MEOI_EXTENSION_PROTOCOL_VERSION
-        ? `Bridge ${bridgeGate.integration.extensionVersion ?? "v8 build"} outdated`
-        : `Bridge v${bridgeGate.version} outdated`
-      : bridgeGate.state === "checking"
-        ? "Checking Bridge"
-        : "Bridge unavailable";
+  const providerLabel = providerGate === "ready"
+    ? "OpenAI API ready"
+    : providerGate === "checking"
+      ? "Checking AI provider"
+      : providerGate === "consent_required"
+        ? "API consent required"
+        : provider === "bridge"
+          ? "Bridge unavailable"
+          : "API unavailable";
 
   return (
     <>
@@ -1264,41 +1046,42 @@ export function LearningWorkspace({
         <header className="main-topbar learning-topbar">
           <button className="mobile-nav-trigger" type="button" onClick={onOpenMobileNavigation} aria-label="Open navigation"><Menu size={19} /></button>
           <WorkspaceModeSwitch mode={mode} onChange={onModeChange} />
-          <div className="learning-connection-pill" data-connected={extensionConnected ? "true" : "false"}>
-            <span /> {bridgeLabel}
+          <div className="learning-connection-pill" data-connected={providerReady ? "true" : "false"}>
+            <span /> {providerLabel}
           </div>
         </header>
 
         <div className="content-scroll learning-scroll" ref={learningScrollRef}>
-          {bridgeGate.state !== "ready" ? (
+          {!providerReady ? (
             <section className="learning-bridge-gate" aria-live="polite">
               <span className="learning-bridge-gate-icon">
-                {bridgeGate.state === "checking"
+                {providerGate === "checking"
                   ? <LoaderCircle className="spin" size={28} />
                   : <ShieldCheck size={28} />}
               </span>
-              <p className="section-kicker">Meoi Bridge v8 required</p>
+              <p className="section-kicker">AI provider</p>
               <h1>
-                {bridgeGate.state === "checking"
-                  ? "Checking the browser extension..."
-                  : bridgeGate.state === "outdated"
-                    ? bridgeGate.version === MEOI_EXTENSION_PROTOCOL_VERSION
-                      ? `Update Meoi Bridge to ${MEOI_EXTENSION_MIN_VERSION}`
-                      : `Update Meoi Bridge v${bridgeGate.version}`
-                    : "Meoi Bridge is not available"}
+                {providerGate === "checking"
+                  ? "Checking your AI provider..."
+                  : providerGate === "consent_required"
+                    ? "Allow the OpenAI API to learn"
+                    : provider === "bridge"
+                      ? "Bridge is unavailable"
+                      : "OpenAI API is unavailable"}
               </h1>
               <p>
-                {bridgeGate.state === "outdated"
-                  ? bridgeGate.version === MEOI_EXTENSION_PROTOCOL_VERSION
-                    ? `Learn requires Meoi Bridge ${MEOI_EXTENSION_MIN_VERSION} or newer. ${bridgeGate.integration.extensionVersion
-                      ? `Version ${bridgeGate.integration.extensionVersion} was detected.`
-                      : "An older v8 build without patch-version reporting was detected."} Reload the updated extension, then reload this page.`
-                    : `Learn is locked because protocol v${bridgeGate.version} was detected. Install Meoi Bridge ${MEOI_EXTENSION_MIN_VERSION}, reload the extension, then reload this page.`
-                  : bridgeGate.state === "unavailable"
-                    ? `Install or enable Meoi Bridge ${MEOI_EXTENSION_MIN_VERSION}, reload the extension, then reload this page. Library and Letters remain available.`
-                    : "Meoi is checking protocol v8 and older v4-v7 status channels. Older versions are detected only for upgrade guidance and cannot run operations."}
+                {providerGate === "consent_required"
+                  ? "Review the disclosure before Meoing sends selected learning material or answers to OpenAI."
+                  : provider === "bridge"
+                    ? "This public build has no compatible Bridge. Select API to continue."
+                    : "The secure API is temporarily unavailable. Check your connection and try again."}
               </p>
-              {bridgeGate.state !== "checking" ? (
+              {providerGate === "consent_required" ? (
+                <button className="primary-button" type="button" onClick={() => setConsentOpen(true)} disabled={busy}>
+                  <ShieldCheck size={16} /> Review API consent
+                </button>
+              ) : null}
+              {providerGate !== "checking" ? (
                 <button className="primary-button" type="button" onClick={() => void refreshConnection()} disabled={busy}>
                   {busy ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}
                   Check again
@@ -1309,9 +1092,9 @@ export function LearningWorkspace({
             <>
           <section className="learn-hero">
             <div>
-              <p className="section-kicker">ChatGPT lesson studio</p>
+              <p className="section-kicker">OpenAI API lesson studio</p>
               <h1>{unit ? cleanUnitName(unit.name) : "Select a unit"}</h1>
-              <p>Meoi Bridge sends this unit's learning material to ChatGPT Web. Validated lessons and progress are then synced through Meoing’s Worker; audio and coaching text are not stored.</p>
+              <p>Meoing sends authorized learning operations through its Worker to the OpenAI API. Validated lessons and progress remain in your workspace; audio is not uploaded.</p>
             </div>
             <div className="learn-hero-actions">
               {savedLessons.length && learningView !== "choose" ? (
@@ -1353,7 +1136,7 @@ export function LearningWorkspace({
           <section className="lesson-request-card" aria-labelledby="lesson-request-title">
             <div className="card-heading-row">
               <div><p className="section-kicker">Custom request</p><h2 id="lesson-request-title">What do you want to learn?</h2></div>
-              <span>{profile.lessonQuestionCount} questions · at least 5 formats</span>
+              <span>{profile.lessonQuestionCount} questions with at least 5 formats</span>
             </div>
             <label className="form-field">
               <span>Lesson request</span>
@@ -1368,7 +1151,7 @@ export function LearningWorkspace({
               <label className="transcript-upload">
                 <Upload size={16} /> Upload transcript
                 <input className="sr-only" type="file" accept=".srt,.vtt,.txt,text/plain" onChange={(event) => void handleTranscriptFile(event.target.files?.[0])} />
-                <small>.srt / .vtt / .txt · up to 500 KiB</small>
+                <small>.srt / .vtt / .txt - up to 500 KiB</small>
               </label>
             </div>
             {embedUrl ? <div className="youtube-preview"><iframe src={embedUrl} title="YouTube lesson source" allow="accelerometer; encrypted-media; picture-in-picture" allowFullScreen /></div> : null}
@@ -1385,19 +1168,6 @@ export function LearningWorkspace({
               <button className="secondary-button" type="button" onClick={usePreviewLesson} disabled={busy}>
                 <Play size={16} /> Player demo
               </button>
-              {pendingLessonState === "save_failed" ? (
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={() => {
-                    const pending = pendingOperationForUnit(unit.id);
-                    if (pending) void recoverPendingLesson(pending);
-                  }}
-                  disabled={busy}
-                >
-                  <RefreshCw size={16} /> Retry cloud save
-                </button>
-              ) : null}
               <button
                 className="primary-button"
                 type="button"
@@ -1407,7 +1177,7 @@ export function LearningWorkspace({
                 {busy ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}
                 {sourceRequest
                   ? "Send source and try again"
-                  : pendingLessonState === "failed" || pendingLessonState === "missing"
+                  : pendingLessonState === "failed"
                     ? "Create lesson again"
                     : "Create lesson"}
               </button>
@@ -1437,7 +1207,7 @@ export function LearningWorkspace({
             <LessonPlayer
               key={`${lesson.id}-${playerRunId}`}
               lesson={lesson}
-              coachingAvailable={extensionConnected}
+              coachingAvailable={providerReady}
               onEvaluate={evaluateAnswer}
               onProgressBatch={saveProgress}
               onAskCoach={askCoach}
@@ -1462,13 +1232,32 @@ export function LearningWorkspace({
         </div>
       </main>
 
-      <aside className="overview-panel learning-control-panel" aria-label="Learning and integration settings">
+      <aside className="overview-panel learning-control-panel" aria-label="Learning and AI settings">
         <section>
-          <div className="overview-title-row"><h2>ChatGPT Web</h2><ShieldCheck size={17} /></div>
+          <div className="overview-title-row"><h2>AI provider</h2><ShieldCheck size={17} /></div>
+          <label className="compact-field">
+            <span>Provider</span>
+            <select value={provider} onChange={(event) => void chooseProvider(event.target.value as AiProvider)} disabled={busy}>
+              <option value="api">OpenAI API</option>
+              <option value="bridge">Bridge</option>
+            </select>
+          </label>
+          {provider === "api" && providerGate === "consent_required" ? (
+            <button className="primary-button wide-button" type="button" onClick={() => setConsentOpen(true)} disabled={busy}>
+              Review API consent
+            </button>
+          ) : null}
+          {provider === "api" && providerReady ? (
+            <button className="secondary-button wide-button" type="button" onClick={() => void withdrawApiConsent()} disabled={busy}>
+              Withdraw API consent
+            </button>
+          ) : null}
           <p className="control-copy">
-            {bridgeGate.state === "ready"
-              ? `Meoi Bridge ${bridgeGate.integration.extensionVersion ?? MEOI_EXTENSION_MIN_VERSION} is ready. Sign in at chatgpt.com to create lessons and use coaching.`
-              : `Install Meoi Bridge ${MEOI_EXTENSION_MIN_VERSION}, reload the extension, then reload this page. Learn remains locked until the required v8 build responds.`}
+            {providerReady
+              ? "The OpenAI API provider is ready for lesson generation, evaluation, and coaching."
+              : provider === "bridge"
+                ? "Bridge is a versioned browser contract. This public build has no Bridge implementation; select API to continue."
+                : "Review API consent or check your connection to unlock learning operations."}
           </p>
           <button className="primary-button wide-button" type="button" onClick={() => void refreshConnection()} disabled={busy}>
             {busy ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />} Check again
@@ -1476,27 +1265,44 @@ export function LearningWorkspace({
         </section>
 
         <section className="control-section">
-          <h3><ShieldCheck size={15} /> Local bridge status</h3>
+          <h3><ShieldCheck size={15} /> Provider status</h3>
           <ul className="integration-checklist">
-            <li data-ready="true"><span /> Website · authenticated</li>
-            <li data-ready={extensionConnected ? "true" : "false"}><span /> Extension · {bridgeLabel}</li>
-            <li data-ready={api ? "true" : "false"}><span /> Worker API · {api ? "ready" : "unavailable"}</li>
-            <li data-ready="true"><span /> PostgreSQL · server-authorized</li>
+            <li data-ready="true"><span /> Website: authenticated</li>
+            <li data-ready={providerReady ? "true" : "false"}><span /> Selected provider: {providerLabel}</li>
+            <li data-ready={api ? "true" : "false"}><span /> Worker API: {api ? "ready" : "unavailable"}</li>
+            <li data-ready="true"><span /> Database: server-authorized</li>
           </ul>
-          <p className="quota-note">The extension keeps queued prompts and validated results in extension session storage and removes each result after use. The website uses IndexedDB only as a temporary progress outbox, deleting batches after server acknowledgement.</p>
+          <p className="quota-note">The browser keeps only a temporary progress outbox and removes batches after server acknowledgement. AI prompts and answers are not logged by the Worker.</p>
         </section>
 
-        {bridgeGate.state === "ready" ? (
+        {providerReady ? (
           <>
             {canManageCollectionProfile ? <ProfileEditor profile={profile} onChange={onUpdateProfile} /> : null}
             <section className="control-section voice-controls">
               <h3><Mic size={15} /> Live speaking</h3>
-              <button className="secondary-button wide-button" type="button" disabled={!unit} onClick={() => void extensionBridge.send("OPEN_VOICE", { unitId: unit?.id })}><Mic size={15} /> Open Voice for this unit</button>
-              <p className="quota-note">Meoi only opens the unit's conversation for Voice. Voice syncing and audio upload remain disabled, and saved lesson history never includes audio or voice transcripts.</p>
+              <button className="secondary-button wide-button" type="button" disabled><Mic size={15} /> Live voice is not available</button>
+              <p className="quota-note">Voice syncing and audio upload remain disabled. Saved lesson history never includes audio or voice transcripts.</p>
             </section>
           </>
         ) : null}
       </aside>
+      <AnimatedModal
+        open={consentOpen}
+        onClose={() => setConsentOpen(false)}
+        labelledBy="api-consent-title"
+        backdropClassName="modal-backdrop"
+        panelClassName="entity-editor-modal api-consent-modal"
+      >
+        <header className="entity-editor-header">
+          <div><p className="section-kicker">OpenAI API</p><h2 id="api-consent-title">Allow AI learning operations</h2></div>
+          <button className="icon-button" type="button" onClick={() => setConsentOpen(false)} aria-label="Close consent dialog">x</button>
+        </header>
+        <div className="entity-editor-body">
+          <p>Meoing sends the selected unit's learning material and the answer needed for this operation to OpenAI. Audio and sign-in tokens are never sent. Requests use OpenAI's API with response storage disabled.</p>
+          <p>You can withdraw consent at any time. Without consent, API lesson generation, evaluation, and coaching are blocked.</p>
+        </div>
+        <footer className="entity-editor-footer"><button className="secondary-button" type="button" onClick={() => setConsentOpen(false)}>Cancel</button><button className="primary-button" type="button" onClick={() => void grantApiConsent()} disabled={busy}>Allow API</button></footer>
+      </AnimatedModal>
     </>
   );
 }
@@ -1511,7 +1317,7 @@ function ProfileEditor({ profile, onChange }: { profile: LearningProfile; onChan
       <h3><FileText size={15} /> Learning profile</h3>
       <div className="learning-language-pair">
         <span>Language pair</span>
-        <strong>{profile.sourceLanguage} <span aria-hidden="true">→</span> {profile.targetLanguage}</strong>
+        <strong>{profile.sourceLanguage} to {profile.targetLanguage}</strong>
         <small>Edit languages in Collection settings.</small>
       </div>
       <label className="compact-field"><span>Level</span><select value={profile.level} onChange={(event) => update("level", event.target.value as LearningProfile["level"])}>

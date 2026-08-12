@@ -38,6 +38,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/ai/operations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run an authorized AI learning operation */
+        post: operations["runAiOperation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/me": {
         parameters: {
             query?: never;
@@ -3917,6 +3934,86 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ApiError"];
                 };
+            };
+        };
+    };
+    runAiOperation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {number} */
+                    contractVersion: 1;
+                    /** Format: uuid */
+                    operationId: string;
+                    /** @enum {string} */
+                    kind: "create_lesson" | "evaluate_answer" | "coaching";
+                    /** Format: uuid */
+                    collectionId: string;
+                    /** Format: uuid */
+                    unitId: string;
+                    input: {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description Validated operation result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** @enum {number} */
+                            contractVersion: 1;
+                            /** Format: uuid */
+                            operationId: string;
+                            /** @enum {string} */
+                            kind: "create_lesson" | "evaluate_answer" | "coaching";
+                            /** @enum {string} */
+                            outcome: "completed" | "needs_source" | "failed";
+                            result?: {
+                                [key: string]: unknown;
+                            };
+                            error?: {
+                                code: string;
+                                message: string;
+                            };
+                        };
+                        meta: {
+                            requestId: string;
+                        };
+                    };
+                };
+            };
+            /** @description Invalid operation */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Consent or permission missing */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description AI quota exhausted */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

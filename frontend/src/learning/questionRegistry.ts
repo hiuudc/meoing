@@ -26,7 +26,7 @@ const localBase = {
 };
 
 const aiBase = {
-  explanation: "ChatGPT evaluates meaning and explains the result.",
+  explanation: "The AI provider evaluates meaning and explains the result.",
   hint: "Focus on meaning before polishing the wording.",
   evaluationMode: "ai" as const,
 };

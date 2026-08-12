@@ -213,6 +213,11 @@ const CollectionCreateRequestSchema = CollectionCreateSchema.extend({
 });
 const SETTING_VALUE_SCHEMAS: Readonly<Record<string, Readonly<Record<string, z.ZodType>>>> = {
   user: {
+    aiConsent: z.object({
+      version: z.literal(1),
+      grantedAt: z.string().datetime().optional(),
+    }).strict(),
+    aiProvider: z.enum(["api", "bridge"]),
     theme: ThemeSettingSchema,
     sidebarWidth: z.number().int().min(248).max(420),
   },

@@ -13,6 +13,7 @@ import {
   successSchema,
 } from "./http/schemas";
 import { log } from "./observability";
+import { registerAiRoutes } from "./routes/ai-routes";
 import { registerFileRoutes, registerRpcRoutes } from "./routes/rpc-routes";
 import type { Actor, RequestState } from "./types";
 
@@ -43,9 +44,10 @@ function origins(value: string): Set<string> {
   );
 }
 
-export type RateLimitClass = "progress" | "read" | "write";
+export type RateLimitClass = "ai" | "progress" | "read" | "write";
 
 export function rateLimitClass(method: string, path: string): RateLimitClass {
+  if (path.startsWith("/v1/ai/")) return "ai";
   if (path.includes("/progress") || path.includes("/batches")) {
     return "progress";
   }
@@ -58,6 +60,8 @@ export function rateLimitKey(actorId: string, method: string, path: string): str
 
 function pathRateLimit(env: ApiEnv, method: string, path: string): RateLimit {
   switch (rateLimitClass(method, path)) {
+    case "ai":
+      return env.AI_RATE_LIMIT;
     case "progress":
       return env.PROGRESS_RATE_LIMIT;
     case "read":
@@ -270,6 +274,7 @@ export function createApiApp(dependencies: ApiDependencies): OpenAPIHono<AppBind
     },
   });
 
+  registerAiRoutes(app);
   registerRpcRoutes(app);
   registerFileRoutes(app);
 
@@ -283,7 +288,7 @@ export function createApiApp(dependencies: ApiDependencies): OpenAPIHono<AppBind
     info: {
       title: "Meoing API",
       version: "1.0.0",
-      description: "Cloud API shared by the Meoing website, extension, mobile clients and future apps.",
+      description: "Cloud API shared by the Meoing website, mobile clients and future apps.",
     },
     servers: [{ url: "/" }],
   });

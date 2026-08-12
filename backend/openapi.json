@@ -3,7 +3,7 @@
   "info": {
     "title": "Meoing API",
     "version": "1.0.0",
-    "description": "Cloud API shared by the Meoing website, extension, mobile clients and future apps."
+    "description": "Cloud API shared by the Meoing website, mobile clients and future apps."
   },
   "servers": [
     {
@@ -15072,6 +15072,166 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/v1/ai/operations": {
+      "post": {
+        "operationId": "runAiOperation",
+        "summary": "Run an authorized AI learning operation",
+        "tags": [
+          "AI"
+        ],
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "contractVersion": {
+                    "type": "number",
+                    "enum": [
+                      1
+                    ]
+                  },
+                  "operationId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "create_lesson",
+                      "evaluate_answer",
+                      "coaching"
+                    ]
+                  },
+                  "collectionId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "unitId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "input": {
+                    "type": "object",
+                    "additionalProperties": {}
+                  }
+                },
+                "required": [
+                  "contractVersion",
+                  "operationId",
+                  "kind",
+                  "collectionId",
+                  "unitId",
+                  "input"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Validated operation result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "contractVersion": {
+                          "type": "number",
+                          "enum": [
+                            1
+                          ]
+                        },
+                        "operationId": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "create_lesson",
+                            "evaluate_answer",
+                            "coaching"
+                          ]
+                        },
+                        "outcome": {
+                          "type": "string",
+                          "enum": [
+                            "completed",
+                            "needs_source",
+                            "failed"
+                          ]
+                        },
+                        "result": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "error": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "string"
+                            },
+                            "message": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "code",
+                            "message"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "contractVersion",
+                        "operationId",
+                        "kind",
+                        "outcome"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid operation"
+          },
+          "403": {
+            "description": "Consent or permission missing"
+          },
+          "429": {
+            "description": "AI quota exhausted"
           }
         }
       }

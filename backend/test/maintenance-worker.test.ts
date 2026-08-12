@@ -15,6 +15,24 @@ function maintenanceEnv(
 }
 
 describe("two-phase maintenance", () => {
+  it("cleans expired idempotent AI operation results without reading their content", async () => {
+    const cleanupAiOperations = vi.fn(async () => ({ expiredAiOperations: 3 }));
+    const repository: MaintenanceRepository = {
+      cleanup: async () => ({ r2Keys: [], dueCollectionIds: [], dueAssetIds: [], authUserIds: [] }),
+      cleanupAiOperations,
+      finalize: async () => ({}),
+    };
+
+    const result = await runMaintenance(
+      maintenanceEnv(async () => undefined),
+      repository,
+      async () => new Response(null, { status: 204 }),
+    );
+
+    expect(cleanupAiOperations).toHaveBeenCalledWith({ batchSize: 500 });
+    expect(result.aiOperationCleanup).toEqual({ expiredAiOperations: 3 });
+  });
+
   it("emits sampled stats and lock indicators without logging row contents", async () => {
     const consoleLog = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const repository: MaintenanceRepository = {

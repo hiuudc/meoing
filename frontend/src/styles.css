@@ -2789,7 +2789,7 @@ input[type="range"] {
   }
 }
 
-/* Learning mode and ChatGPT integration */
+/* Learning mode and AI provider integration */
 .workspace-mode-switch {
   display: inline-flex;
   flex: 0 0 auto;

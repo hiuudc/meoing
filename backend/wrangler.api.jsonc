@@ -11,7 +11,8 @@
       "R2_ACCESS_KEY_ID",
       "R2_SECRET_ACCESS_KEY",
       "INVITE_TOKEN_SECRET",
-      "TURNSTILE_SECRET_KEY"
+      "TURNSTILE_SECRET_KEY",
+      "OPENAI_API_KEY"
     ]
   },
   "placement": {
@@ -38,10 +39,14 @@
     "CORS_ORIGINS": "http://127.0.0.1:5173,http://localhost:5173",
     "SUPABASE_URL": "https://PROJECT_REF.supabase.co",
     "SUPABASE_JWT_AUDIENCE": "authenticated",
-    "R2_ACCOUNT_ID": "REPLACE_WITH_ACCOUNT_ID",
+    "R2_ACCOUNT_ID": "00000000000000000000000000000000",
     "R2_BUCKET_NAME": "meoing-files-local",
     "PRESIGNED_UPLOAD_TTL_SECONDS": "900",
     "PRESIGNED_DOWNLOAD_TTL_SECONDS": "300"
+    ,"OPENAI_MODEL": "gpt-5-mini"
+    ,"OPENAI_DAILY_BUDGET_UNITS": "10000"
+    ,"OPENAI_LESSON_RESERVATION_UNITS": "20"
+    ,"OPENAI_ASSISTANCE_RESERVATION_UNITS": "1"
   },
   "hyperdrive": [
     {
@@ -79,13 +84,21 @@
         "limit": 120,
         "period": 60
       }
+    },
+    {
+      "name": "AI_RATE_LIMIT",
+      "namespace_id": "1004",
+      "simple": {
+        "limit": 30,
+        "period": 60
+      }
     }
   ],
   // Replace every placeholder before the first staging/production deployment.
   // Bindings and vars are deliberately repeated because Wrangler environments do not inherit them.
   "env": {
     "staging": {
-      "account_id": "29e80074abc5eb106165d2349db7ca56",
+      "account_id": "00000000000000000000000000000000",
       "workers_dev": false,
       "preview_urls": false,
       "secrets": {
@@ -93,7 +106,8 @@
           "R2_ACCESS_KEY_ID",
           "R2_SECRET_ACCESS_KEY",
           "INVITE_TOKEN_SECRET",
-          "TURNSTILE_SECRET_KEY"
+          "TURNSTILE_SECRET_KEY",
+          "OPENAI_API_KEY"
         ]
       },
       "placement": {
@@ -106,17 +120,21 @@
       "vars": {
         "APP_ENV": "staging",
         "CORS_ORIGINS": "https://staging.meoing.com",
-        "SUPABASE_URL": "https://sdwuwmyrbdaarxokxmsf.supabase.co",
+        "SUPABASE_URL": "https://STAGING_PROJECT_REF.supabase.co",
         "SUPABASE_JWT_AUDIENCE": "authenticated",
-        "R2_ACCOUNT_ID": "29e80074abc5eb106165d2349db7ca56",
+        "R2_ACCOUNT_ID": "00000000000000000000000000000000",
         "R2_BUCKET_NAME": "meoing-files-staging",
         "PRESIGNED_UPLOAD_TTL_SECONDS": "900",
         "PRESIGNED_DOWNLOAD_TTL_SECONDS": "300"
+        ,"OPENAI_MODEL": "gpt-5-mini"
+        ,"OPENAI_DAILY_BUDGET_UNITS": "10000"
+        ,"OPENAI_LESSON_RESERVATION_UNITS": "20"
+        ,"OPENAI_ASSISTANCE_RESERVATION_UNITS": "1"
       },
       "hyperdrive": [
         {
           "binding": "HYPERDRIVE",
-          "id": "9f551f4a12064b71877a2df108e2bcb9"
+          "id": "00000000000000000000000000000000"
         }
       ],
       "r2_buckets": [
@@ -140,6 +158,11 @@
           "name": "PROGRESS_RATE_LIMIT",
           "namespace_id": "1103",
           "simple": { "limit": 120, "period": 60 }
+        },
+        {
+          "name": "AI_RATE_LIMIT",
+          "namespace_id": "1104",
+          "simple": { "limit": 30, "period": 60 }
         }
       ]
     },
@@ -151,7 +174,8 @@
           "R2_ACCESS_KEY_ID",
           "R2_SECRET_ACCESS_KEY",
           "INVITE_TOKEN_SECRET",
-          "TURNSTILE_SECRET_KEY"
+          "TURNSTILE_SECRET_KEY",
+          "OPENAI_API_KEY"
         ]
       },
       "limits": {
@@ -161,17 +185,21 @@
       "vars": {
         "APP_ENV": "production",
         "CORS_ORIGINS": "https://meoing.com",
-        "SUPABASE_URL": "https://rckeolmhsnkpcamlheds.supabase.co",
+        "SUPABASE_URL": "https://PRODUCTION_PROJECT_REF.supabase.co",
         "SUPABASE_JWT_AUDIENCE": "authenticated",
-        "R2_ACCOUNT_ID": "29e80074abc5eb106165d2349db7ca56",
+        "R2_ACCOUNT_ID": "00000000000000000000000000000000",
         "R2_BUCKET_NAME": "meoing-files-production",
         "PRESIGNED_UPLOAD_TTL_SECONDS": "900",
         "PRESIGNED_DOWNLOAD_TTL_SECONDS": "300"
+        ,"OPENAI_MODEL": "gpt-5-mini"
+        ,"OPENAI_DAILY_BUDGET_UNITS": "10000"
+        ,"OPENAI_LESSON_RESERVATION_UNITS": "20"
+        ,"OPENAI_ASSISTANCE_RESERVATION_UNITS": "1"
       },
       "hyperdrive": [
         {
           "binding": "HYPERDRIVE",
-          "id": "1d9dcc0ba6474d8d82ad9d00cad366f1"
+          "id": "00000000000000000000000000000000"
         }
       ],
       "r2_buckets": [
@@ -195,6 +223,11 @@
           "name": "PROGRESS_RATE_LIMIT",
           "namespace_id": "2103",
           "simple": { "limit": 120, "period": 60 }
+        },
+        {
+          "name": "AI_RATE_LIMIT",
+          "namespace_id": "2104",
+          "simple": { "limit": 30, "period": 60 }
         }
       ]
     }

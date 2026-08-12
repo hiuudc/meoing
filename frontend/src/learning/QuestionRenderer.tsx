@@ -1888,7 +1888,7 @@ export function QuestionRenderer({
         <div className="open-response">
           <blockquote>{render(question.sourceText)}</blockquote>
           <AnswerBankResponse bank={question.answerBank} value={stringAnswer(answer)} onChange={onChange} inputMode={answerInputMode} label={`${question.targetLanguage} translation`} multiline disabled={disabled} evaluated={evaluated} onAnswerActivate={onAnswerActivate} renderText={render} typeaheadResetMs={typeaheadResetMs} />
-          <p className="rubric-copy">ChatGPT rubric: {question.rubric.join(" · ")}</p>
+          <p className="rubric-copy">AI rubric: {question.rubric.join(" · ")}</p>
         </div>
       );
     case "shortAnswer":

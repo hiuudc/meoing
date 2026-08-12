@@ -3,6 +3,8 @@ import { ApiError, mapDatabaseError } from "../http/errors";
 import { isJsonValue, type JsonObject, type JsonValue } from "../types";
 
 export const RPC_FUNCTIONS = {
+  aiOperationReserve: "private.api_ai_operation_reserve",
+  aiOperationSettle: "private.api_ai_operation_settle",
   abuseConsume: "private.api_abuse_consume",
   accountDeletionCancel: "private.api_cancel_account_deletion",
   accountDeletionRequest: "private.api_request_account_deletion",

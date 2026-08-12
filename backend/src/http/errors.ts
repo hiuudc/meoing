@@ -3,6 +3,9 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { AppBindings } from "../app-types";
 
 export type ErrorCode =
+  | "AI_UNAVAILABLE"
+  | "AI_CONSENT_REQUIRED"
+  | "AI_OPERATION_IN_PROGRESS"
   | "ACCOUNT_DELETION_PENDING"
   | "AUTH_REQUIRED"
   | "BODY_TOO_LARGE"
@@ -135,6 +138,12 @@ function applicationError(code: string): ApiError | null {
   }
   if (code === "EMAIL_NOT_VERIFIED") {
     return new ApiError(403, "EMAIL_NOT_VERIFIED", "Email verification is required");
+  }
+  if (code === "AI_CONSENT_REQUIRED") {
+    return new ApiError(403, "AI_CONSENT_REQUIRED", "API consent is required for this operation");
+  }
+  if (code === "AI_OPERATION_IN_PROGRESS") {
+    return new ApiError(409, "AI_OPERATION_IN_PROGRESS", "This AI operation is already in progress");
   }
   if (code === "INVITE_INVALID" || code === "LESSON_NOT_AVAILABLE") {
     return new ApiError(404, code as ErrorCode, "The requested resource was not found");

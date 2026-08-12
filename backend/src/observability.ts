@@ -22,6 +22,7 @@ interface LogEvent {
   readonly deletedAuditLogs?: number;
   readonly deletedUnits?: number;
   readonly expiredUploads?: number;
+  readonly expiredAiOperations?: number;
   readonly dueCollections?: number;
   readonly dueAssets?: number;
   readonly r2DeleteCount?: number;
