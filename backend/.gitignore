@@ -1,0 +1,8 @@
+.dev.vars
+.dev.vars.maintenance
+.env
+.wrangler/
+.wrangler-dry-run/
+coverage/
+node_modules/
+*.tsbuildinfo

@@ -1,0 +1,115 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "meoing-maintenance",
+  "main": "src/maintenance-worker.ts",
+  "compatibility_date": "2026-07-30",
+  "compatibility_flags": ["nodejs_compat"],
+  "secrets": {
+    "required": ["SUPABASE_SECRET_KEY"]
+  },
+  "placement": {
+    "mode": "smart"
+  },
+  "limits": {
+    "cpu_ms": 1000,
+    "subrequests": 600
+  },
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": false
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.01
+    }
+  },
+  "vars": {
+    "APP_ENV": "local",
+    "SUPABASE_URL": "https://PROJECT_REF.supabase.co"
+  },
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "00000000000000000000000000000000"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "FILES",
+      "bucket_name": "meoing-files-local"
+    }
+  ],
+  "triggers": {
+    "crons": ["17 * * * *"]
+  },
+  "env": {
+    "staging": {
+      "account_id": "00000000000000000000000000000000",
+      "workers_dev": false,
+      "preview_urls": false,
+      "secrets": {
+        "required": ["SUPABASE_SECRET_KEY"]
+      },
+      "placement": {
+        "region": "aws:ap-northeast-1"
+      },
+      "limits": {
+        "cpu_ms": 1000,
+        "subrequests": 600
+      },
+      "routes": [],
+      "vars": {
+        "APP_ENV": "staging",
+        "SUPABASE_URL": "https://STAGING_PROJECT_REF.supabase.co"
+      },
+      "hyperdrive": [
+        {
+          "binding": "HYPERDRIVE",
+          "id": "e376733cca0441279f5707d7e28b18a3"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "FILES",
+          "bucket_name": "meoing-files-staging"
+        }
+      ],
+      "triggers": {
+        "crons": ["17 * * * *"]
+      }
+    },
+    "production": {
+      "workers_dev": false,
+      "preview_urls": false,
+      "limits": {
+        "cpu_ms": 1000,
+        "subrequests": 600
+      },
+      "secrets": {
+        "required": ["SUPABASE_SECRET_KEY"]
+      },
+      "vars": {
+        "APP_ENV": "production",
+        "SUPABASE_URL": "https://PRODUCTION_PROJECT_REF.supabase.co"
+      },
+      "hyperdrive": [
+        {
+          "binding": "HYPERDRIVE",
+          "id": "4ae6e154d94946aeb19c6340cc8f3872"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "FILES",
+          "bucket_name": "meoing-files-production"
+        }
+      ],
+      "triggers": {
+        "crons": ["17 * * * *"]
+      }
+    }
+  }
+}

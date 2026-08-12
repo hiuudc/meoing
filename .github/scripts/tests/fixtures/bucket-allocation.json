@@ -1,0 +1,9 @@
+{
+  "Contents": [
+    { "Key": "daily/one.tar.age", "LastModified": "2026-08-01T00:00:00Z", "Size": 300 },
+    { "Key": "weekly/one.tar.age", "LastModified": "2026-08-01T00:00:00Z", "Size": 2100 },
+    { "Key": "manual/one.tar.age", "LastModified": "2026-08-01T00:00:00Z", "Size": 700 },
+    { "Key": "verified/weekly/one.tar.age.json", "LastModified": "2026-08-01T00:00:00Z", "Size": 50 },
+    { "Key": "unexpected/operator-note", "LastModified": "2026-08-01T00:00:00Z", "Size": 70 }
+  ]
+}

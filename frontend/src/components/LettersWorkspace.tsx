@@ -1,0 +1,1499 @@
+import {
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  LoaderCircle,
+  Menu,
+  Play,
+  RefreshCw,
+  RotateCcw,
+  Search,
+  Settings2,
+  Volume2,
+  X,
+} from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type UIEvent,
+} from "react";
+import { createPortal } from "react-dom";
+import { ApiError, type ApiClient } from "../api/client";
+import { CharacterTracingResponse } from "../learning/CharacterTracingResponse";
+import { LessonPlayer } from "../learning/LessonPlayer";
+import {
+  DEFAULT_LETTERS_PRACTICE_CHARACTERS,
+  MAX_LETTERS_PRACTICE_CHARACTERS,
+  MIN_LETTERS_PRACTICE_CHARACTERS,
+  getLettersLanguageProgress,
+  getCharacterWindow,
+  INTERNAL_CHARACTER_DISPLAY_LABELS,
+  INTERNAL_CHARACTER_READINGS,
+  createLettersProgressStore,
+  matchesCharacterQuery,
+  normalizeLettersProgressStore,
+  normalizeLettersPracticeCharacterCount,
+  scriptForCharacter,
+  scriptsForLanguage,
+  unicodeLabel,
+  updateLettersLanguageProgress,
+  type LetterSettings,
+  type LetterProgressStatus,
+  type LettersLanguageProgress,
+  type LettersProgressStore,
+  type LettersScript,
+} from "../learning/letters";
+import {
+  buildLettersPracticeSession,
+  lettersPracticeExerciseCount,
+  selectLettersPracticeCharacters,
+  type LettersCharacterMetadata,
+  type LettersPracticeSession,
+} from "../learning/lettersPractice";
+import { getSupportedLanguage } from "../learning/languages";
+import { normalizeLearningProfile } from "../learning/profile";
+import { languageTagForSpeech, speechTextForLanguage } from "../learning/speech";
+import { loadStrokeCatalog } from "../learning/strokeData";
+import type {
+  AttemptRecord,
+  CharacterTracingQuestion,
+  LessonProgressSnapshot,
+  QuestionAnswer,
+} from "../learning/types";
+import type { Collection, StudyItem, Unit } from "../types";
+import { AnimatedModal } from "./AnimatedModal";
+import { LetterSettingsModal } from "./LetterSettingsModal";
+import { WorkspaceModeSwitch, type WorkspaceMode } from "./WorkspaceModeSwitch";
+
+interface LettersWorkspaceProps {
+  collection: Collection;
+  units: Unit[];
+  studyItems: StudyItem[];
+  mode: WorkspaceMode;
+  onModeChange: (mode: WorkspaceMode) => void;
+  onOpenMobileNavigation: () => void;
+  api?: ApiClient;
+  userId?: string;
+}
+
+interface VirtualCharacterGridProps {
+  characters: string[];
+  metadata: ReadonlyMap<string, LettersCharacterMetadata>;
+  progress: Readonly<Record<string, LetterProgressStatus>>;
+  onSelect: (character: string) => void;
+  selectedCharacters?: ReadonlySet<string>;
+  selectionLimit?: number;
+  variant?: "catalog" | "picker";
+}
+
+interface LettersPracticeProps {
+  characters: string[];
+  character: string;
+  language: string;
+  metadata?: LettersCharacterMetadata;
+  requireStrokeOrder: boolean;
+  showStrokeGuide: boolean;
+  strokeTolerance: number;
+  onClose: () => void;
+  onSelect: (character: string) => void;
+  onStart: (character: string) => void;
+  onMastered: (character: string) => void;
+  onSpeak?: (character: string) => void;
+  onOpenSettings: (trigger: HTMLButtonElement) => void;
+  settingsActive: boolean;
+  settingsRevision: number;
+}
+
+interface LettersLessonIntroProps {
+  open: boolean;
+  language: string;
+  scriptLabel: string;
+  characters: string[];
+  metadata: ReadonlyMap<string, LettersCharacterMetadata>;
+  characterCount: number;
+  exerciseCount: number;
+  maxCharacterCount: number;
+  availableCharacters: string[];
+  progress: Readonly<Record<string, LetterProgressStatus>>;
+  selectionMode: LettersPracticeSelectionMode;
+  customQuery: string;
+  canRefresh: boolean;
+  onCharacterCountChange: (count: number) => void;
+  onCustomQueryChange: (query: string) => void;
+  onRefresh: () => void;
+  onSelectionModeChange: (mode: LettersPracticeSelectionMode) => void;
+  onToggleCustomCharacter: (character: string) => void;
+  onClose: () => void;
+  onExited: () => void;
+  onStart: () => void;
+}
+
+const GRID_ROW_HEIGHT = 100;
+const GRID_MIN_COLUMN_WIDTH = 88;
+const GRID_OVERSCAN_ROWS = 3;
+const CHARACTER_PROGRESS_SCOPE = "user";
+
+interface CharacterProgressResponse {
+  characters: unknown;
+  revision?: number;
+}
+
+interface CharacterProgressSyncQueueOptions<T> {
+  persist: (value: T) => Promise<T>;
+  onSynced?: (value: T) => void;
+  onError?: (error: unknown) => void;
+  isRetryable?: (error: unknown) => boolean;
+  debounceMs?: number;
+  retryBaseMs?: number;
+  scheduleTask?: (callback: () => void, delay: number) => () => void;
+}
+
+export interface CharacterProgressSyncQueue<T> {
+  schedule(value: T): void;
+  flush(): Promise<void>;
+  hasPending(): boolean;
+}
+
+export function createCharacterProgressSyncQueue<T>({
+  persist,
+  onSynced,
+  onError,
+  isRetryable = () => true,
+  debounceMs = 350,
+  retryBaseMs = 1_000,
+  scheduleTask = (callback, delay) => {
+    const timer = setTimeout(callback, delay);
+    return () => clearTimeout(timer);
+  },
+}: CharacterProgressSyncQueueOptions<T>): CharacterProgressSyncQueue<T> {
+  let pending: T | undefined;
+  let cancelTimer: (() => void) | null = null;
+  let running: Promise<void> | null = null;
+  let retryCount = 0;
+
+  function clearTimer() {
+    cancelTimer?.();
+    cancelTimer = null;
+  }
+
+  function scheduleTimer(delay: number) {
+    clearTimer();
+    cancelTimer = scheduleTask(() => {
+      cancelTimer = null;
+      void flush();
+    }, delay);
+  }
+
+  async function drain() {
+    while (pending !== undefined) {
+      const candidate = pending;
+      pending = undefined;
+      try {
+        const synced = await persist(candidate);
+        retryCount = 0;
+        onSynced?.(synced);
+      } catch (error) {
+        if (pending === undefined) pending = candidate;
+        onError?.(error);
+        if (isRetryable(error)) {
+          retryCount += 1;
+          scheduleTimer(Math.min(retryBaseMs * (2 ** (retryCount - 1)), 30_000));
+        }
+        return;
+      }
+    }
+  }
+
+  function flush(): Promise<void> {
+    clearTimer();
+    if (running) {
+      return running.then(() => (pending === undefined ? undefined : flush()));
+    }
+    const operation = drain();
+    running = operation.finally(() => {
+      running = null;
+    });
+    return running;
+  }
+
+  return {
+    schedule(value) {
+      pending = value;
+      retryCount = 0;
+      scheduleTimer(debounceMs);
+    },
+    flush,
+    hasPending: () => pending !== undefined,
+  };
+}
+
+export function mergeCharacterProgress(
+  remote: LettersLanguageProgress,
+  local: LettersLanguageProgress,
+): LettersLanguageProgress {
+  return {
+    ...remote,
+    ...local,
+    characters: {
+      ...remote.characters,
+      ...local.characters,
+    },
+  };
+}
+
+function singleCharacter(value: string): boolean {
+  return [...value].length === 1;
+}
+
+function collectionCharacterMetadata(
+  unitIds: ReadonlySet<string>,
+  studyItems: StudyItem[],
+): Map<string, LettersCharacterMetadata> {
+  const metadata = new Map<string, LettersCharacterMetadata>();
+  studyItems.forEach((item) => {
+    if (!unitIds.has(item.unitId) || !singleCharacter(item.text.trim())) return;
+    metadata.set(item.text.trim(), { meaning: item.translation.trim() || undefined });
+  });
+  INTERNAL_CHARACTER_READINGS.forEach((reading, character) => {
+    metadata.set(character, { ...metadata.get(character), reading });
+  });
+  INTERNAL_CHARACTER_DISPLAY_LABELS.forEach((displayLabel, character) => {
+    metadata.set(character, { ...metadata.get(character), displayLabel });
+  });
+  return metadata;
+}
+
+type LettersPracticeSelectionMode = "auto" | "custom";
+
+interface LettersPracticeDraft {
+  mode: LettersPracticeSelectionMode;
+  characterCount: number;
+  autoCharacters: string[];
+  usedCharacters: string[];
+  customCharacters: string[];
+  customQuery: string;
+}
+
+function characterDisplayLabel(
+  character: string,
+  metadata?: LettersCharacterMetadata,
+): string {
+  return metadata?.displayLabel ?? metadata?.reading ?? unicodeLabel(character);
+}
+
+function VirtualCharacterGrid({
+  characters,
+  metadata,
+  progress,
+  onSelect,
+  selectedCharacters,
+  selectionLimit = MAX_LETTERS_PRACTICE_CHARACTERS,
+  variant = "catalog",
+}: VirtualCharacterGridProps) {
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const scrollFrameRef = useRef<number | null>(null);
+  const [viewport, setViewport] = useState({ width: 0, height: 0, scrollTop: 0 });
+
+  useEffect(() => {
+    const element = viewportRef.current;
+    if (!element) return;
+    const measure = () => setViewport((current) => ({
+      ...current,
+      width: element.clientWidth,
+      height: element.clientHeight,
+    }));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => () => {
+    if (scrollFrameRef.current !== null) window.cancelAnimationFrame(scrollFrameRef.current);
+  }, []);
+
+  useEffect(() => {
+    if (viewportRef.current) viewportRef.current.scrollTop = 0;
+    setViewport((current) => ({ ...current, scrollTop: 0 }));
+  }, [characters]);
+
+  function onScroll(event: UIEvent<HTMLDivElement>) {
+    const scrollTop = event.currentTarget.scrollTop;
+    if (scrollFrameRef.current !== null) window.cancelAnimationFrame(scrollFrameRef.current);
+    scrollFrameRef.current = window.requestAnimationFrame(() => {
+      setViewport((current) => ({ ...current, scrollTop }));
+    });
+  }
+
+  const columns = Math.max(1, Math.floor(Math.max(viewport.width, GRID_MIN_COLUMN_WIDTH) / GRID_MIN_COLUMN_WIDTH));
+  const characterWindow = getCharacterWindow({
+    characterCount: characters.length,
+    columns,
+    scrollTop: viewport.scrollTop,
+    viewportHeight: viewport.height,
+    rowHeight: GRID_ROW_HEIGHT,
+    overscanRows: GRID_OVERSCAN_ROWS,
+  });
+  const visibleCharacters = characters.slice(characterWindow.startIndex, characterWindow.endIndex);
+
+  return (
+    <div className={`letters-grid-viewport is-${variant}`} ref={viewportRef} onScroll={onScroll}>
+      <div className="letters-grid-spacer" style={{ height: characterWindow.rowCount * GRID_ROW_HEIGHT }}>
+        <div
+          className="letters-grid-window"
+          role="grid"
+          aria-rowcount={characterWindow.rowCount}
+          aria-colcount={columns}
+          style={{
+            gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+            transform: `translateY(${characterWindow.startRow * GRID_ROW_HEIGHT}px)`,
+          }}
+        >
+          {visibleCharacters.map((character, index) => {
+            const characterMetadata = metadata.get(character);
+            const status = progress[character];
+            const selected = selectedCharacters?.has(character) ?? false;
+            const selectionLimitReached = Boolean(
+              selectedCharacters
+              && !selected
+              && selectedCharacters.size >= selectionLimit,
+            );
+            return (
+              <button
+                type="button"
+                className={`letters-character-tile${status ? ` is-${status}` : ""}${selected ? " is-selected" : ""}`}
+                key={character}
+                role="gridcell"
+                aria-rowindex={characterWindow.startRow + Math.floor(index / columns) + 1}
+                aria-colindex={(index % columns) + 1}
+                aria-selected={selectedCharacters ? selected : undefined}
+                aria-label={`${character}, ${characterDisplayLabel(character, characterMetadata)}, ${status ?? "not started"}${selected ? ", selected" : ""}`}
+                onClick={() => onSelect(character)}
+                disabled={selectionLimitReached}
+              >
+                <strong>{character}</strong>
+                <span>{characterDisplayLabel(character, characterMetadata)}</span>
+                <i aria-hidden="true"><b /></i>
+                {selectedCharacters ? (
+                  <small className="letters-character-selection-mark" aria-hidden="true">
+                    <Check size={13} />
+                  </small>
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function speakCharacter(language: string, character: string) {
+  if (!("speechSynthesis" in window) || typeof SpeechSynthesisUtterance === "undefined") return;
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(speechTextForLanguage(character, language));
+  utterance.lang = languageTagForSpeech(language);
+  utterance.rate = .82;
+  window.speechSynthesis.speak(utterance);
+}
+
+function supportsCharacterSpeech(): boolean {
+  return "speechSynthesis" in window && typeof SpeechSynthesisUtterance !== "undefined";
+}
+
+export function LettersLessonIntro({
+  open,
+  language,
+  scriptLabel,
+  characters,
+  metadata,
+  characterCount,
+  exerciseCount,
+  maxCharacterCount,
+  availableCharacters,
+  progress,
+  selectionMode,
+  customQuery,
+  canRefresh,
+  onCharacterCountChange,
+  onCustomQueryChange,
+  onRefresh,
+  onSelectionModeChange,
+  onToggleCustomCharacter,
+  onClose,
+  onExited,
+  onStart,
+}: LettersLessonIntroProps) {
+  const selectedCharacters = useMemo(() => new Set(characters), [characters]);
+  const customCharacters = useMemo(
+    () => availableCharacters.filter((character) => {
+      const characterMetadata = metadata.get(character);
+      return matchesCharacterQuery(
+        character,
+        customQuery,
+        `${characterMetadata?.displayLabel ?? ""} ${characterMetadata?.reading ?? ""} ${characterMetadata?.meaning ?? ""}`,
+      );
+    }),
+    [availableCharacters, customQuery, metadata],
+  );
+
+  return createPortal(
+    <AnimatedModal
+      open={open}
+      onClose={onClose}
+      onExited={onExited}
+      labelledBy="letters-lesson-intro-title"
+      backdropClassName="letters-lesson-intro-backdrop"
+      panelClassName="letters-lesson-intro"
+    >
+      <header>
+        <div>
+          <p className="section-kicker">{language} letters</p>
+          <h1 id="letters-lesson-intro-title">Let&apos;s learn {scriptLabel}</h1>
+        </div>
+        <button type="button" aria-label="Close Letters lesson" onClick={onClose}>
+          <X size={20} />
+        </button>
+      </header>
+      <main>
+        <div className="letters-lesson-intro-copy">
+          <h2>Practice sound, recognition, and stroke order</h2>
+          <p>
+            There are no hearts. A missed exercise returns later in the session until you answer it correctly.
+          </p>
+        </div>
+        <div className="letters-practice-selection-toolbar">
+          <div role="group" aria-label="Practice character selection">
+            <button
+              type="button"
+              aria-pressed={selectionMode === "auto"}
+              className={selectionMode === "auto" ? "is-active" : ""}
+              onClick={() => onSelectionModeChange("auto")}
+            >
+              Auto
+            </button>
+            <button
+              type="button"
+              aria-pressed={selectionMode === "custom"}
+              className={selectionMode === "custom" ? "is-active" : ""}
+              onClick={() => onSelectionModeChange("custom")}
+            >
+              Custom
+            </button>
+          </div>
+          {selectionMode === "auto" ? (
+            <button
+              className="secondary-button letters-practice-refresh"
+              type="button"
+              onClick={onRefresh}
+              disabled={!canRefresh}
+            >
+              <RefreshCw size={15} /> Refresh characters
+            </button>
+          ) : null}
+        </div>
+        <div className="letters-practice-setup">
+          {selectionMode === "auto" ? (
+            <label htmlFor="letters-practice-character-count">
+              <span>
+                <strong>Characters per practice</strong>
+                <small>Saved for this Collection and language when you start.</small>
+              </span>
+              <input
+                id="letters-practice-character-count"
+                type="number"
+                min={MIN_LETTERS_PRACTICE_CHARACTERS}
+                max={maxCharacterCount}
+                step={1}
+                value={characterCount}
+                onChange={(event) => {
+                  if (!Number.isFinite(event.currentTarget.valueAsNumber)) return;
+                  onCharacterCountChange(Math.min(
+                    maxCharacterCount,
+                    normalizeLettersPracticeCharacterCount(event.currentTarget.valueAsNumber),
+                  ));
+                }}
+              />
+            </label>
+          ) : (
+            <div className="letters-practice-custom-summary">
+              <strong>Custom characters</strong>
+              <small>Select between 1 and {maxCharacterCount} characters for this lesson.</small>
+            </div>
+          )}
+          <output aria-live="polite">
+            <strong>{characters.length} characters</strong>
+            <small>{exerciseCount} exercises before retries</small>
+          </output>
+        </div>
+        {selectionMode === "custom" ? (
+          <section className="letters-practice-custom-picker" aria-labelledby="letters-practice-custom-title">
+            <div className="letters-practice-custom-heading">
+              <div>
+                <strong id="letters-practice-custom-title">Choose characters</strong>
+                <small>{characters.length}/{maxCharacterCount} selected</small>
+              </div>
+              <label className="letters-search">
+                <Search size={16} />
+                <span className="sr-only">Search practice characters</span>
+                <input
+                  value={customQuery}
+                  onChange={(event) => onCustomQueryChange(event.target.value)}
+                  placeholder="Search character, reading, meaning, or U+ code"
+                />
+              </label>
+            </div>
+            {customCharacters.length ? (
+              <VirtualCharacterGrid
+                characters={customCharacters}
+                metadata={metadata}
+                progress={progress}
+                selectedCharacters={selectedCharacters}
+                selectionLimit={maxCharacterCount}
+                variant="picker"
+                onSelect={onToggleCustomCharacter}
+              />
+            ) : (
+              <p className="letters-catalog-status">No character matches this filter.</p>
+            )}
+          </section>
+        ) : null}
+        <div className="letters-lesson-character-list" aria-label="Characters in this practice">
+          {characters.map((character) => {
+            const characterMetadata = metadata.get(character);
+            const canSpeak = Boolean(characterMetadata?.reading) && supportsCharacterSpeech();
+            return (
+              <article key={character}>
+                {canSpeak ? (
+                  <button
+                    type="button"
+                    aria-label={`Play ${character}`}
+                    onClick={() => speakCharacter(language, character)}
+                  >
+                    <Volume2 size={17} />
+                  </button>
+                ) : <span className="letters-practice-speaker-placeholder" aria-hidden="true" />}
+                <strong lang={languageTagForSpeech(language)}>{character}</strong>
+                <div>
+                  <b>{characterDisplayLabel(character, characterMetadata)}</b>
+                  {characterMetadata?.meaning ? <span>{characterMetadata.meaning}</span> : null}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      </main>
+      <footer>
+        <button className="secondary-button" type="button" onClick={onClose}>Not now</button>
+        <button className="primary-button" type="button" onClick={onStart} disabled={!characters.length}>
+          Start lesson <ChevronRight size={16} />
+        </button>
+      </footer>
+    </AnimatedModal>,
+    document.querySelector<HTMLElement>(".app-shell") ?? document.body,
+  );
+}
+
+export function LettersPractice({
+  characters,
+  character,
+  language,
+  metadata,
+  requireStrokeOrder,
+  showStrokeGuide,
+  strokeTolerance,
+  onClose,
+  onSelect,
+  onStart,
+  onMastered,
+  onSpeak,
+  onOpenSettings,
+  settingsActive,
+  settingsRevision,
+}: LettersPracticeProps) {
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLElement>(null);
+  const closeHandlerRef = useRef(onClose);
+  const startHandlerRef = useRef(onStart);
+  const masteredHandlerRef = useRef(onMastered);
+  const speakHandlerRef = useRef(onSpeak);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const settingsActiveRef = useRef(settingsActive);
+  const [answer, setAnswer] = useState<QuestionAnswer>("");
+  const [runId, setRunId] = useState(0);
+  const currentIndex = characters.indexOf(character);
+
+  useEffect(() => {
+    closeHandlerRef.current = onClose;
+    startHandlerRef.current = onStart;
+    masteredHandlerRef.current = onMastered;
+    speakHandlerRef.current = onSpeak;
+  });
+  settingsActiveRef.current = settingsActive;
+
+  const handleStart = useCallback(() => {
+    startHandlerRef.current(character);
+  }, [character]);
+
+  const handleAnswerChange = useCallback((next: QuestionAnswer) => {
+    setAnswer(next);
+    if (next === "passed") masteredHandlerRef.current(character);
+  }, [character]);
+
+  useEffect(() => {
+    setAnswer("");
+    setRunId((current) => current + 1);
+  }, [character, settingsRevision]);
+
+  useEffect(() => {
+    speakHandlerRef.current?.(character);
+  }, [character]);
+
+  useLayoutEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    dialog.inert = settingsActive;
+    if (settingsActive) dialog.setAttribute("aria-hidden", "true");
+    else dialog.removeAttribute("aria-hidden");
+  }, [settingsActive]);
+
+  useEffect(() => {
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const frame = window.requestAnimationFrame(() => closeRef.current?.focus());
+    function onKeyDown(event: KeyboardEvent) {
+      if (settingsActiveRef.current) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeHandlerRef.current();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ) ?? []);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+      previousFocusRef.current?.focus();
+    };
+  }, []);
+
+  const question: CharacterTracingQuestion = {
+    id: `letters-${language}-${unicodeLabel(character)}`,
+    type: "characterTracing",
+    evaluationMode: "local",
+    prompt: "Trace the character",
+    explanation: "This practice is checked locally from the bundled stroke data.",
+    character,
+    meaning: metadata?.meaning,
+    reading: metadata?.displayLabel ?? metadata?.reading ?? unicodeLabel(character),
+    requireStrokeOrder,
+  };
+  const completed = answer === "passed";
+
+  return createPortal(
+    <div className="letters-practice-backdrop">
+      <section ref={dialogRef} className="letters-practice-dialog" role="dialog" aria-modal="true" aria-labelledby="letters-practice-title">
+        <header>
+          <div className="letters-practice-header-actions">
+            <button ref={closeRef} type="button" aria-label="Close character practice" onClick={onClose}>
+              <X size={21} />
+            </button>
+            <button
+              className="letter-settings-context-trigger"
+              type="button"
+              aria-label="Open Letter settings"
+              title="Letter settings"
+              onClick={(event) => onOpenSettings(event.currentTarget)}
+            >
+              <Settings2 size={18} />
+            </button>
+          </div>
+          <div>
+            <p>{language} letters</p>
+            <h1 id="letters-practice-title">Trace the character</h1>
+          </div>
+          <strong>{currentIndex + 1}/{characters.length}</strong>
+        </header>
+        <main>
+          <CharacterTracingResponse
+            key={`${character}-${runId}`}
+            question={question}
+            language={language}
+            answer={answer}
+            onStart={handleStart}
+            onChange={handleAnswerChange}
+            onSpeak={onSpeak}
+            strokeTolerance={strokeTolerance}
+            showStrokeGuide={showStrokeGuide}
+          />
+        </main>
+        <footer>
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => onSelect(characters[Math.max(0, currentIndex - 1)])}
+            disabled={currentIndex <= 0}
+          >
+            <ChevronLeft size={16} /> Previous
+          </button>
+          <button className="secondary-button" type="button" onClick={() => {
+            setAnswer("");
+            setRunId((current) => current + 1);
+            speakHandlerRef.current?.(character);
+          }}>
+            <RotateCcw size={15} /> Retry
+          </button>
+          <button
+            className="primary-button"
+            type="button"
+            onClick={() => {
+              if (currentIndex >= characters.length - 1) onClose();
+              else onSelect(characters[currentIndex + 1]);
+            }}
+            disabled={!completed}
+          >
+            {currentIndex >= characters.length - 1 ? "Done" : "Next"} <ChevronRight size={16} />
+          </button>
+        </footer>
+      </section>
+    </div>,
+    document.querySelector<HTMLElement>(".app-shell") ?? document.body,
+  );
+}
+
+export function LettersWorkspace({
+  collection,
+  units,
+  studyItems,
+  mode,
+  onModeChange,
+  onOpenMobileNavigation,
+  api,
+  userId,
+}: LettersWorkspaceProps) {
+  const profile = normalizeLearningProfile(collection.learningProfile);
+  const language = profile.targetLanguage;
+  const scriptDefinitions = scriptsForLanguage(language);
+  const [catalog, setCatalog] = useState<string[]>([]);
+  const [catalogStatus, setCatalogStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [catalogError, setCatalogError] = useState("");
+  const [activeScript, setActiveScript] = useState<LettersScript>(() => scriptDefinitions[0]?.id ?? "other");
+  const [query, setQuery] = useState("");
+  const [selectedCharacter, setSelectedCharacter] = useState("");
+  const [practiceIntroOpen, setPracticeIntroOpen] = useState(false);
+  const [practiceDraft, setPracticeDraft] = useState<LettersPracticeDraft>({
+    mode: "auto",
+    characterCount: DEFAULT_LETTERS_PRACTICE_CHARACTERS,
+    autoCharacters: [],
+    usedCharacters: [],
+    customCharacters: [],
+    customQuery: "",
+  });
+  const [pendingPracticeSession, setPendingPracticeSession] = useState<LettersPracticeSession | null>(null);
+  const [practiceSession, setPracticeSession] = useState<LettersPracticeSession | null>(null);
+  const [letterSettingsOpen, setLetterSettingsOpen] = useState(false);
+  const [letterSettingsActive, setLetterSettingsActive] = useState(false);
+  const [traceSettingsRevision, setTraceSettingsRevision] = useState(0);
+  const letterSettingsReturnFocusRef = useRef<HTMLButtonElement | null>(null);
+  const restoreLetterSettingsFocusRef = useRef(false);
+  const [progressStore, setProgressStore] = useState<LettersProgressStore>(createLettersProgressStore);
+  const [progressSyncError, setProgressSyncError] = useState("");
+  const progressRevisionRef = useRef(0);
+  const lastSyncedProgressRef = useRef("");
+  const progressSyncQueueRef = useRef<CharacterProgressSyncQueue<LettersLanguageProgress> | null>(null);
+  const unitIds = useMemo(() => new Set(units.map((unit) => unit.id)), [units]);
+  const metadata = useMemo(
+    () => collectionCharacterMetadata(unitIds, studyItems),
+    [collection.id, studyItems, unitIds],
+  );
+  const languageProgress = useMemo(
+    () => getLettersLanguageProgress(progressStore, CHARACTER_PROGRESS_SCOPE, language),
+    [language, progressStore],
+  );
+  const letterSettings = useMemo<LetterSettings>(() => ({
+    requireStrokeOrder: languageProgress.requireStrokeOrder,
+    showStrokeGuide: languageProgress.showStrokeGuide,
+    strokeTolerance: languageProgress.strokeTolerance,
+  }), [
+    languageProgress.requireStrokeOrder,
+    languageProgress.showStrokeGuide,
+    languageProgress.strokeTolerance,
+  ]);
+  const speechAvailable = supportsCharacterSpeech();
+  const speakCurrentCharacter = useCallback((character: string) => {
+    speakCharacter(language, character);
+  }, [language]);
+
+  useEffect(() => {
+    setActiveScript(scriptDefinitions[0]?.id ?? "other");
+    setQuery("");
+    setSelectedCharacter("");
+    setPracticeIntroOpen(false);
+    setPracticeDraft((current) => ({
+      ...current,
+      mode: "auto",
+      autoCharacters: [],
+      usedCharacters: [],
+      customCharacters: [],
+      customQuery: "",
+    }));
+    setPendingPracticeSession(null);
+    setPracticeSession(null);
+  }, [language]);
+
+  useEffect(() => {
+    setLetterSettingsOpen(false);
+  }, [collection.id, language]);
+
+  useEffect(() => {
+    if (letterSettingsActive || !restoreLetterSettingsFocusRef.current) return;
+    restoreLetterSettingsFocusRef.current = false;
+    const trigger = letterSettingsReturnFocusRef.current;
+    const frame = window.requestAnimationFrame(() => {
+      if (trigger?.isConnected) trigger.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [letterSettingsActive]);
+
+  useEffect(() => {
+    let active = true;
+    if (!scriptDefinitions.length) {
+      setCatalog([]);
+      setCatalogStatus("idle");
+      return;
+    }
+    setCatalogStatus("loading");
+    setCatalogError("");
+    loadStrokeCatalog(language)
+      .then((characters) => {
+        if (!active) return;
+        setCatalog(characters);
+        setCatalogStatus("ready");
+      })
+      .catch((error) => {
+        if (!active) return;
+        setCatalog([]);
+        setCatalogError(error instanceof Error ? error.message : "The local stroke catalog could not be loaded.");
+        setCatalogStatus("error");
+      });
+    return () => {
+      active = false;
+    };
+  }, [language, scriptDefinitions.length]);
+
+  useEffect(() => {
+    lastSyncedProgressRef.current = "";
+    setProgressSyncError("");
+    const languageCode = getSupportedLanguage(language)?.locale.split("-")[0] ?? "und";
+    if (!api || !userId) {
+      const empty = createLettersProgressStore();
+      setProgressStore(empty);
+      progressRevisionRef.current = 0;
+      lastSyncedProgressRef.current = JSON.stringify(
+        getLettersLanguageProgress(empty, CHARACTER_PROGRESS_SCOPE, language),
+      );
+      return;
+    }
+    let active = true;
+    void api.get<CharacterProgressResponse>(
+      `/v1/characters?languageCode=${encodeURIComponent(languageCode)}`,
+    ).then((response) => {
+      if (!active) return;
+      const normalized = normalizeLettersProgressStore({
+        version: 1,
+        collections: {
+          [CHARACTER_PROGRESS_SCOPE]: {
+            [language]: response.data.characters,
+          },
+        },
+      });
+      setProgressStore(normalized);
+      progressRevisionRef.current = response.data.revision ?? 0;
+      lastSyncedProgressRef.current = JSON.stringify(
+        getLettersLanguageProgress(normalized, CHARACTER_PROGRESS_SCOPE, language),
+      );
+    }).catch(() => {
+      if (!active) return;
+      const empty = createLettersProgressStore();
+      setProgressStore(empty);
+      progressRevisionRef.current = 0;
+      lastSyncedProgressRef.current = JSON.stringify(
+        getLettersLanguageProgress(empty, CHARACTER_PROGRESS_SCOPE, language),
+      );
+    });
+    return () => {
+      active = false;
+    };
+  }, [api, language, userId]);
+
+  useEffect(() => {
+    if (!api || !userId) return;
+    let active = true;
+    const languageCode = getSupportedLanguage(language)?.locale.split("-")[0] ?? "und";
+    let expectedRevision: number | null = null;
+    const queue = createCharacterProgressSyncQueue<LettersLanguageProgress>({
+      async persist(localCandidate) {
+        let candidate = localCandidate;
+        if (expectedRevision === null) expectedRevision = progressRevisionRef.current;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          try {
+            const response = await api.put<CharacterProgressResponse>("/v1/characters", {
+              languageCode,
+              characters: candidate,
+              expectedRevision,
+            });
+            expectedRevision = response.data.revision ?? expectedRevision + 1;
+            if (active) progressRevisionRef.current = expectedRevision;
+            return candidate;
+          } catch (error) {
+            if (!(error instanceof ApiError) || error.code !== "REVISION_CONFLICT") throw error;
+            const latest = await api.get<CharacterProgressResponse>(
+              `/v1/characters?languageCode=${encodeURIComponent(languageCode)}`,
+            );
+            const normalized = normalizeLettersProgressStore({
+              version: 1,
+              collections: {
+                [CHARACTER_PROGRESS_SCOPE]: {
+                  [language]: latest.data.characters,
+                },
+              },
+            });
+            candidate = mergeCharacterProgress(
+              getLettersLanguageProgress(normalized, CHARACTER_PROGRESS_SCOPE, language),
+              candidate,
+            );
+            expectedRevision = latest.data.revision ?? 0;
+          }
+        }
+        throw new Error("Character progress changed repeatedly while it was being synchronized.");
+      },
+      onSynced(candidate) {
+        if (!active) return;
+        lastSyncedProgressRef.current = JSON.stringify(candidate);
+        setProgressSyncError("");
+        setProgressStore((current) => updateLettersLanguageProgress(
+          current,
+          CHARACTER_PROGRESS_SCOPE,
+          language,
+          (currentLanguage) => mergeCharacterProgress(candidate, currentLanguage),
+        ));
+      },
+      onError(error) {
+        if (!active) return;
+        const retrying = !(error instanceof ApiError)
+          || error.status === 408
+          || error.status === 425
+          || error.status === 429
+          || error.status >= 500;
+        setProgressSyncError(retrying
+          ? "Character progress has not synced yet. Meoing will retry automatically."
+          : "Character progress could not be synced. Try again before leaving this page.");
+      },
+      isRetryable(error) {
+        return !(error instanceof ApiError)
+          || error.status === 408
+          || error.status === 425
+          || error.status === 429
+          || error.status >= 500;
+      },
+    });
+    progressSyncQueueRef.current = queue;
+
+    const flush = () => {
+      if (document.visibilityState === "hidden" || queue.hasPending()) void queue.flush();
+    };
+    document.addEventListener("visibilitychange", flush);
+    window.addEventListener("online", flush);
+    window.addEventListener("pagehide", flush);
+    return () => {
+      active = false;
+      document.removeEventListener("visibilitychange", flush);
+      window.removeEventListener("online", flush);
+      window.removeEventListener("pagehide", flush);
+      if (progressSyncQueueRef.current === queue) progressSyncQueueRef.current = null;
+      void queue.flush();
+    };
+  }, [api, language, userId]);
+
+  useEffect(() => {
+    const queue = progressSyncQueueRef.current;
+    if (!queue || !lastSyncedProgressRef.current) return;
+    const serialized = JSON.stringify(languageProgress);
+    if (serialized === lastSyncedProgressRef.current) return;
+    queue.schedule(languageProgress);
+  }, [api, language, languageProgress, userId]);
+
+  const scriptCharacters = useMemo(
+    () => catalog.filter((character) => scriptForCharacter(language, character) === activeScript),
+    [activeScript, catalog, language],
+  );
+  const visibleCharacters = useMemo(
+    () => scriptCharacters.filter((character) => {
+      const characterMetadata = metadata.get(character);
+      return matchesCharacterQuery(
+        character,
+        query,
+        `${characterMetadata?.displayLabel ?? ""} ${characterMetadata?.reading ?? ""} ${characterMetadata?.meaning ?? ""}`,
+      );
+    }),
+    [metadata, query, scriptCharacters],
+  );
+  const masteredCount = scriptCharacters.filter(
+    (character) => languageProgress.characters[character] === "mastered",
+  ).length;
+  const selectedMetadata = metadata.get(selectedCharacter);
+  const activeScriptLabel = scriptDefinitions.find((script) => script.id === activeScript)?.label ?? "characters";
+  const maxPracticeCharacterCount = Math.max(
+    MIN_LETTERS_PRACTICE_CHARACTERS,
+    Math.min(MAX_LETTERS_PRACTICE_CHARACTERS, scriptCharacters.length),
+  );
+  const practiceCharacters = practiceDraft.mode === "auto"
+    ? practiceDraft.autoCharacters
+    : practiceDraft.customCharacters;
+  const practiceExerciseCount = lettersPracticeExerciseCount(practiceCharacters, metadata);
+  const canRefreshPracticeCharacters = scriptCharacters.length > practiceDraft.autoCharacters.length;
+
+  function updateProgress(
+    update: (progress: ReturnType<typeof getLettersLanguageProgress>) => ReturnType<typeof getLettersLanguageProgress>,
+  ) {
+    setProgressStore((current) => updateLettersLanguageProgress(current, CHARACTER_PROGRESS_SCOPE, language, update));
+  }
+
+  function openLetterSettings(trigger: HTMLButtonElement) {
+    letterSettingsReturnFocusRef.current = trigger;
+    setLetterSettingsActive(true);
+    setLetterSettingsOpen(true);
+  }
+
+  function closeLetterSettings() {
+    setLetterSettingsOpen(false);
+  }
+
+  function applyLetterSettings(settings: LetterSettings) {
+    const strokeSettingsChanged = (
+      settings.requireStrokeOrder !== languageProgress.requireStrokeOrder
+      || settings.showStrokeGuide !== languageProgress.showStrokeGuide
+      || settings.strokeTolerance !== languageProgress.strokeTolerance
+    );
+    updateProgress((current) => ({
+      ...current,
+      requireStrokeOrder: settings.requireStrokeOrder,
+      showStrokeGuide: settings.showStrokeGuide,
+      strokeTolerance: settings.strokeTolerance,
+    }));
+    if (strokeSettingsChanged) setTraceSettingsRevision((current) => current + 1);
+    closeLetterSettings();
+  }
+
+  function finishLetterSettingsExit() {
+    restoreLetterSettingsFocusRef.current = true;
+    setLetterSettingsActive(false);
+  }
+
+  function markCharacter(character: string, status: LetterProgressStatus) {
+    updateProgress((current) => {
+      if (current.characters[character] === "mastered" && status === "practicing") return current;
+      return { ...current, characters: { ...current.characters, [character]: status } };
+    });
+  }
+
+  function openPracticeIntro() {
+    const characterCount = Math.min(
+      maxPracticeCharacterCount,
+      normalizeLettersPracticeCharacterCount(languageProgress.practiceCharacterCount),
+    );
+    const autoCharacters = selectLettersPracticeCharacters(
+      scriptCharacters,
+      languageProgress.characters,
+      characterCount,
+    );
+    setPracticeDraft({
+      mode: "auto",
+      characterCount,
+      autoCharacters,
+      usedCharacters: [...autoCharacters],
+      customCharacters: [...autoCharacters],
+      customQuery: "",
+    });
+    setPracticeIntroOpen(true);
+  }
+
+  function changePracticeCharacterCount(characterCount: number) {
+    const normalizedCount = Math.min(
+      maxPracticeCharacterCount,
+      normalizeLettersPracticeCharacterCount(characterCount),
+    );
+    const autoCharacters = selectLettersPracticeCharacters(
+      scriptCharacters,
+      languageProgress.characters,
+      normalizedCount,
+    );
+    setPracticeDraft((current) => ({
+      ...current,
+      characterCount: normalizedCount,
+      autoCharacters,
+      usedCharacters: [...autoCharacters],
+    }));
+  }
+
+  function refreshPracticeCharacters() {
+    setPracticeDraft((current) => {
+      const usedCharacters = new Set(current.usedCharacters);
+      let nextCharacters = selectLettersPracticeCharacters(
+        scriptCharacters,
+        languageProgress.characters,
+        current.characterCount,
+        { excludedCharacters: usedCharacters },
+      );
+      const includesUnusedCharacter = nextCharacters.some((character) => !usedCharacters.has(character));
+      if (!includesUnusedCharacter) {
+        nextCharacters = selectLettersPracticeCharacters(
+          scriptCharacters,
+          languageProgress.characters,
+          current.characterCount,
+        );
+        return {
+          ...current,
+          autoCharacters: nextCharacters,
+          usedCharacters: [...nextCharacters],
+        };
+      }
+      return {
+        ...current,
+        autoCharacters: nextCharacters,
+        usedCharacters: [...new Set([...current.usedCharacters, ...nextCharacters])],
+      };
+    });
+  }
+
+  function changePracticeSelectionMode(mode: LettersPracticeSelectionMode) {
+    setPracticeDraft((current) => ({
+      ...current,
+      mode,
+      customCharacters: mode === "custom" ? [...current.autoCharacters] : current.customCharacters,
+      customQuery: mode === "custom" ? "" : current.customQuery,
+    }));
+  }
+
+  function toggleCustomPracticeCharacter(character: string) {
+    setPracticeDraft((current) => {
+      if (current.customCharacters.includes(character)) {
+        return {
+          ...current,
+          customCharacters: current.customCharacters.filter((candidate) => candidate !== character),
+        };
+      }
+      if (current.customCharacters.length >= maxPracticeCharacterCount) return current;
+      return {
+        ...current,
+        customCharacters: [...current.customCharacters, character],
+      };
+    });
+  }
+
+  function preparePracticeSession() {
+    const targetCharacters = [...practiceCharacters];
+    const characterCount = targetCharacters.length;
+    if (!characterCount) return;
+    const next = buildLettersPracticeSession({
+      collectionId: collection.id,
+      language,
+      sourceLanguage: profile.sourceLanguage,
+      level: profile.level,
+      script: activeScript,
+      scriptLabel: activeScriptLabel,
+      characters: scriptCharacters,
+      targetCharacters,
+      metadata,
+      requireStrokeOrder: languageProgress.requireStrokeOrder,
+    });
+    updateProgress((current) => ({
+      ...current,
+      practiceCharacterCount: characterCount,
+      characters: Object.fromEntries([
+        ...Object.entries(current.characters),
+        ...next.targetCharacters.map((character) => [
+          character,
+          current.characters[character] === "mastered" ? "mastered" : "practicing",
+        ] as const),
+      ]),
+    }));
+    setPendingPracticeSession(next);
+    setPracticeIntroOpen(false);
+  }
+
+  function savePracticeProgress(
+    _attempts: AttemptRecord[],
+    snapshot: LessonProgressSnapshot,
+  ) {
+    if (!practiceSession) return;
+    const completedQuestionIds = new Set(snapshot.completedQuestionIds);
+    updateProgress((current) => {
+      const characters = { ...current.characters };
+      practiceSession.targetCharacters.forEach((character) => {
+        const questionIds = practiceSession.questionIdsByCharacter[character] ?? [];
+        if (questionIds.length && questionIds.every((questionId) => completedQuestionIds.has(questionId))) {
+          characters[character] = "mastered";
+        } else if (characters[character] !== "mastered") {
+          characters[character] = "practicing";
+        }
+      });
+      return { ...current, characters };
+    });
+  }
+
+  return (
+    <>
+      <main className="workspace-main letters-workspace">
+        <header className="main-topbar letters-topbar">
+          <button className="mobile-nav-trigger" type="button" onClick={onOpenMobileNavigation} aria-label="Open navigation"><Menu size={19} /></button>
+          <WorkspaceModeSwitch mode={mode} onChange={onModeChange} />
+          <div className="letters-topbar-actions">
+            <button
+              className="letters-settings-trigger"
+              type="button"
+              onClick={(event) => openLetterSettings(event.currentTarget)}
+              aria-haspopup="dialog"
+            >
+              <Settings2 size={16} /> <span>Letter settings</span>
+            </button>
+            <span className="letters-topbar-language">{language}</span>
+          </div>
+        </header>
+        <div className="content-scroll letters-scroll">
+          <section className="letters-hero">
+            <div>
+              <p className="section-kicker">Local character studio</p>
+              <h1>{scriptDefinitions.length ? `Learn ${language} characters` : "Letters are not available"}</h1>
+              <p>
+                {scriptDefinitions.length
+                  ? "Browse the complete bundled stroke catalog and practise without a remote dictionary or runtime CDN."
+                  : `${language} does not use the Chinese, Japanese, or Korean tracing catalog.`}
+              </p>
+            </div>
+            {scriptDefinitions.length ? (
+              <button
+                className="primary-button"
+                type="button"
+                onClick={openPracticeIntro}
+                disabled={!scriptCharacters.length}
+              >
+                <Play size={16} /> Learn the characters
+              </button>
+            ) : null}
+          </section>
+
+          {scriptDefinitions.length ? (
+            <>
+              <section className="letters-controls" aria-label="Character catalog controls">
+                <div className="letters-script-tabs" role="tablist" aria-label={`${language} scripts`}>
+                  {scriptDefinitions.map((script) => (
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={activeScript === script.id}
+                      className={activeScript === script.id ? "is-active" : ""}
+                      key={script.id}
+                      onClick={() => {
+                        setActiveScript(script.id);
+                        setQuery("");
+                      }}
+                    >
+                      {script.label}
+                    </button>
+                  ))}
+                </div>
+                <label className="letters-search">
+                  <Search size={16} />
+                  <span className="sr-only">Search characters</span>
+                  <input
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder="Search character, reading, meaning, or U+ code"
+                  />
+                </label>
+              </section>
+
+              <section className="letters-catalog" aria-labelledby="letters-catalog-title">
+                <div className="letters-catalog-heading">
+                  <div>
+                    <p className="section-kicker">{scriptDefinitions.find((script) => script.id === activeScript)?.label}</p>
+                    <h2 id="letters-catalog-title">{masteredCount}/{scriptCharacters.length} mastered</h2>
+                  </div>
+                  <span>{visibleCharacters.length.toLocaleString()} shown</span>
+                </div>
+                {catalogStatus === "loading" ? (
+                  <p className="letters-catalog-status"><LoaderCircle className="spin" size={18} /> Loading local character index...</p>
+                ) : null}
+                {catalogStatus === "error" ? <p className="letters-catalog-status is-error" role="alert">{catalogError}</p> : null}
+                {catalogStatus === "ready" && visibleCharacters.length ? (
+                  <VirtualCharacterGrid
+                    characters={visibleCharacters}
+                    metadata={metadata}
+                    progress={languageProgress.characters}
+                    onSelect={setSelectedCharacter}
+                  />
+                ) : null}
+                {catalogStatus === "ready" && !visibleCharacters.length ? (
+                  <p className="letters-catalog-status">No character matches this filter.</p>
+                ) : null}
+              </section>
+            </>
+          ) : (
+            <section className="learning-empty-state">
+              <span>ABC</span>
+              <h2>No tracing catalog for {language}</h2>
+              <p>Learn remains available for this Collection. Letters currently supports Chinese, Japanese, and Korean.</p>
+            </section>
+          )}
+        </div>
+      </main>
+
+      <aside className="overview-panel letters-control-panel" aria-label="Letters progress">
+        <section>
+          <div className="overview-title-row"><h2>Letters progress</h2><Check size={17} /></div>
+          <p className="control-copy">Character progress syncs privately to your account for this learning language and is independent of Collections.</p>
+          {progressSyncError ? (
+            <div className="inline-error" role="alert">
+              <span>{progressSyncError}</span>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => void progressSyncQueueRef.current?.flush()}
+              >
+                <RefreshCw size={14} /> Retry sync
+              </button>
+            </div>
+          ) : null}
+        </section>
+        {scriptDefinitions.length ? (
+          <section className="control-section">
+            <h3>{scriptDefinitions.find((script) => script.id === activeScript)?.label}</h3>
+            <div className="letters-progress-summary">
+              <strong>{masteredCount}</strong>
+              <span>of {scriptCharacters.length.toLocaleString()} mastered</span>
+            </div>
+            <button
+              className="secondary-button wide-button"
+              type="button"
+              onClick={() => {
+                if (!window.confirm(`Reset ${activeScript} progress for this Collection?`)) return;
+                const scriptSet = new Set(scriptCharacters);
+                updateProgress((current) => ({
+                  ...current,
+                  characters: Object.fromEntries(
+                    Object.entries(current.characters).filter(([character]) => !scriptSet.has(character)),
+                  ),
+                }));
+              }}
+              disabled={!scriptCharacters.some((character) => languageProgress.characters[character])}
+            >
+              <RotateCcw size={15} /> Reset this script
+            </button>
+          </section>
+        ) : null}
+        <section className="control-section">
+          <h3>Local data</h3>
+          <p className="quota-note">Stroke geometry is lazy-loaded from same-origin build assets. Unknown readings remain unknown instead of being inferred.</p>
+        </section>
+      </aside>
+
+      {selectedCharacter ? (
+        <LettersPractice
+          characters={visibleCharacters.length ? visibleCharacters : scriptCharacters}
+          character={selectedCharacter}
+          language={language}
+          metadata={selectedMetadata}
+          requireStrokeOrder={languageProgress.requireStrokeOrder}
+          showStrokeGuide={languageProgress.showStrokeGuide}
+          strokeTolerance={languageProgress.strokeTolerance}
+          onClose={() => setSelectedCharacter("")}
+          onSelect={setSelectedCharacter}
+          onStart={(character) => markCharacter(character, "practicing")}
+          onMastered={(character) => markCharacter(character, "mastered")}
+          onSpeak={speechAvailable && selectedMetadata?.reading ? speakCurrentCharacter : undefined}
+          onOpenSettings={openLetterSettings}
+          settingsActive={letterSettingsActive}
+          settingsRevision={traceSettingsRevision}
+        />
+      ) : null}
+
+      <LettersLessonIntro
+        open={practiceIntroOpen}
+        language={language}
+        scriptLabel={activeScriptLabel}
+        characters={practiceCharacters}
+        metadata={metadata}
+        characterCount={practiceDraft.characterCount}
+        exerciseCount={practiceExerciseCount}
+        maxCharacterCount={maxPracticeCharacterCount}
+        availableCharacters={scriptCharacters}
+        progress={languageProgress.characters}
+        selectionMode={practiceDraft.mode}
+        customQuery={practiceDraft.customQuery}
+        canRefresh={canRefreshPracticeCharacters}
+        onCharacterCountChange={changePracticeCharacterCount}
+        onCustomQueryChange={(customQuery) => setPracticeDraft((current) => ({ ...current, customQuery }))}
+        onRefresh={refreshPracticeCharacters}
+        onSelectionModeChange={changePracticeSelectionMode}
+        onToggleCustomCharacter={toggleCustomPracticeCharacter}
+        onClose={() => setPracticeIntroOpen(false)}
+        onExited={() => {
+          if (!pendingPracticeSession) return;
+          setPracticeSession(pendingPracticeSession);
+          setPendingPracticeSession(null);
+        }}
+        onStart={preparePracticeSession}
+      />
+
+      {practiceSession ? (
+        <LessonPlayer
+          lesson={practiceSession.lesson}
+          coachingAvailable={false}
+          variant="lettersPractice"
+          interactionSuspended={letterSettingsActive}
+          tracingOptions={{
+            requireStrokeOrder: languageProgress.requireStrokeOrder,
+            strokeTolerance: languageProgress.strokeTolerance,
+            showStrokeGuide: languageProgress.showStrokeGuide,
+            onOpenSettings: openLetterSettings,
+            resetRevision: traceSettingsRevision,
+          }}
+          returnLabel="Return to Letters"
+          onProgressBatch={savePracticeProgress}
+          onExit={() => setPracticeSession(null)}
+        />
+      ) : null}
+
+      <LetterSettingsModal
+        open={letterSettingsOpen}
+        collectionName={collection.name}
+        language={language}
+        value={letterSettings}
+        onClose={closeLetterSettings}
+        onExited={finishLetterSettingsExit}
+        onApply={applyLetterSettings}
+      />
+    </>
+  );
+}

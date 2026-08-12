@@ -1,0 +1,175 @@
+import { useEffect, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { segmentGlossaryText, type GlossarySegmentationOptions } from "./glossary";
+import type { GlossaryEntry } from "./types";
+
+interface GlossaryTextProps {
+  text: string;
+  glossary: GlossaryEntry[];
+  tooltipsEnabled?: boolean;
+  showPronunciation?: boolean;
+  pronunciationMode?: "romanized" | "native";
+  interactive?: boolean;
+  termClassName?: string;
+  termLang?: string;
+  onTermActivate?: (text: string) => void;
+  segmentationMode?: GlossarySegmentationOptions["mode"];
+}
+
+interface OpenGlossary {
+  entry: GlossaryEntry;
+  index: number;
+  anchor: HTMLElement;
+}
+
+const TOOLTIP_MARGIN = 8;
+
+export function GlossaryText({
+  text,
+  glossary,
+  tooltipsEnabled = true,
+  showPronunciation = false,
+  pronunciationMode = "romanized",
+  interactive = true,
+  termClassName,
+  termLang,
+  onTermActivate,
+  segmentationMode,
+}: GlossaryTextProps) {
+  const segments = segmentGlossaryText(text, glossary, { mode: segmentationMode });
+  const [openGlossary, setOpenGlossary] = useState<OpenGlossary | null>(null);
+  const [position, setPosition] = useState({ top: 0, left: 0 });
+  const tooltipRef = useRef<HTMLDivElement>(null);
+  const activatedIndexRef = useRef<number | null>(null);
+  const baseId = useId().replace(/:/g, "");
+  const tooltipId = openGlossary ? `glossary-${baseId}-${openGlossary.index}` : undefined;
+
+  useEffect(() => {
+    if (!openGlossary) return;
+    const frame = window.requestAnimationFrame(() => {
+      const rect = openGlossary.anchor.getBoundingClientRect();
+      const tooltip = tooltipRef.current;
+      const width = tooltip?.offsetWidth ?? Math.min(280, window.innerWidth - TOOLTIP_MARGIN * 2);
+      const height = tooltip?.offsetHeight ?? 100;
+      const above = rect.top - height - 7;
+      const top = above >= TOOLTIP_MARGIN ? above : rect.bottom + 7;
+      setPosition({
+        top: Math.max(TOOLTIP_MARGIN, Math.min(top, window.innerHeight - height - TOOLTIP_MARGIN)),
+        left: Math.max(TOOLTIP_MARGIN, Math.min(rect.left + rect.width / 2 - width / 2, window.innerWidth - width - TOOLTIP_MARGIN)),
+      });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [openGlossary]);
+
+  useEffect(() => {
+    if (!openGlossary) return;
+    const activeGlossary = openGlossary;
+    function closeOnOutsidePointer(event: PointerEvent) {
+      if (activeGlossary.anchor.contains(event.target as Node) || tooltipRef.current?.contains(event.target as Node)) return;
+      activatedIndexRef.current = null;
+      setOpenGlossary(null);
+    }
+    function closeOnKey(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      activatedIndexRef.current = null;
+      setOpenGlossary(null);
+    }
+    function closeOnViewportChange() {
+      activatedIndexRef.current = null;
+      setOpenGlossary(null);
+    }
+    document.addEventListener("pointerdown", closeOnOutsidePointer, true);
+    window.addEventListener("keydown", closeOnKey, true);
+    window.addEventListener("resize", closeOnViewportChange);
+    window.addEventListener("scroll", closeOnViewportChange, true);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer, true);
+      window.removeEventListener("keydown", closeOnKey, true);
+      window.removeEventListener("resize", closeOnViewportChange);
+      window.removeEventListener("scroll", closeOnViewportChange, true);
+    };
+  }, [openGlossary]);
+
+  function open(entry: GlossaryEntry, index: number, anchor: HTMLElement, spokenText: string) {
+    if (!tooltipsEnabled || !interactive) return;
+    setOpenGlossary({ entry, index, anchor });
+    if (activatedIndexRef.current === index) return;
+    activatedIndexRef.current = index;
+    onTermActivate?.(spokenText);
+  }
+
+  function close(index: number) {
+    activatedIndexRef.current = null;
+    setOpenGlossary((current) => current?.index === index ? null : current);
+  }
+
+  function renderedTerm(segmentText: string, entry: GlossaryEntry) {
+    if (!showPronunciation || !entry.pronunciation) return segmentText;
+    const pronunciation = pronunciationMode === "native"
+      ? entry.pronunciation.native ?? entry.pronunciation.romanized
+      : entry.pronunciation.romanized ?? entry.pronunciation.native;
+    return pronunciation ? <ruby>{segmentText}<rt>{pronunciation}</rt></ruby> : segmentText;
+  }
+
+  const portalTarget = document.querySelector<HTMLElement>(".app-shell") ?? document.body;
+  return (
+    <>
+      {segments.map((segment, index) => segment.entry ? (
+        <span
+          key={`${index}-${segment.text}`}
+          className={[
+            tooltipsEnabled && interactive ? "glossary-term" : "glossary-pronunciation",
+            termClassName,
+          ].filter(Boolean).join(" ")}
+          lang={termLang}
+          role={tooltipsEnabled && interactive ? "button" : undefined}
+          tabIndex={tooltipsEnabled && interactive ? 0 : undefined}
+          aria-describedby={tooltipsEnabled && interactive && openGlossary?.index === index ? tooltipId : undefined}
+          onMouseEnter={(event) => open(segment.entry!, index, event.currentTarget, segment.text)}
+          onMouseLeave={() => close(index)}
+          onFocus={(event) => open(segment.entry!, index, event.currentTarget, segment.text)}
+          onBlur={() => close(index)}
+          onClick={(event) => {
+            if (!interactive) return;
+            event.preventDefault();
+            event.stopPropagation();
+            if (tooltipsEnabled) open(segment.entry!, index, event.currentTarget, segment.text);
+          }}
+          onKeyDown={(event) => {
+            if (!interactive) return;
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            if (tooltipsEnabled) open(segment.entry!, index, event.currentTarget, segment.text);
+          }}
+        >
+          {renderedTerm(segment.text, segment.entry)}
+        </span>
+      ) : <span key={`${index}-${segment.text}`}>{segment.text}</span>)}
+      {openGlossary && tooltipId ? createPortal(
+        <div
+          ref={tooltipRef}
+          id={tooltipId}
+          className="glossary-tooltip"
+          role="tooltip"
+          style={position}
+        >
+          <strong>{openGlossary.entry.term}</strong>
+          <p>{openGlossary.entry.meaning}</p>
+          {openGlossary.entry.otherMeanings?.length ? (
+            <ul>{openGlossary.entry.otherMeanings.map((meaning) => <li key={meaning}>{meaning}</li>)}</ul>
+          ) : null}
+          {openGlossary.entry.pronunciation ? (
+            <dl className="glossary-pronunciations">
+              {openGlossary.entry.pronunciation.native ? <div><dt>Native</dt><dd>{openGlossary.entry.pronunciation.native}</dd></div> : null}
+              {openGlossary.entry.pronunciation.romanized ? <div><dt>Romanized</dt><dd>{openGlossary.entry.pronunciation.romanized}</dd></div> : null}
+            </dl>
+          ) : null}
+          {openGlossary.entry.example ? <small>{openGlossary.entry.example}</small> : null}
+        </div>,
+        portalTarget,
+      ) : null}
+    </>
+  );
+}

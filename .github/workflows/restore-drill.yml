@@ -1,0 +1,70 @@
+name: Restore encrypted production backup
+
+on:
+  workflow_call:
+    inputs:
+      backup_key:
+        description: Exact weekly or manual backup key produced by the caller
+        required: true
+        type: string
+      caller_holds_storage_lock:
+        description: The caller already owns the production backup storage concurrency lock
+        required: true
+        type: boolean
+  workflow_dispatch:
+    inputs:
+      backup_key:
+        description: Optional exact weekly or manual key; empty selects the latest weekly backup
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ inputs.caller_holds_storage_lock && format('production-backup-restore-{0}', github.run_id) || 'production-backup-storage' }}
+  cancel-in-progress: false
+
+jobs:
+  restore:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production-backup
+    steps:
+      - name: Require the protected main ref
+        run: test "$GITHUB_REF" = "refs/heads/main"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+        working-directory: backend
+      - name: Install age
+        run: sudo apt-get update && sudo apt-get install --yes age
+      - name: Start disposable Supabase database
+        run: npm run db:start
+        working-directory: backend
+      - name: Recreate schema from committed migrations
+        run: npx supabase db reset
+        working-directory: backend
+      - name: Restore and verify latest encrypted backup
+        run: bash .github/scripts/restore-drill.sh
+        env:
+          RESTORE_DRILL_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+          RESTORE_DRILL_SCHEMA_READY: "1"
+          RESTORE_BACKUP_KEY: ${{ inputs.backup_key }}
+          RESTORE_MAX_AGE_SECONDS: "691200"
+          BACKUP_MAX_ALLOCATION_BYTES: "3221225472"
+          BACKUP_AGE_IDENTITY: ${{ secrets.BACKUP_AGE_IDENTITY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_BACKUP_VERIFY_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_BACKUP_VERIFY_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_BACKUP_ENDPOINT: ${{ secrets.R2_BACKUP_ENDPOINT }}
+          R2_BACKUP_BUCKET: ${{ secrets.R2_BACKUP_BUCKET }}
+      - name: Stop disposable Supabase database
+        if: always()
+        run: npx supabase stop --no-backup
+        working-directory: backend

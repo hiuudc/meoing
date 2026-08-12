@@ -1,0 +1,67 @@
+{
+  "name": "meoing-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "acceptance:check": "node --check scripts/acceptance-helpers.mjs && node --check scripts/acceptance-auth.mjs && node --check scripts/acceptance-cleanup-data.mjs && node --check scripts/acceptance-cleanup.mjs && node --check scripts/cleanup-staging-users.mjs && node --check scripts/database-identity.mjs && node --check scripts/configure-database-identity.mjs && node --check scripts/verify-database-target.mjs && node --check scripts/provision-staging-guard.mjs && node --check scripts/provision-staging-users.mjs && node --check scripts/staging-smoke.mjs && node --check scripts/load-gate.mjs && node --check scripts/db-concurrency.mjs && node --check scripts/request-cost-guard-resume.mjs && node --check scripts/cost-guard-resume-r2.mjs && node --check scripts/setup-local-auth.mjs && node --check scripts/verify-cost-guard-deploy-boundary.mjs && node --test scripts/acceptance-helpers.test.mjs scripts/acceptance-auth.test.mjs scripts/acceptance-cleanup-data.test.mjs scripts/acceptance-cleanup.test.mjs scripts/cost-guard-resume-r2.test.mjs scripts/database-identity.test.mjs scripts/provision-staging-guard.test.mjs scripts/request-cost-guard-resume.test.mjs scripts/setup-local-auth.test.mjs scripts/verify-cost-guard-deploy-boundary.test.mjs && npm run cost-guard:deploy-boundary",
+    "acceptance:cleanup": "node scripts/cleanup-staging-users.mjs",
+    "acceptance:load": "node scripts/load-gate.mjs",
+    "acceptance:provision": "node scripts/provision-staging-users.mjs",
+    "acceptance:staging": "node scripts/staging-smoke.mjs",
+    "auth:key:local": "node scripts/setup-local-auth.mjs",
+    "build": "wrangler deploy --dry-run --config wrangler.api.jsonc --env=\"\" --outdir .wrangler-dry-run/api && wrangler deploy --dry-run --config wrangler.maintenance.jsonc --env=\"\" --outdir .wrangler-dry-run/maintenance && wrangler deploy --dry-run --config wrangler.cost-guard.jsonc --env=\"\" --outdir .wrangler-dry-run/cost-guard",
+    "check": "npm run typecheck && npm run lint && npm run test && npm run build",
+    "cost-guard:deploy-boundary": "node scripts/verify-cost-guard-deploy-boundary.mjs",
+    "db:start": "npm run auth:key:local && supabase start",
+    "db:reset": "supabase db reset",
+    "db:concurrency": "node scripts/db-concurrency.mjs",
+    "db:identity:configure": "node scripts/configure-database-identity.mjs",
+    "db:local:provision": "node scripts/setup-local-database.mjs",
+    "db:target:verify": "node scripts/verify-database-target.mjs",
+    "db:test": "supabase test db",
+    "db:stop": "supabase stop",
+    "dev": "wrangler dev --config wrangler.api.jsonc",
+    "dev:maintenance": "wrangler dev --config wrangler.maintenance.jsonc --env-file .dev.vars.maintenance --test-scheduled",
+    "dev:cost-guard": "wrangler dev --config wrangler.cost-guard.jsonc --env-file .dev.vars.cost-guard --test-scheduled",
+    "lint": "oxlint --deny-warnings src test scripts",
+    "openapi:export": "esbuild ./scripts/export-openapi.ts --bundle --platform=node --format=esm --outfile=.wrangler/openapi-export.mjs && node .wrangler/openapi-export.mjs",
+    "openapi:types": "npm run openapi:export && openapi-typescript openapi.json -o ../frontend/src/api/generated.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "types": "wrangler types --config wrangler.api.jsonc --env-file .dev.vars.example --env-interface ApiEnv worker-configuration.d.ts && wrangler types --config wrangler.maintenance.jsonc --env-file .dev.vars.maintenance.example --env-interface MaintenanceEnv --include-runtime=false worker-maintenance-configuration.d.ts && wrangler types --config wrangler.cost-guard.jsonc --env-file .dev.vars.cost-guard.example --env-interface CostGuardEnv --include-runtime=false worker-cost-guard-configuration.d.ts"
+  },
+  "dependencies": {
+    "@meoing/ai-operation-contract": "file:../packages/ai-operation-contract",
+    "@hono/zod-openapi": "1.5.1",
+    "aws4fetch": "1.0.20",
+    "hono": "4.12.32",
+    "jose": "6.2.5",
+    "pg": "8.22.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.19.0",
+    "@types/pg": "8.20.0",
+    "openapi-typescript": "7.13.0",
+    "oxlint": "1.76.0",
+    "supabase": "2.110.0",
+    "typescript": "5.9.3",
+    "undici": "7.28.0",
+    "vitest": "4.1.10",
+    "wrangler": "4.118.0"
+  },
+  "overrides": {
+    "@redocly/openapi-core": {
+      "minimatch": "10.2.6"
+    }
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "workerd@1.20260730.1": true
+  }
+}

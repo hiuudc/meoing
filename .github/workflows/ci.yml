@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  public-tree:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+      - name: Audit public source tree
+        run: node scripts/verify-public-tree.mjs
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run test
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+        working-directory: backend
+      - run: npm run check
+        working-directory: backend
+      - name: Validate credentialed acceptance harness
+        run: npm run acceptance:check
+        working-directory: backend
+      - name: Verify generated OpenAPI contract
+        run: |
+          npm run openapi:types
+          git diff --exit-code -- openapi.json ../frontend/src/api/generated.ts
+        working-directory: backend
+
+  operations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Validate operations shell scripts
+        run: >-
+          bash -n
+          .github/scripts/backup-storage.sh
+          .github/scripts/backup-production.sh
+          .github/scripts/restore-drill.sh
+          .github/scripts/prune-production-backups.sh
+          .github/scripts/cleanup-legacy-daily.sh
+          .github/scripts/cleanup-unretained-backups.sh
+          .github/scripts/check-backup-freshness.sh
+          .github/scripts/tests/backup-operations.test.sh
+          .github/scripts/tests/fake-aws.sh
+      - name: Test backup and restore behavior
+        run: bash .github/scripts/tests/backup-operations.test.sh
+
+  database:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+        working-directory: backend
+      - name: Start local Supabase
+        run: npm run db:start
+        working-directory: backend
+      - name: Apply migrations and seed
+        run: npx supabase db reset
+        working-directory: backend
+      - name: Run pgTAP/RLS tests
+        run: npx supabase test db
+        working-directory: backend
+      - name: Run invite redemption concurrency test
+        run: npm run db:concurrency
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+      - name: Stop local Supabase
+        if: always()
+        run: npx supabase stop --no-backup
+        working-directory: backend

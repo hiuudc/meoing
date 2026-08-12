@@ -1,0 +1,470 @@
+import type { SupportedLanguage } from "./languages";
+
+export const QUESTION_FORMATS = [
+  "singleChoice",
+  "multipleChoice",
+  "trueFalse",
+  "fillBlank",
+  "selectBlank",
+  "multiCloze",
+  "wordBank",
+  "matching",
+  "reorderTokens",
+  "reorderDialogue",
+  "categorize",
+  "translation",
+  "shortAnswer",
+  "errorCorrection",
+  "sentenceTransformation",
+  "dictation",
+  "freeWriting",
+  "speakingRepeat",
+  "speakingRoleplay",
+  "listenSelect",
+  "audioMatching",
+  "soundDiscrimination",
+  "flashcardRecall",
+  "characterTracing",
+] as const;
+
+export type QuestionFormat = (typeof QUESTION_FORMATS)[number];
+export type LessonQuestionFormat = Exclude<QuestionFormat, "characterTracing">;
+export const LESSON_QUESTION_FORMATS = QUESTION_FORMATS.filter(
+  (format): format is LessonQuestionFormat => format !== "characterTracing",
+);
+export type EvaluationStatus = "correct" | "partial" | "incorrect";
+export type EvaluationMode = "local" | "ai";
+
+export interface QuestionPresentationSettings {
+  readQuestion: boolean;
+  readAnswers: boolean;
+  wordTooltips: boolean;
+}
+
+export interface CollectionQuestionSettings {
+  enabledFormats: QuestionFormat[];
+  characterTracing: CharacterTracingSettings;
+}
+
+export interface LearningProfile {
+  targetLanguage: string;
+  sourceLanguage: SupportedLanguage;
+  interfaceLanguage: "vi" | "en";
+  level: "beginner" | "elementary" | "intermediate" | "upperIntermediate" | "advanced";
+  dailyQuestionGoal: number;
+  lessonQuestionCount: number;
+  speakingEnabled: boolean;
+  preferredFormats: QuestionFormat[];
+  coachingStyle: "gentle" | "direct" | "socratic";
+}
+
+export interface TextMatchOptions {
+  caseSensitive?: boolean;
+  ignoreDiacritics?: boolean;
+  ignorePunctuation?: boolean;
+}
+
+export interface ChoiceOption {
+  id: string;
+  label: string;
+}
+
+export interface AnswerBank {
+  tokens: ChoiceOption[];
+  separator: "space" | "none";
+  defaultMode: "keyboard" | "bank";
+}
+
+export interface TrackedTerms {
+  words: string[];
+  phrases: string[];
+  sentences: string[];
+}
+
+export interface QuestionTracking {
+  encountered: TrackedTerms;
+  assessed: TrackedTerms;
+}
+
+export interface CharacterTracingSettings {
+  requireStrokeOrder: boolean;
+}
+
+export interface BaseQuestion {
+  id: string;
+  type: QuestionFormat;
+  prompt: string;
+  targetPrompt?: string;
+  explanation: string;
+  hint?: string;
+  supplementalHint?: string;
+  sourceReferenceIds?: string[];
+  evaluationMode: EvaluationMode;
+  presentation?: QuestionPresentationSettings;
+  glossaryTargets?: string[];
+  tracking?: QuestionTracking;
+  answerBank?: AnswerBank;
+}
+
+export interface SingleChoiceQuestion extends BaseQuestion {
+  type: "singleChoice";
+  options: ChoiceOption[];
+  correctOptionId: string;
+}
+
+export interface MultipleChoiceQuestion extends BaseQuestion {
+  type: "multipleChoice";
+  options: ChoiceOption[];
+  correctOptionIds: string[];
+}
+
+export interface TrueFalseQuestion extends BaseQuestion {
+  type: "trueFalse";
+  statement: string;
+  correct: boolean;
+}
+
+export interface FillBlankQuestion extends BaseQuestion {
+  type: "fillBlank";
+  template: string;
+  acceptedAnswers: string[];
+  match?: TextMatchOptions;
+}
+
+export interface SelectBlankQuestion extends BaseQuestion {
+  type: "selectBlank";
+  template: string;
+  options: ChoiceOption[];
+  correctOptionId: string;
+}
+
+export interface ClozeBlank {
+  id: string;
+  acceptedAnswers: string[];
+}
+
+export interface MultiClozeQuestion extends BaseQuestion {
+  type: "multiCloze";
+  template: string;
+  blanks: ClozeBlank[];
+  match?: TextMatchOptions;
+}
+
+export interface WordBankQuestion extends BaseQuestion {
+  type: "wordBank";
+  tokens: ChoiceOption[];
+  correctOrderIds: string[];
+}
+
+export interface MatchingPair {
+  leftId: string;
+  left: string;
+  rightId: string;
+  right: string;
+}
+
+export interface MatchingQuestion extends BaseQuestion {
+  type: "matching";
+  pairs: MatchingPair[];
+}
+
+export interface ReorderTokensQuestion extends BaseQuestion {
+  type: "reorderTokens";
+  tokens: ChoiceOption[];
+  correctOrderIds: string[];
+}
+
+export interface DialogueTurn extends ChoiceOption {
+  speaker: string;
+}
+
+export interface ReorderDialogueQuestion extends BaseQuestion {
+  type: "reorderDialogue";
+  turns: DialogueTurn[];
+  correctOrderIds: string[];
+}
+
+export interface CategoryOption extends ChoiceOption {}
+
+export interface CategoryItem extends ChoiceOption {
+  categoryId: string;
+}
+
+export interface CategorizeQuestion extends BaseQuestion {
+  type: "categorize";
+  categories: CategoryOption[];
+  items: CategoryItem[];
+}
+
+export interface TranslationQuestion extends BaseQuestion {
+  type: "translation";
+  sourceText: string;
+  targetLanguage: string;
+  referenceAnswer: string;
+  rubric: string[];
+}
+
+export interface ShortAnswerQuestion extends BaseQuestion {
+  type: "shortAnswer";
+  referenceAnswer: string;
+  requiredIdeas: string[];
+  rubric: string[];
+}
+
+export interface ErrorCorrectionQuestion extends BaseQuestion {
+  type: "errorCorrection";
+  incorrectText: string;
+  acceptedAnswers: string[];
+  match?: TextMatchOptions;
+}
+
+export interface SentenceTransformationQuestion extends BaseQuestion {
+  type: "sentenceTransformation";
+  sourceText: string;
+  constraint: string;
+  acceptedAnswers: string[];
+  match?: TextMatchOptions;
+}
+
+export interface DictationQuestion extends BaseQuestion {
+  type: "dictation";
+  transcript: string;
+  acceptedAnswers: string[];
+  match?: TextMatchOptions;
+}
+
+export interface FreeWritingQuestion extends BaseQuestion {
+  type: "freeWriting";
+  minWords: number;
+  maxWords: number;
+  rubric: string[];
+  supportBank?: ChoiceOption[];
+  supportBankSeparator?: "space" | "none";
+}
+
+export interface SpeakingRepeatQuestion extends BaseQuestion {
+  type: "speakingRepeat";
+  modelText: string;
+  rubric: string[];
+}
+
+export interface SpeakingRoleplayQuestion extends BaseQuestion {
+  type: "speakingRoleplay";
+  role: string;
+  scenario: string;
+  goal: string;
+  rubric: string[];
+}
+
+export interface ListenSelectQuestion extends BaseQuestion {
+  type: "listenSelect";
+  audioText: string;
+  options: ChoiceOption[];
+  correctOptionId: string;
+}
+
+export interface AudioMatchingPair {
+  audioId: string;
+  audioText: string;
+  matchId: string;
+  label: string;
+}
+
+export interface AudioMatchingQuestion extends BaseQuestion {
+  type: "audioMatching";
+  pairs: AudioMatchingPair[];
+}
+
+export interface SoundDiscriminationQuestion extends BaseQuestion {
+  type: "soundDiscrimination";
+  audioText: string;
+  options: ChoiceOption[];
+  correctOptionId: string;
+}
+
+export interface FlashcardRecallQuestion extends BaseQuestion {
+  type: "flashcardRecall";
+  cue: string;
+  acceptedAnswers: string[];
+  match?: TextMatchOptions;
+}
+
+export interface CharacterTracingQuestion extends BaseQuestion {
+  type: "characterTracing";
+  character: string;
+  meaning?: string;
+  reading?: string;
+  requireStrokeOrder: boolean;
+  unavailableReason?: string;
+}
+
+export type LessonQuestion =
+  | SingleChoiceQuestion
+  | MultipleChoiceQuestion
+  | TrueFalseQuestion
+  | FillBlankQuestion
+  | SelectBlankQuestion
+  | MultiClozeQuestion
+  | WordBankQuestion
+  | MatchingQuestion
+  | ReorderTokensQuestion
+  | ReorderDialogueQuestion
+  | CategorizeQuestion
+  | TranslationQuestion
+  | ShortAnswerQuestion
+  | ErrorCorrectionQuestion
+  | SentenceTransformationQuestion
+  | DictationQuestion
+  | FreeWritingQuestion
+  | SpeakingRepeatQuestion
+  | SpeakingRoleplayQuestion
+  | ListenSelectQuestion
+  | AudioMatchingQuestion
+  | SoundDiscriminationQuestion
+  | FlashcardRecallQuestion;
+
+export type QuestionAnswer = string | boolean | string[] | Record<string, string>;
+
+export interface TheoryBlock {
+  id: string;
+  kind: "concept" | "grammar" | "pronunciation" | "culture" | "tip";
+  title: string;
+  body: string;
+}
+
+export interface LessonExample {
+  id: string;
+  source: string;
+  translation?: string;
+  note?: string;
+}
+
+export interface GlossaryEntry {
+  term: string;
+  meaning: string;
+  otherMeanings?: string[];
+  forms?: string[];
+  aliases?: string[];
+  pronunciation?: {
+    native?: string;
+    romanized?: string;
+  };
+  example?: string;
+}
+
+export interface QuestionAlternate {
+  questionId: string;
+  question: LessonQuestion;
+}
+
+export interface SourceReference {
+  id: string;
+  kind: "unit" | "document" | "youtube" | "transcript" | "note";
+  title: string;
+  url?: string;
+  excerpt?: string;
+}
+
+export interface Lesson {
+  schemaVersion: 8;
+  id: string;
+  revision?: number;
+  ownerId?: string;
+  status?: "draft" | "published";
+  unitId: string;
+  title: string;
+  summary: string;
+  targetLanguage: string;
+  sourceLanguage: string;
+  level: LearningProfile["level"];
+  objectives: string[];
+  theory: TheoryBlock[];
+  examples: LessonExample[];
+  glossary: GlossaryEntry[];
+  sourceReferences: SourceReference[];
+  questions: LessonQuestion[];
+  questionAlternates: QuestionAlternate[];
+  createdAt: string;
+}
+
+export type PlayableQuestion = LessonQuestion | CharacterTracingQuestion;
+
+export interface PlayableQuestionAlternate {
+  questionId: string;
+  question: PlayableQuestion;
+}
+
+export interface PlayableLesson extends Omit<Lesson, "questions" | "questionAlternates"> {
+  questions: PlayableQuestion[];
+  questionAlternates: PlayableQuestionAlternate[];
+}
+
+export interface EvaluationError {
+  location: string;
+  message: string;
+}
+
+export interface RubricScore {
+  criterion: string;
+  score: number;
+  note: string;
+}
+
+export interface Evaluation {
+  status: EvaluationStatus;
+  score: number;
+  correctParts: string[];
+  errors: EvaluationError[];
+  correction: string;
+  explanation: string;
+  nextHint: string;
+  rubricScores?: RubricScore[];
+  pronunciationAssessed?: boolean;
+}
+
+export interface LocalGradeResult extends Evaluation {
+  requiresAi: false;
+}
+
+export interface AiGradeRequest {
+  requiresAi: true;
+  reason: "semantic" | "writing" | "speaking";
+}
+
+export type GradeResult = LocalGradeResult | AiGradeRequest;
+
+export type EvaluationSource = "client_extension" | "server_rule";
+export type AttemptOutcome = "correct" | "incorrect" | "skipped";
+
+export interface AttemptRecord {
+  attemptId: string;
+  questionId: string;
+  attemptNumber: number;
+  answer: QuestionAnswer;
+  evaluationSource: EvaluationSource;
+  status: EvaluationStatus;
+  outcome?: AttemptOutcome;
+  transcript?: string | null;
+  score: number;
+  firstTry: boolean;
+  answeredAt: string;
+}
+
+export interface LessonProgressSnapshot {
+  lessonId: string;
+  completedQuestionIds: string[];
+  attemptsByQuestion: Record<string, number>;
+  firstTryCorrect: number;
+  totalQuestions: number;
+  masteryPercent: number;
+  updatedAt: string;
+}
+
+export interface SpeakingSubmission {
+  transcript?: string;
+  durationMs: number;
+  wordsPerMinute?: number;
+  pauseCount?: number;
+  pronunciationAvailable: boolean;
+  audio?: Blob;
+}

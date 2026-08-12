@@ -1,0 +1,10 @@
+Meoing
+Copyright 2026 Hiu UDC
+
+This product includes third-party packages licensed under their respective
+licenses. Their source and license metadata are recorded in package lockfiles.
+
+The rich-text editor includes Lexical packages from Meta, licensed under MIT.
+Character-tracing functionality uses Hanzi Writer and character data packages;
+their source data, license terms, attribution, and redistribution conditions
+remain applicable to those assets.

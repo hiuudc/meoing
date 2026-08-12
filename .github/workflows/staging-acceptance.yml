@@ -1,0 +1,106 @@
+name: Staging acceptance and load gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      provision_accounts:
+        description: Provision or rotate the dedicated staging acceptance accounts
+        required: true
+        type: boolean
+        default: false
+      run_load_gate:
+        description: Run the full 100-user, 10-minute authenticated load gate
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-acceptance
+  cancel-in-progress: false
+
+jobs:
+  acceptance:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: staging
+    steps:
+      - name: Require the protected main ref
+        run: test "$GITHUB_REF" = "refs/heads/main"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+        working-directory: backend
+      - name: Validate acceptance harness
+        run: npm run acceptance:check
+        working-directory: backend
+      - name: Provision staging acceptance accounts
+        if: inputs.provision_accounts
+        run: npm run acceptance:provision
+        working-directory: backend
+        env:
+          MEOING_PROVISION_API_URL: ${{ vars.MEOI_API_URL }}
+          MEOING_PROVISION_SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          MEOING_PROVISION_EXPECTED_SUPABASE_PROJECT_REF: sdwuwmyrbdaarxokxmsf
+          MEOING_PROVISION_SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_PROVISIONING_SECRET_KEY }}
+          MEOING_PROVISION_SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}
+          MEOING_PROVISION_OWNER_EMAIL: ${{ secrets.MEOI_ACCEPTANCE_EMAIL }}
+          MEOING_PROVISION_OWNER_PASSWORD: ${{ secrets.MEOI_ACCEPTANCE_PASSWORD }}
+          MEOING_PROVISION_MEMBER_EMAIL: ${{ secrets.MEOI_ACCEPTANCE_MEMBER_EMAIL }}
+          MEOING_PROVISION_MEMBER_PASSWORD: ${{ secrets.MEOI_ACCEPTANCE_MEMBER_PASSWORD }}
+          MEOING_LOAD_EMAIL_TEMPLATE: ${{ secrets.MEOI_LOAD_EMAIL_TEMPLATE }}
+          MEOING_LOAD_PASSWORD: ${{ secrets.MEOI_LOAD_PASSWORD }}
+      - name: Run authenticated staging smoke
+        run: npm run acceptance:staging
+        working-directory: backend
+        env:
+          MEOING_ACCEPTANCE_API_URL: ${{ vars.MEOI_API_URL }}
+          MEOING_ACCEPTANCE_SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          MEOING_ACCEPTANCE_EXPECTED_SUPABASE_PROJECT_REF: sdwuwmyrbdaarxokxmsf
+          MEOING_ACCEPTANCE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}
+          MEOING_ACCEPTANCE_ALLOWED_ORIGIN: ${{ vars.MEOI_ACCEPTANCE_WEB_ORIGIN }}
+          MEOING_ACCEPTANCE_EMAIL: ${{ secrets.MEOI_ACCEPTANCE_EMAIL }}
+          MEOING_ACCEPTANCE_PASSWORD: ${{ secrets.MEOI_ACCEPTANCE_PASSWORD }}
+          MEOING_ACCEPTANCE_EXTENDED: "true"
+          MEOING_ACCEPTANCE_MEMBER_EMAIL: ${{ secrets.MEOI_ACCEPTANCE_MEMBER_EMAIL }}
+          MEOING_ACCEPTANCE_MEMBER_PASSWORD: ${{ secrets.MEOI_ACCEPTANCE_MEMBER_PASSWORD }}
+          MEOING_ACCEPTANCE_TURNSTILE_TOKEN: XXXX.DUMMY.TOKEN.XXXX
+          MEOING_ACCEPTANCE_OUTPUT: .acceptance-results/staging-smoke.json
+      - name: Run 100-user load gate
+        if: inputs.run_load_gate
+        run: npm run acceptance:load
+        working-directory: backend
+        env:
+          MEOING_LOAD_API_URL: ${{ vars.MEOI_API_URL }}
+          MEOING_LOAD_SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          MEOING_LOAD_EXPECTED_SUPABASE_PROJECT_REF: sdwuwmyrbdaarxokxmsf
+          MEOING_LOAD_SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}
+          MEOING_LOAD_EMAIL_TEMPLATE: ${{ secrets.MEOI_LOAD_EMAIL_TEMPLATE }}
+          MEOING_LOAD_PASSWORD: ${{ secrets.MEOI_LOAD_PASSWORD }}
+          MEOING_LOAD_CONCURRENCY: "100"
+          MEOING_LOAD_DURATION_SECONDS: "600"
+          MEOING_LOAD_REQUESTS_PER_USER_PER_MINUTE: "60"
+          MEOING_LOAD_MUTATION_EVERY: "10"
+          MEOING_LOAD_READ_P95_MS: "400"
+          MEOING_LOAD_MUTATION_P95_MS: "800"
+          MEOING_LOAD_MAX_ERROR_RATE: "0.01"
+          MEOING_LOAD_OUTPUT: .acceptance-results/load-gate.json
+      - name: Upload acceptance summaries
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: staging-acceptance-${{ github.sha }}
+          path: backend/.acceptance-results
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30

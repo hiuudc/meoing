@@ -1,0 +1,235 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "meoing-api",
+  "main": "src/api-worker.ts",
+  "compatibility_date": "2026-07-30",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "secrets": {
+    "required": [
+      "R2_ACCESS_KEY_ID",
+      "R2_SECRET_ACCESS_KEY",
+      "INVITE_TOKEN_SECRET",
+      "TURNSTILE_SECRET_KEY",
+      "OPENAI_API_KEY"
+    ]
+  },
+  "placement": {
+    "mode": "smart"
+  },
+  "limits": {
+    "cpu_ms": 20,
+    "subrequests": 16
+  },
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": false
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.01
+    }
+  },
+  "vars": {
+    "APP_ENV": "local",
+    "CORS_ORIGINS": "http://127.0.0.1:5173,http://localhost:5173",
+    "SUPABASE_URL": "https://PROJECT_REF.supabase.co",
+    "SUPABASE_JWT_AUDIENCE": "authenticated",
+    "R2_ACCOUNT_ID": "00000000000000000000000000000000",
+    "R2_BUCKET_NAME": "meoing-files-local",
+    "PRESIGNED_UPLOAD_TTL_SECONDS": "900",
+    "PRESIGNED_DOWNLOAD_TTL_SECONDS": "300"
+    ,"OPENAI_MODEL": "gpt-5-mini"
+    ,"OPENAI_DAILY_BUDGET_UNITS": "10000"
+    ,"OPENAI_LESSON_RESERVATION_UNITS": "20"
+    ,"OPENAI_ASSISTANCE_RESERVATION_UNITS": "1"
+  },
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "00000000000000000000000000000000"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "FILES",
+      "bucket_name": "meoing-files-local"
+    }
+  ],
+  "ratelimits": [
+    {
+      "name": "READ_RATE_LIMIT",
+      "namespace_id": "1001",
+      "simple": {
+        "limit": 300,
+        "period": 60
+      }
+    },
+    {
+      "name": "WRITE_RATE_LIMIT",
+      "namespace_id": "1002",
+      "simple": {
+        "limit": 60,
+        "period": 60
+      }
+    },
+    {
+      "name": "PROGRESS_RATE_LIMIT",
+      "namespace_id": "1003",
+      "simple": {
+        "limit": 120,
+        "period": 60
+      }
+    },
+    {
+      "name": "AI_RATE_LIMIT",
+      "namespace_id": "1004",
+      "simple": {
+        "limit": 30,
+        "period": 60
+      }
+    }
+  ],
+  // Replace every placeholder before the first staging/production deployment.
+  // Bindings and vars are deliberately repeated because Wrangler environments do not inherit them.
+  "env": {
+    "staging": {
+      "account_id": "00000000000000000000000000000000",
+      "workers_dev": false,
+      "preview_urls": false,
+      "secrets": {
+        "required": [
+          "R2_ACCESS_KEY_ID",
+          "R2_SECRET_ACCESS_KEY",
+          "INVITE_TOKEN_SECRET",
+          "TURNSTILE_SECRET_KEY",
+          "OPENAI_API_KEY"
+        ]
+      },
+      "placement": {
+        "region": "aws:ap-northeast-1"
+      },
+      "limits": {
+        "cpu_ms": 20,
+        "subrequests": 16
+      },
+      "vars": {
+        "APP_ENV": "staging",
+        "CORS_ORIGINS": "https://staging.meoing.com",
+        "SUPABASE_URL": "https://STAGING_PROJECT_REF.supabase.co",
+        "SUPABASE_JWT_AUDIENCE": "authenticated",
+        "R2_ACCOUNT_ID": "00000000000000000000000000000000",
+        "R2_BUCKET_NAME": "meoing-files-staging",
+        "PRESIGNED_UPLOAD_TTL_SECONDS": "900",
+        "PRESIGNED_DOWNLOAD_TTL_SECONDS": "300"
+        ,"OPENAI_MODEL": "gpt-5-mini"
+        ,"OPENAI_DAILY_BUDGET_UNITS": "10000"
+        ,"OPENAI_LESSON_RESERVATION_UNITS": "20"
+        ,"OPENAI_ASSISTANCE_RESERVATION_UNITS": "1"
+      },
+      "hyperdrive": [
+        {
+          "binding": "HYPERDRIVE",
+          "id": "00000000000000000000000000000000"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "FILES",
+          "bucket_name": "meoing-files-staging"
+        }
+      ],
+      "ratelimits": [
+        {
+          "name": "READ_RATE_LIMIT",
+          "namespace_id": "1101",
+          "simple": { "limit": 300, "period": 60 }
+        },
+        {
+          "name": "WRITE_RATE_LIMIT",
+          "namespace_id": "1102",
+          "simple": { "limit": 60, "period": 60 }
+        },
+        {
+          "name": "PROGRESS_RATE_LIMIT",
+          "namespace_id": "1103",
+          "simple": { "limit": 120, "period": 60 }
+        },
+        {
+          "name": "AI_RATE_LIMIT",
+          "namespace_id": "1104",
+          "simple": { "limit": 30, "period": 60 }
+        }
+      ]
+    },
+    "production": {
+      "workers_dev": false,
+      "preview_urls": false,
+      "secrets": {
+        "required": [
+          "R2_ACCESS_KEY_ID",
+          "R2_SECRET_ACCESS_KEY",
+          "INVITE_TOKEN_SECRET",
+          "TURNSTILE_SECRET_KEY",
+          "OPENAI_API_KEY"
+        ]
+      },
+      "limits": {
+        "cpu_ms": 20,
+        "subrequests": 16
+      },
+      "vars": {
+        "APP_ENV": "production",
+        "CORS_ORIGINS": "https://meoing.com",
+        "SUPABASE_URL": "https://PRODUCTION_PROJECT_REF.supabase.co",
+        "SUPABASE_JWT_AUDIENCE": "authenticated",
+        "R2_ACCOUNT_ID": "00000000000000000000000000000000",
+        "R2_BUCKET_NAME": "meoing-files-production",
+        "PRESIGNED_UPLOAD_TTL_SECONDS": "900",
+        "PRESIGNED_DOWNLOAD_TTL_SECONDS": "300"
+        ,"OPENAI_MODEL": "gpt-5-mini"
+        ,"OPENAI_DAILY_BUDGET_UNITS": "10000"
+        ,"OPENAI_LESSON_RESERVATION_UNITS": "20"
+        ,"OPENAI_ASSISTANCE_RESERVATION_UNITS": "1"
+      },
+      "hyperdrive": [
+        {
+          "binding": "HYPERDRIVE",
+          "id": "00000000000000000000000000000000"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "FILES",
+          "bucket_name": "meoing-files-production"
+        }
+      ],
+      "ratelimits": [
+        {
+          "name": "READ_RATE_LIMIT",
+          "namespace_id": "2101",
+          "simple": { "limit": 300, "period": 60 }
+        },
+        {
+          "name": "WRITE_RATE_LIMIT",
+          "namespace_id": "2102",
+          "simple": { "limit": 60, "period": 60 }
+        },
+        {
+          "name": "PROGRESS_RATE_LIMIT",
+          "namespace_id": "2103",
+          "simple": { "limit": 120, "period": 60 }
+        },
+        {
+          "name": "AI_RATE_LIMIT",
+          "namespace_id": "2104",
+          "simple": { "limit": 30, "period": 60 }
+        }
+      ]
+    }
+  }
+}

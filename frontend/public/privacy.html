@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Meoing Privacy</title>
+    <link rel="stylesheet" href="/legal.css">
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">Meoing - learning workspace</p>
+      <h1>Privacy</h1>
+      <p class="notice">Meoing requires an account. Supabase Auth manages sign-in; the Meoing Cloudflare Worker authorizes application data stored in PostgreSQL and private R2 storage.</p>
+      <h2>Data we store</h2>
+      <ul>
+        <li>Account profile, collection membership, roles, settings, units, lessons and learning summaries.</li>
+        <li>Uploaded files in private Cloudflare R2 storage, accessed through short-lived authorized URLs.</li>
+        <li>Progress records needed to resume and measure learning. The website uses IndexedDB only for a temporary progress outbox.</li>
+      </ul>
+      <h2>OpenAI API consent</h2>
+      <p>Lesson generation, answer evaluation and coaching are optional. Before an API operation, Meoing asks for consent and sends only the learning material and answer needed for that operation to OpenAI through the Worker. Audio recordings and sign-in tokens are not sent. Requests use OpenAI's API with response storage disabled.</p>
+      <p>Meoing does not log prompts, answers, token text or lesson content in Worker logs. A short-lived validated operation result may be retained for up to 24 hours only to make a retry idempotent. You can withdraw API consent in Learn settings; API operations stop immediately.</p>
+      <h2>Security and deletion</h2>
+      <p>Application requests require a verified session and are checked again against collection permissions by the Worker and PostgreSQL row-level security. You can request account deletion in Meoing. Access is locked immediately, cancellation remains available for 30 days, and retained audit records are anonymized.</p>
+      <nav class="links"><a href="/terms.html">Terms</a><a href="/support.html">Support</a><a href="/delete-data.html">Delete data</a><a href="/">Meoing</a></nav>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "name": "meoing",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev:local": "node scripts/dev-local.mjs",
+    "test:dev-local": "node --test scripts/dev-local.test.mjs backend/scripts/setup-local-database.test.mjs"
+  }
+}

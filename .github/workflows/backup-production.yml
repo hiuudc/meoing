@@ -1,0 +1,77 @@
+name: Weekly production database backup
+
+on:
+  schedule:
+    - cron: "23 2 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-backup-storage
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production-backup
+    outputs:
+      backup_key: ${{ steps.create.outputs.backup_key }}
+      backup_kind: ${{ steps.create.outputs.backup_kind }}
+    steps:
+      - name: Require the protected main ref
+        run: test "$GITHUB_REF" = "refs/heads/main"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install age
+        run: sudo apt-get update && sudo apt-get install --yes age
+      - name: Create encrypted backup
+        id: create
+        run: bash .github/scripts/backup-production.sh
+        env:
+          BACKUP_KIND: ${{ github.event_name == 'schedule' && 'weekly' || 'manual' }}
+          BACKUP_MAX_ALLOCATION_BYTES: "3221225472"
+          SUPABASE_PRODUCTION_DB_URL: ${{ secrets.SUPABASE_PRODUCTION_DB_URL }}
+          EXPECTED_SUPABASE_PROJECT_REF: ${{ vars.EXPECTED_SUPABASE_PROJECT_REF }}
+          BACKUP_AGE_RECIPIENT: ${{ secrets.BACKUP_AGE_RECIPIENT }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_BACKUP_WRITE_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_BACKUP_WRITE_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_BACKUP_ENDPOINT: ${{ secrets.R2_BACKUP_ENDPOINT }}
+          R2_BACKUP_BUCKET: ${{ secrets.R2_BACKUP_BUCKET }}
+
+  restore_backup:
+    needs: backup
+    uses: ./.github/workflows/restore-drill.yml
+    with:
+      backup_key: ${{ needs.backup.outputs.backup_key }}
+      caller_holds_storage_lock: true
+
+  prune_weekly:
+    needs: [backup, restore_backup]
+    if: >-
+      ${{
+        always()
+        && github.ref == 'refs/heads/main'
+        && needs.backup.result == 'success'
+        && needs.backup.outputs.backup_kind == 'weekly'
+        && needs.restore_backup.result == 'success'
+      }}
+    runs-on: ubuntu-latest
+    environment: production-backup
+    steps:
+      - name: Require the protected main ref
+        run: test "$GITHUB_REF" = "refs/heads/main"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Prune verified weekly backups by LastModified
+        run: bash .github/scripts/prune-production-backups.sh
+        env:
+          VERIFIED_BACKUP_KEY: ${{ needs.backup.outputs.backup_key }}
+          WEEKLY_BACKUP_KEEP_COUNT: "4"
+          RESTORE_MAX_AGE_SECONDS: "691200"
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_BACKUP_RETENTION_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_BACKUP_RETENTION_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_BACKUP_ENDPOINT: ${{ secrets.R2_BACKUP_ENDPOINT }}
+          R2_BACKUP_BUCKET: ${{ secrets.R2_BACKUP_BUCKET }}
