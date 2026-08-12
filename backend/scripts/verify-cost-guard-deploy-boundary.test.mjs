@@ -229,15 +229,12 @@ test("staging verifies all API secrets before migrations and deploy", () => {
   );
 });
 
-test("production locks the extension origin and smokes every public web entrypoint", () => {
+test("production smokes every public web entrypoint", () => {
   const pagesDeploy = "      - name: Deploy production Pages\n";
   const smoke = `
       - name: Production smoke test
         run: |
           expected_web_origin="https://meoing.com"
-          if [[ "$MEOI_WEB_ORIGINS" != "$expected_web_origin" ]]; then
-            exit 1
-          fi
           for page_path in "/" "/auth/callback" "/privacy" "/terms"; do
             curl --silent --show-error --fail --location \\
               --retry 5 --retry-all-errors --retry-delay 5 \\
@@ -247,7 +244,6 @@ test("production locks the extension origin and smokes every public web entrypoi
           curl "\${expected_web_origin}/release.json?release=\${RELEASE_SHA}"
           .environment == $environment and .commitSha == $commit_sha
         env:
-          MEOI_WEB_ORIGINS: \${{ vars.MEOI_WEB_ORIGINS }}
           RELEASE_SHA: \${{ steps.release.outputs.release_sha }}
 `;
   assert.doesNotThrow(() =>
@@ -327,7 +323,7 @@ test("production proves exact R2 CORS, release SHA, and live Cost Guard", () => 
   `;
   const pgTap = "      - name: Run production-release pgTAP/RLS tests\n";
   const migration = "      - name: Apply production migrations\n";
-  const build = "      - name: Build web and production extension\n";
+  const build = "      - name: Build website\n";
   const smoke = "      - name: Production smoke test\n";
   const safe =
     marker + build + pgTap + guardStep("preflight") + cors + migration +

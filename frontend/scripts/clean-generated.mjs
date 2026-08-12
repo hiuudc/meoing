@@ -3,7 +3,7 @@ import { dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const generatedPaths = ["dist", "dist-pages", "dist-extension"];
+const generatedPaths = ["dist", "dist-pages"];
 
 for (const relativePath of generatedPaths) {
   const target = resolve(projectRoot, relativePath);
@@ -13,4 +13,4 @@ for (const relativePath of generatedPaths) {
   await rm(target, { recursive: true, force: true });
 }
 
-console.log("Removed generated Meoi build directories.");
+console.log("Removed generated website build directories.");

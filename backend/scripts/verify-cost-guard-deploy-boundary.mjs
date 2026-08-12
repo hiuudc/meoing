@@ -220,14 +220,12 @@ export function assertProductionDeployVerifiesWebBoundaryAndSmoke(workflow) {
   const smoke = namedStep(workflow, "Production smoke test");
   const requiredFragments = [
     'expected_web_origin="https://meoing.com"',
-    'if [[ "$MEOI_WEB_ORIGINS" != "$expected_web_origin" ]]',
     'for page_path in "/" "/auth/callback" "/privacy" "/terms"; do',
     "curl --silent --show-error --fail --location",
     "--retry 5 --retry-all-errors --retry-delay 5",
     '"${expected_web_origin}${page_path}"',
     '"${expected_web_origin}/release.json?release=${RELEASE_SHA}"',
     '.environment == $environment and .commitSha == $commit_sha',
-    "MEOI_WEB_ORIGINS: ${{ vars.MEOI_WEB_ORIGINS }}",
     "RELEASE_SHA: ${{ steps.release.outputs.release_sha }}",
   ];
   for (const fragment of requiredFragments) {
@@ -361,7 +359,7 @@ export function assertProductionReleaseInfrastructureGates(
   const corsIndex = workflow.indexOf("      - name: Apply and verify production R2 CORS");
   const migrationIndex = workflow.indexOf("      - name: Apply production migrations");
   const markerIndex = workflow.indexOf("      - name: Write production release marker");
-  const buildIndex = workflow.indexOf("      - name: Build web and production extension");
+  const buildIndex = workflow.indexOf("      - name: Build website");
   const pgTapIndex = workflow.indexOf(
     "      - name: Run production-release pgTAP/RLS tests",
   );

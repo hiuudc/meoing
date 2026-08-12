@@ -130,7 +130,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      - name: Build web application and staging extension
+      - name: Build website
         run: npm run build
         working-directory: frontend
         env:
@@ -138,15 +138,6 @@ jobs:
           VITE_SUPABASE_URL: ${{ vars.SUPABASE_URL }}
           VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}
           VITE_TURNSTILE_SITE_KEY: ${{ vars.TURNSTILE_SITE_KEY }}
-          MEOI_WEB_ORIGINS: ${{ vars.MEOI_WEB_ORIGINS }}
-          MEOI_REQUIRE_WEB_ORIGINS: "true"
-      - name: Upload staging extension artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: meoi-bridge-v8-staging-${{ github.event.workflow_run.head_sha }}
-          path: frontend/dist-extension
-          if-no-files-found: error
-          retention-days: 14
       - name: Deploy staging Pages
         run: npx wrangler pages deploy ../frontend/dist-pages --project-name "$CLOUDFLARE_PAGES_PROJECT" --branch staging
         working-directory: backend

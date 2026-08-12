@@ -168,7 +168,7 @@ records so the sending subdomain authorizes only Cloudflare.
 2. Apply additive/backward-compatible database migrations.
 3. Deploy the API Worker.
 4. Deploy the maintenance Worker.
-5. Deploy the web application and extension contract changes.
+5. Deploy the website and API contract changes.
 6. Run health/auth/R2 smoke tests, verify the maintenance canary, and watch
    Worker errors, PostgreSQL locks/connections and R2 failures.
 

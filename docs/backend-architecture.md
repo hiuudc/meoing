@@ -51,6 +51,6 @@ for retention and account deletion.
 ## Compatibility
 
 The REST API is versioned under `/v1` and described by OpenAPI. Future native
-mobile and ChatGPT/MCP clients should generate clients from that contract
+mobile and other compatible clients should generate clients from that contract
 instead of importing frontend types. Breaking contract changes require `/v2`;
 database migrations should remain forward-compatible during staged deployment.

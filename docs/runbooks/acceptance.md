@@ -377,7 +377,7 @@ acceptance. Before production, retain separate evidence for:
 - email verification and password reset through Cloudflare Email Sending SMTP,
   including delivery status and SPF/DKIM/DMARC results, followed by the manual
   unmarked-canary cleanup above;
-- Chrome extension interaction with ChatGPT and the rendered lesson UI;
+- API learning operation behavior and the rendered lesson UI;
 - Turnstile with production keys;
 - the 30-day account/collection purge and Auth-user deletion;
 - manual review of the automatic restore evidence for every successful weekly encrypted

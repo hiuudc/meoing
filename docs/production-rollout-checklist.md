@@ -39,7 +39,7 @@
 - [ ] Deploy build frontend production với `VITE_MEOI_API_URL=https://api.meoing.com`, Supabase URL production, publishable key và Turnstile site key.
 - [ ] Xác nhận `https://meoing.com` phân giải DNS và tải được website.
 - [ ] Xác nhận auth gate, signup/verify, sign-in và onboarding username trên website production.
-- [ ] Xác nhận extension Lesson v8 gửi progress vào API production.
+- [ ] Xác nhận website Lesson gửi progress vào API production.
 
 ## Backup, CI và vận hành
 
