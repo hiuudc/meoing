@@ -47,7 +47,7 @@
   },
   "env": {
     "staging": {
-      "account_id": "29e80074abc5eb106165d2349db7ca56",
+      "account_id": "00000000000000000000000000000000",
       "workers_dev": false,
       "preview_urls": false,
       "secrets": {
@@ -63,7 +63,7 @@
       "routes": [],
       "vars": {
         "APP_ENV": "staging",
-        "SUPABASE_URL": "https://sdwuwmyrbdaarxokxmsf.supabase.co"
+        "SUPABASE_URL": "https://STAGING_PROJECT_REF.supabase.co"
       },
       "hyperdrive": [
         {
@@ -93,7 +93,7 @@
       },
       "vars": {
         "APP_ENV": "production",
-        "SUPABASE_URL": "https://rckeolmhsnkpcamlheds.supabase.co"
+        "SUPABASE_URL": "https://PRODUCTION_PROJECT_REF.supabase.co"
       },
       "hyperdrive": [
         {

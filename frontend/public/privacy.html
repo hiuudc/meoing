@@ -3,33 +3,26 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>Meoi Privacy</title>
+    <title>Meoing Privacy</title>
     <link rel="stylesheet" href="/legal.css">
   </head>
   <body>
     <main>
-      <p class="eyebrow">Meoing · Cloud service and Meoi Bridge v8</p>
+      <p class="eyebrow">Meoing - learning workspace</p>
       <h1>Privacy</h1>
-      <p class="notice">Meoing requires an account. Supabase Auth manages sign-in, while Meoing’s Cloudflare Worker authorizes all application data stored in PostgreSQL and private R2 storage.</p>
-
+      <p class="notice">Meoing requires an account. Supabase Auth manages sign-in; the Meoing Cloudflare Worker authorizes application data stored in PostgreSQL and private R2 storage.</p>
       <h2>Data we store</h2>
       <ul>
-        <li>Account profile, collection membership, roles, settings, units, lessons and learning summaries are stored in PostgreSQL.</li>
-        <li>Uploaded files are stored in a private Cloudflare R2 bucket and are accessed only through short-lived authorized URLs.</li>
-        <li>Raw lesson answers, transcripts and outcomes are retained for up to one year. Audio, coaching conversations and long AI explanations are not stored.</li>
-        <li>The website uses IndexedDB only as a temporary outbox for progress that has not yet been acknowledged. Acknowledged batches are deleted immediately; rejected batches are shown for retry or discard. Signing out first attempts to sync and keeps any unsent batches isolated under that account so they can retry after the same user signs in again. Requesting account deletion clears that account&rsquo;s device outbox.</li>
+        <li>Account profile, collection membership, roles, settings, units, lessons and learning summaries.</li>
+        <li>Uploaded files in private Cloudflare R2 storage, accessed through short-lived authorized URLs.</li>
+        <li>Progress records needed to resume and measure learning. The website uses IndexedDB only for a temporary progress outbox.</li>
       </ul>
-
-      <h2>Extension scope</h2>
-      <p>The extension accepts commands only from configured Meoing origins, sends prompts through <code>chatgpt.com</code>, and reads only the new assistant turn created for that operation. Pending prompts and results use extension session storage. It does not read unrelated chat history, cookies, or internal network traffic.</p>
-
+      <h2>OpenAI API consent</h2>
+      <p>Lesson generation, answer evaluation and coaching are optional. Before an API operation, Meoing asks for consent and sends only the learning material and answer needed for that operation to OpenAI through the Worker. Audio recordings and sign-in tokens are not sent. Requests use OpenAI's API with response storage disabled.</p>
+      <p>Meoing does not log prompts, answers, token text or lesson content in Worker logs. A short-lived validated operation result may be retained for up to 24 hours only to make a retry idempotent. You can withdraw API consent in Learn settings; API operations stop immediately.</p>
       <h2>Security and deletion</h2>
-      <p>Application requests require a verified Supabase session and are checked again against collection permissions by the Worker and PostgreSQL row-level security. You can request account deletion in Meoing. Access is locked immediately, cancellation remains available for 30 days, and retained audit records are anonymized.</p>
-
-      <h2>Audio and third-party services</h2>
-      <p>Recordings stay in the browser for playback and are not uploaded by Meoing. ChatGPT, Google OAuth, Supabase, Cloudflare and the configured email provider process data needed to provide their respective services.</p>
-
-      <nav class="links"><a href="/terms.html">Terms</a><a href="/support.html">Support</a><a href="/delete-data.html">Delete data</a><a href="/">Meoi</a></nav>
+      <p>Application requests require a verified session and are checked again against collection permissions by the Worker and PostgreSQL row-level security. You can request account deletion in Meoing. Access is locked immediately, cancellation remains available for 30 days, and retained audit records are anonymized.</p>
+      <nav class="links"><a href="/terms.html">Terms</a><a href="/support.html">Support</a><a href="/delete-data.html">Delete data</a><a href="/">Meoing</a></nav>
     </main>
   </body>
 </html>

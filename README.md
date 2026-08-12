@@ -1,74 +1,61 @@
 # Meoing
 
-Meoing is a monorepo containing the React website, the Meoi Bridge Chrome
-extension, and a Cloudflare Workers API backed by Supabase PostgreSQL and
-Cloudflare R2.
+Meoing is an open-source language learning workspace for organizing study material, generating structured lessons, and tracking practice progress. It is an early-stage project maintained by [hiuudc](https://github.com/hiuudc).
+
+## Architecture
+
+```text
+React website -> Cloudflare Worker -> PostgreSQL / private R2
+                              -> OpenAI Responses API
+```
+
+The browser authenticates with Supabase, then uses the Worker as the only application-data entry point. The Worker rehydrates authorized unit and lesson context from PostgreSQL, reserves quota before an AI request, calls the official OpenAI Responses API with `store: false`, validates the result, and settles usage without logging learning content.
+
+## Privacy and AI consent
+
+The API provider is opt-in. Before an AI operation, Meoing shows a consent dialog explaining that the selected unit material and the answer necessary for the operation are sent to OpenAI. Audio recordings and sign-in tokens are not sent. Consent is versioned, user-scoped, and can be withdrawn immediately.
+
+The default limits are five lesson generations and 100 evaluations or coaching requests per user per UTC day. The Worker also applies a configured global daily budget and fails closed if it is missing in production.
 
 ## Repository layout
 
 ```text
-meoing/
-  frontend/   React website and Meoi Bridge Chrome extension
-  backend/    Workers API, maintenance Worker, SQL migrations and DB tests
+frontend/   React website
+backend/    Cloudflare Workers, SQL migrations, database tests
+packages/   Versioned contracts shared by app and provider clients
+docs/       Architecture, security, operations, and OSS application material
 ```
 
-## Requirements
+## Local setup
 
-- Node.js 22 LTS.
-- A Docker-compatible runtime for the local Supabase stack.
-- A Supabase project and Cloudflare account for remote staging/production.
-
-## Commands
-
-Run commands from the monorepo root:
+Requirements: Node.js 22+, Docker-compatible runtime, Supabase, and Cloudflare Wrangler access for local Worker development.
 
 ```powershell
 npm --prefix frontend install
 npm --prefix backend install
-
-# One terminal for local Supabase, the API Worker, and the website.
-# This preserves the existing local database.
+Copy-Item backend/.dev.vars.example backend/.dev.vars
 npm run dev:local
+```
 
-npm --prefix frontend run dev
+Set `OPENAI_API_KEY` and the budget variables in `backend/.dev.vars` only when testing live AI operations. Never commit that file. You can develop and test library, auth, and local lesson UI without an OpenAI key.
+
+Run verification:
+
+```powershell
 npm --prefix frontend run test
 npm --prefix frontend run build
-
-npm --prefix backend run db:start
-npm --prefix backend run db:reset
-npm --prefix backend run dev
 npm --prefix backend run check
 ```
 
-Before the first `npm run dev:local`, create `backend/.dev.vars` from
-`backend/.dev.vars.example` and configure the local-only secrets required by
-the API Worker. Keep one variable per real line; the launcher rejects escaped
-`\\n` text, missing local Auth values, and placeholder Supabase URLs. It also
-verifies `frontend/.env.local`,
-starts local Supabase, then starts the API Worker and Vite in the same
-terminal. Open `http://127.0.0.1:5173` once both services are ready.
-The launcher also creates or repairs the restricted `meoing_api_login` role
-used by the local Worker; it never connects the API as the `postgres` role.
-On Windows, it automatically stops only an existing Meoing local frontend or
-API Worker detected on ports `5173` and `8787`; a different process on either
-port remains protected and produces an explicit error.
-If Wrangler loses its local proxy connection, the launcher restarts the API
-Worker up to three times in one minute while keeping Vite running. Repeated
-crashes still stop the command and leave the Worker error visible for diagnosis.
+## Security model
 
-`npm run dev:local` never resets local data. Apply new migrations explicitly
-when needed with `npm --prefix backend run db:reset`.
+- The Worker verifies Supabase JWTs; PostgreSQL RLS and private RPCs authorize every collection-scoped operation.
+- OpenAI credentials live only in Cloudflare Worker secrets.
+- AI requests are idempotent and ledgered; prompts, answers, and generated content are not emitted to Worker logs.
+- Private R2 files use short-lived, authorized URLs.
 
-Local Auth emails are captured instead of delivered. After signup or password
-recovery, open `http://127.0.0.1:54324` and follow the email link. A database
-reset removes local accounts, so sign out any stale browser session and create
-a new local account afterward.
+See [SECURITY.md](SECURITY.md), [backend/README.md](backend/README.md), and [docs/codex-oss-application.md](docs/codex-oss-application.md) for operational details.
 
-The website authenticates directly with Supabase Auth, then sends the access
-token to the Worker API. Application tables are not exposed through the
-Supabase Data API. Large files are uploaded directly to private R2 objects using
-short-lived signed URLs.
+## License
 
-See [`frontend/README.md`](frontend/README.md) for the website/extension
-workflow and [`backend/README.md`](backend/README.md) for local infrastructure,
-secrets, migrations and deployment.
+Meoing source code is licensed under [Apache-2.0](LICENSE). Third-party dependencies and character data retain their original licenses; see [NOTICE](NOTICE).

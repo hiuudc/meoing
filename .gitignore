@@ -18,6 +18,7 @@ vite.config.d.ts
 !backend/.dev.vars.cost-guard.example
 .env.local
 .dev.vars
+backend/wrangler.*.private.jsonc
 .wrangler/
 .wrangler-dry-run/
 supabase/.temp/

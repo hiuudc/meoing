@@ -4,18 +4,18 @@ These instructions apply to the `frontend/` package. The monorepo-level rules ar
 
 ## Project Overview
 
-Meoi is an authenticated language workspace with a Discord-style layout. This package contains both the React website and the Meoi Bridge Chrome extension. The website uses Supabase Auth and the Cloudflare Worker API in `../backend/`; PostgreSQL-backed API data is authoritative for accounts, collections, units, documents, learning content, progress, permissions, settings, and lifecycle operations. Browser storage remains important for narrowly scoped resilience and legacy cleanup, but it is not the canonical application database.
+Meoi is an authenticated language workspace with a Discord-style layout. This package contains the React website. It uses Supabase Auth and the Cloudflare Worker API in `../backend/`; PostgreSQL-backed API data is authoritative for accounts, collections, units, documents, learning content, progress, permissions, settings, AI consent, and lifecycle operations. Browser storage remains important for narrowly scoped resilience and legacy cleanup, but it is not the canonical application database.
 
 ### Current Stack
 
 - React `18.3.1` with functional components and `react-dom/client`.
 - TypeScript with strict checking enabled.
 - Vite `6` for development and production web builds.
-- Vitest `4` for web and extension unit tests.
+- Vitest `4` for web unit tests.
 - Playwright `1.60.0` is installed for browser verification, but there is no committed end-to-end test script.
 - `@supabase/supabase-js` for PKCE authentication and persisted, auto-refreshed sessions.
 - `lucide-react` for icons.
-- One website-global CSS file with responsive media queries and CSS custom properties; the extension keeps its popup styles under `extension/`.
+- One website-global CSS file with responsive media queries and CSS custom properties.
 - React `useReducer` for the normalized in-memory workspace view, hydrated from and mutated through the API.
 - IndexedDB for the user-scoped, retryable progress outbox.
 
@@ -32,9 +32,9 @@ Use Node.js `>=22`, matching this package's `engines` declaration and the monore
 - `src/api/progressOutbox.ts`: user-scoped IndexedDB queue, retry, quarantine, and idempotent progress delivery.
 - `src/components/`: named React UI components.
 - `src/store.ts`: normalized client reducer, seed/empty state helpers, and retained legacy localStorage normalization utilities.
-- `src/integration/`: browser/extension bridge protocol, recovery state, and legacy browser-data cleanup.
+- `src/integration/`: browser resilience, local recovery, and legacy browser-data cleanup.
 - `src/learning/`: lesson generation, session, evaluation, rendering, and local recovery helpers.
-- `extension/`: Meoi Bridge Chrome extension source and tests.
+- `src/ai/`: provider-neutral client helpers and API consent UI when present.
 - `src/theme.ts`: pure theme utilities, palette presets, color conversion helpers, and CSS variable generation.
 - `src/types.ts`: shared domain, state, and action types.
 - `src/styles.css`: global styles, theme-variable usage, and responsive breakpoints.
@@ -62,8 +62,8 @@ npm run preview
 ```
 
 - `npm run dev`: starts the Vite development server.
-- `npm run build`: cleans generated output, type-checks, and builds both the Vite website and Chrome extension.
-- `npm run test`: runs the web and extension Vitest suites once.
+- `npm run build`: cleans generated output, type-checks, and builds the Vite website.
+- `npm run test`: runs the web Vitest suite once.
 - `npm run test:watch`: runs Vitest in watch mode.
 - `npm run preview`: serves the production bundle locally.
 - Lint command: not available.
@@ -82,7 +82,7 @@ Do not invent lint, format, or end-to-end scripts in reports. Adding those tools
 - Do not duplicate derived lists in state. Derive active collections, units, documents, and study items from normalized records and order arrays.
 - Do not add new canonical workspace persistence to `localStorage`. `loadWorkspace`/`saveWorkspace` and `STORAGE_VERSION` remain for tested legacy compatibility; preserve their normalization unless an intentional migration/removal is part of the task.
 - Keep retryable lesson-progress batches in the existing user-scoped IndexedDB outbox. Preserve stable batch/event IDs across retries, acknowledge only successful API writes, and quarantine terminal rejections instead of silently dropping them.
-- Keep extension messaging behind the typed protocol and adapter modules in `src/integration/` and `extension/`; do not couple ordinary React presentation components directly to Chrome APIs.
+- Keep AI operations behind the versioned contract and authenticated API client. Do not add provider secrets, prompts, answers, or browser automation APIs to React components.
 
 ### Theme Invariants
 
@@ -138,13 +138,12 @@ src/
   components/
   integration/
   learning/
-extension/
 ```
 
 - Put reusable UI sections, modals, drawers, and workspace panels in `src/components/`.
 - Keep top-level app orchestration in `src/App.tsx`.
 - Keep reducer actions, seed/empty state helpers, and legacy storage compatibility in `src/store.ts`.
-- Keep remote contracts and calls in `src/api/`, authentication in `src/auth/`, and extension/browser boundaries in `src/integration/` and `extension/`.
+- Keep remote contracts and calls in `src/api/`, authentication in `src/auth/`, browser-local persistence in `src/integration/`, and learning behavior in `src/learning/`.
 - Keep pure theme and color utilities in `src/theme.ts`.
 - Keep shared types in `src/types.ts`.
 - Keep global CSS in `src/styles.css`.
@@ -190,7 +189,7 @@ The project does not currently use pages, layouts, services, or assets folders a
 
 ## Testing and Quality
 
-- Add or update Vitest coverage when changing reducer behavior, API mapping/client behavior, Auth helpers, outbox semantics, integration/extension protocol, persistence compatibility, theme helpers, or selection fallbacks.
+- Add or update Vitest coverage when changing reducer behavior, API mapping/client behavior, Auth helpers, outbox semantics, AI provider selection, persistence compatibility, theme helpers, or selection fallbacks.
 - Run `npm run test` and `npm run build` before finishing code changes.
 - For rendered UI changes, use Playwright with the installed dependency to verify desktop and mobile behavior, interactions, console health, and layout overflow.
 - Temporary Playwright scripts and screenshots must not be committed. Remove temporary `.qa` files after verification.
@@ -200,7 +199,7 @@ The project does not currently use pages, layouts, services, or assets folders a
 ## Security Rules
 
 - Never commit secrets, API keys, tokens, credentials, or private URLs.
-- Let the Supabase client manage access/refresh tokens; do not copy tokens into app state, localStorage keys, logs, error reports, or extension messages.
+- Let the Supabase client manage access/refresh tokens; do not copy tokens into app state, localStorage keys, logs, error reports, or AI operation payloads.
 - Validate and normalize browser-stored legacy/recovery data before relying on it, and scope IndexedDB records to the authenticated user.
 - Validate user input where relevant and keep destructive actions behind confirmation.
 - Do not add `dangerouslySetInnerHTML` or equivalent unsafe HTML rendering without a documented, reviewed sanitization strategy.
