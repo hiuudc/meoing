@@ -2,6 +2,8 @@
 
 Meoing is an open-source language learning workspace for organizing study material, generating structured lessons, and tracking practice progress. It is an early-stage project maintained by [hiuudc](https://github.com/hiuudc).
 
+Website: [meoing.com](https://meoing.com)
+
 ## Architecture
 
 ```text
