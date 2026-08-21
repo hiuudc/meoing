@@ -8,7 +8,6 @@
 
 import './index.css';
 
-import DropIndicator from '@atlaskit/drag-and-drop-indicator/box';
 import {
   draggable,
   dropTargetForElements,
@@ -688,7 +687,10 @@ function TableHoverActionsV2({
             width: 2,
             zIndex: 20,
           }}>
-          <DropIndicator edge={dropIndicatorState.edge} />
+          <span
+            aria-hidden="true"
+            className={`floating-drop-indicator floating-drop-indicator--${dropIndicatorState.edge}`}
+          />
         </div>
       ) : null}
     </>

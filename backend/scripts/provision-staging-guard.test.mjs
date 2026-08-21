@@ -12,7 +12,7 @@ import {
   reservedAcceptanceEmail,
 } from "./provision-staging-guard.mjs";
 
-const STAGING_PROJECT_REF = "sdwuwmyrbdaarxokxmsf";
+const STAGING_PROJECT_REF = "stagingprojectref001";
 const API_URL = new URL("https://api-staging.meoing.com/");
 const SUPABASE_URL = new URL(`https://${STAGING_PROJECT_REF}.supabase.co/`);
 
