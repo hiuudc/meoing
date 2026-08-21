@@ -20,7 +20,7 @@
     "@meoing/ai-operation-contract": "file:../packages/ai-operation-contract",
     "@atlaskit/pragmatic-drag-and-drop": "1.7.7",
     "@excalidraw/excalidraw": "^0.18.1",
-    "@floating-ui/react": "0.27.19",
+    "@floating-ui/react": "0.27.20",
     "@k1low/hanzi-writer-data-jp": "0.8.0",
     "@lexical/a11y": "0.49.0",
     "@lexical/clipboard": "0.49.0",
