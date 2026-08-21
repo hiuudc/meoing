@@ -7,7 +7,8 @@ Meoing is in an early public stage. This roadmap records current maintenance pri
 1. Keep the React app, Cloudflare Worker, database migrations, and shared AI contract reproducible through CI and documented local setup.
 2. Improve the language-learning workspace with accessible, keyboard-friendly practice and clear mobile behavior.
 3. Strengthen the official OpenAI API integration through consent, quota, idempotency, structured-output validation, and server-side authorization tests.
-4. Maintain clear contributor, security, support, release, and third-party-notice documentation as the project receives feedback.
+4. Explore an official ChatGPT app integration backed by the same server-side AI operation contract. It will retain server-side authorization, versioned consent, quota enforcement, idempotency, and structured-output validation without exposing API keys or restoring the removed browser bridge. This is future work, not a currently available integration.
+5. Maintain clear contributor, security, support, release, and third-party-notice documentation as the project receives feedback.
 
 ## Contribution direction
 
