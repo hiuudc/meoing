@@ -9,6 +9,7 @@ const API_REQUIRED_SECRETS = [
   "R2_SECRET_ACCESS_KEY",
   "INVITE_TOKEN_SECRET",
   "TURNSTILE_SECRET_KEY",
+  "OPENAI_API_KEY",
 ];
 const ALERT_DESTINATION = "hiuudc@gmail.com";
 const ALERT_SENDER = "no-reply@auth.meoing.com";

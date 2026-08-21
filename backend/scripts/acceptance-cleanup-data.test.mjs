@@ -10,7 +10,7 @@ import {
   scrubAuditUserReferences,
 } from "./acceptance-cleanup-data.mjs";
 
-const PROJECT_REF = "sdwuwmyrbdaarxokxmsf";
+const PROJECT_REF = "stagingprojectref001";
 const OWNER_ID = "a0000000-0000-4000-8000-000000000001";
 const MEMBER_ID = "00000000-0000-4000-8000-000000000002";
 const COLLECTION_ID = "00000000-0000-4000-8000-000000000010";

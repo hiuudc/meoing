@@ -76,6 +76,38 @@
   background-color: #f3f3f3;
 }
 
+.floating-drop-indicator {
+  background: #0c66e4;
+  border-radius: 1px;
+  display: block;
+  height: 100%;
+  position: absolute;
+  width: 2px;
+}
+
+.floating-drop-indicator::before,
+.floating-drop-indicator::after {
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  content: '';
+  left: -3px;
+  position: absolute;
+}
+
+.floating-drop-indicator::before {
+  border-top: 5px solid #0c66e4;
+  top: 0;
+}
+
+.floating-drop-indicator::after {
+  border-bottom: 5px solid #0c66e4;
+  bottom: 0;
+}
+
+.floating-drop-indicator--right {
+  transform: translateX(-1px);
+}
+
 .floating-top-actions {
   display: flex;
   align-items: center;

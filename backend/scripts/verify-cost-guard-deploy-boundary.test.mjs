@@ -20,6 +20,7 @@ const requiredApiSecrets = [
   "R2_SECRET_ACCESS_KEY",
   "INVITE_TOKEN_SECRET",
   "TURNSTILE_SECRET_KEY",
+  "OPENAI_API_KEY",
 ];
 const safeConfig = {
   workers_dev: false,
@@ -166,7 +167,8 @@ test("production verifies all API secrets before migrations and deploy", () => {
             R2_ACCESS_KEY_ID \\
             R2_SECRET_ACCESS_KEY \\
             INVITE_TOKEN_SECRET \\
-            TURNSTILE_SECRET_KEY
+            TURNSTILE_SECRET_KEY \\
+            OPENAI_API_KEY
           do
             jq -e \\
               --arg required_secret "$required_secret" \\
@@ -208,7 +210,8 @@ test("staging verifies all API secrets before migrations and deploy", () => {
             R2_ACCESS_KEY_ID \\
             R2_SECRET_ACCESS_KEY \\
             INVITE_TOKEN_SECRET \\
-            TURNSTILE_SECRET_KEY
+            TURNSTILE_SECRET_KEY \\
+            OPENAI_API_KEY
           do
             jq -e \\
               --arg required_secret "$required_secret" \\

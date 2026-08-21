@@ -5,7 +5,7 @@ import {
   parseAcceptanceCleanupSelection,
 } from "./acceptance-cleanup.mjs";
 
-const STAGING_PROJECT_REF = "sdwuwmyrbdaarxokxmsf";
+const STAGING_PROJECT_REF = "stagingprojectref001";
 const API_URL = new URL("https://api-staging.meoing.com/");
 const SUPABASE_URL = new URL(`https://${STAGING_PROJECT_REF}.supabase.co/`);
 const AUTH_USER_ID = "00000000-0000-4000-8000-000000000001";
