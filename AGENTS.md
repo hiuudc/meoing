@@ -15,6 +15,8 @@ Meoing is an Apache-2.0 language-learning workspace. `frontend/` contains the Re
 
 ## Git Workflow
 
+- Work on the current branch by default. Do not create a new branch merely to make a focused commit or pull request.
+- Create a branch only when the user requests one, concurrent work needs isolation, or repository protection requires a pull request from a non-default branch.
 - When a task is complete and no other active task modifies the same files, create a focused local commit before reporting completion.
 - Stage only task files and use a concise, accurate commit message.
 - If another active task overlaps a file, wait until that overlap is resolved before committing.
