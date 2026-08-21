@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   freshness:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && vars.PRODUCTION_BACKUP_ENABLED == 'true'
     runs-on: ubuntu-latest
     environment: production-backup
     steps:

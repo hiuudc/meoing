@@ -474,6 +474,8 @@ backup_script="${repository_root}/.github/scripts/backup-production.sh"
 
 grep --fixed-strings --quiet 'cron: "23 2 * * 0"' "$backup_workflow" \
   || fail "weekly workflow must run Sunday at 02:23 UTC"
+grep --fixed-strings --quiet "vars.PRODUCTION_BACKUP_ENABLED == 'true'" "$backup_workflow" \
+  || fail "weekly backup must require explicit production-backup enablement"
 grep --fixed-strings --quiet "BACKUP_KIND: \${{ github.event_name == 'schedule' && 'weekly' || 'manual' }}" "$backup_workflow" \
   || fail "scheduled and manual backups must use separate prefixes"
 grep --fixed-strings --quiet 'uses: ./.github/workflows/restore-drill.yml' "$backup_workflow" \
@@ -507,6 +509,8 @@ grep --fixed-strings --quiet 'environment: production-backup-destructive' "$unre
   || fail "manual and unverified cleanup must require the destructive approval environment"
 grep --fixed-strings --quiet 'cron: "47 6 * * *"' "$freshness_workflow" \
   || fail "independent backup freshness monitor must run daily"
+grep --fixed-strings --quiet "vars.PRODUCTION_BACKUP_ENABLED == 'true'" "$freshness_workflow" \
+  || fail "freshness monitor must require explicit production-backup enablement"
 grep --fixed-strings --quiet 'R2_BACKUP_READ_ACCESS_KEY_ID' "$freshness_workflow" \
   || fail "freshness monitor must use its read-only credential"
 grep --fixed-strings --quiet 'R2_BACKUP_WRITE_ACCESS_KEY_ID' "$backup_workflow" \

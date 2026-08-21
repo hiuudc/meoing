@@ -25,6 +25,15 @@ runner.
   no more than eight days old. Route this independent workflow's failures to the backup
   alert channel so a missed weekly schedule is still detected.
 
+## Enablement gate
+
+Scheduled backup and freshness jobs require the repository variable
+`PRODUCTION_BACKUP_ENABLED` to be exactly `true`. Leave it unset while the public
+repository is being bootstrapped or backup credentials are being rotated; the jobs will
+skip rather than create false deployment failures. Enable it only after all
+`production-backup` environment secrets and the independently pinned production project
+ref have been verified. The manual cleanup workflows remain independently protected.
+
 ## Backup policy
 
 - Dump application data and the Supabase Auth data needed to recover users.
