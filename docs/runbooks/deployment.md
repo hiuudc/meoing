@@ -11,6 +11,19 @@ Use three isolated environments:
 
 Never point a staging Worker at the production database or bucket.
 
+## Staging deployment gate
+
+The public repository keeps `Deploy staging` disabled by default. Its job runs
+only after a successful trusted push to `main` and the repository variable
+`STAGING_DEPLOY_ENABLED` is exactly `true`. This prevents placeholder
+infrastructure configuration or an incomplete credential rotation from
+producing a failed deployment on every CI run.
+
+Enable the variable only after the staging environment has a scoped, working
+`CLOUDFLARE_API_TOKEN`, a matching `CLOUDFLARE_ACCOUNT_ID`, all required Worker
+secrets, and the reviewed staging database and resource bindings. Remove the
+variable or set it to `false` again before rotating those prerequisites.
+
 ## Required secrets
 
 API Worker:
