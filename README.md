@@ -26,6 +26,10 @@ packages/   Versioned contracts shared by app and provider clients
 docs/       Architecture, security, operations, and OSS application material
 ```
 
+## Roadmap
+
+See the [public roadmap](docs/roadmap.md) for the project's current maintenance priorities. It describes direction rather than delivery dates or promises.
+
 ## Local setup
 
 Requirements: Node.js 22+, Docker-compatible runtime, Supabase, and Cloudflare Wrangler access for local Worker development.
