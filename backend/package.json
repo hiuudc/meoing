@@ -39,7 +39,7 @@
     "@meoing/ai-operation-contract": "file:../packages/ai-operation-contract",
     "@hono/zod-openapi": "1.5.1",
     "aws4fetch": "1.0.20",
-    "hono": "4.12.32",
+    "hono": "4.13.3",
     "jose": "6.2.5",
     "pg": "8.22.0",
     "zod": "4.4.3"
