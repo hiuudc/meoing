@@ -389,11 +389,12 @@ export function assertStagingDeployUsesTrustedPush(workflow) {
     "github.event.workflow_run.event == 'push'",
     "github.event.workflow_run.head_branch == 'main'",
     "github.event.workflow_run.conclusion == 'success'",
+    "vars.STAGING_DEPLOY_ENABLED == 'true'",
   ];
   for (const condition of requiredConditions) {
     if (!workflow.includes(condition)) {
       throw new Error(
-        `staging deploy must reject untrusted workflow_run events: missing ${condition}`,
+        `staging deploy must require a trusted main push and explicit enablement: missing ${condition}`,
       );
     }
   }

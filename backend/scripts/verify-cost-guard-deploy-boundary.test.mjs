@@ -358,18 +358,19 @@ test("production proves exact R2 CORS, release SHA, and live Cost Guard", () => 
   );
 });
 
-test("staging workflow_run deploy accepts only a successful main push", () => {
+test("staging workflow_run deploy accepts only an enabled successful main push", () => {
   assert.doesNotThrow(() => assertStagingDeployUsesTrustedPush(`
     if: >-
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_branch == 'main' &&
-      github.event.workflow_run.conclusion == 'success'
+      github.event.workflow_run.conclusion == 'success' &&
+      vars.STAGING_DEPLOY_ENABLED == 'true'
   `));
   assert.throws(
     () => assertStagingDeployUsesTrustedPush(
       "if: github.event.workflow_run.conclusion == 'success'",
     ),
-    /reject untrusted workflow_run events/,
+    /trusted main push and explicit enablement/,
   );
 });
 
